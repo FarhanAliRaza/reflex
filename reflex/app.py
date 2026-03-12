@@ -11,6 +11,7 @@ import functools
 import inspect
 import json
 import operator
+import os
 import tempfile
 import sys
 import time
@@ -121,6 +122,7 @@ from reflex.utils.exec import (
 
 _UPLOAD_SPOOL_MAX_SIZE = 1024 * 1024
 _UPLOAD_COPY_CHUNK_SIZE = 1024 * 1024
+_UPLOAD_DUP_FD_MIN_SIZE = _UPLOAD_SPOOL_MAX_SIZE
 from reflex.utils.imports import ImportVar
 from reflex.utils.misc import run_in_thread
 from reflex.utils.token_manager import RedisTokenManager, TokenManager
@@ -1976,15 +1978,28 @@ def upload(app: App):
                     "Uploaded file is not an UploadFile." + str(file)
                 )
 
-            # Copy uploaded file into a spooled temp file so small files stay
-            # in memory while larger ones are rolled over to disk.
-            content_copy = tempfile.SpooledTemporaryFile(
-                max_size=_UPLOAD_SPOOL_MAX_SIZE,
-                mode="w+b",
-            )
-            while chunk := await file.read(_UPLOAD_COPY_CHUNK_SIZE):
-                content_copy.write(chunk)
-            content_copy.seek(0)
+            # Starlette multipart parsing already spools uploaded files to a
+            # temporary file. For larger files we can duplicate the underlying
+            # OS file descriptor to avoid an extra full file copy.
+            content_copy = None
+            if file.size is not None and file.size > _UPLOAD_DUP_FD_MIN_SIZE:
+                await file.seek(0)
+                try:
+                    content_copy = os.fdopen(os.dup(file.file.fileno()), "rb")
+                except (AttributeError, OSError):
+                    content_copy = None
+
+            if content_copy is None:
+                # Fallback: copy uploaded file into a spooled temp file so small
+                # files stay in memory while larger ones are rolled over to disk.
+                content_copy = tempfile.SpooledTemporaryFile(
+                    max_size=_UPLOAD_SPOOL_MAX_SIZE,
+                    mode="w+b",
+                )
+                while chunk := await file.read(_UPLOAD_COPY_CHUNK_SIZE):
+                    content_copy.write(chunk)
+                content_copy.seek(0)
+
             file_copies.append(
                 UploadFile(
                     file=content_copy,
