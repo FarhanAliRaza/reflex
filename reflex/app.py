@@ -9,9 +9,9 @@ import copy
 import dataclasses
 import functools
 import inspect
-import io
 import json
 import operator
+import tempfile
 import sys
 import time
 import traceback
@@ -118,6 +118,9 @@ from reflex.utils.exec import (
     is_testing_env,
     should_prerender_routes,
 )
+
+_UPLOAD_SPOOL_MAX_SIZE = 1024 * 1024
+_UPLOAD_COPY_CHUNK_SIZE = 1024 * 1024
 from reflex.utils.imports import ImportVar
 from reflex.utils.misc import run_in_thread
 from reflex.utils.token_manager import RedisTokenManager, TokenManager
@@ -1972,8 +1975,15 @@ def upload(app: App):
                 raise UploadValueError(
                     "Uploaded file is not an UploadFile." + str(file)
                 )
-            content_copy = io.BytesIO()
-            content_copy.write(await file.read())
+
+            # Copy uploaded file into a spooled temp file so small files stay
+            # in memory while larger ones are rolled over to disk.
+            content_copy = tempfile.SpooledTemporaryFile(
+                max_size=_UPLOAD_SPOOL_MAX_SIZE,
+                mode="w+b",
+            )
+            while chunk := await file.read(_UPLOAD_COPY_CHUNK_SIZE):
+                content_copy.write(chunk)
             content_copy.seek(0)
             file_copies.append(
                 UploadFile(

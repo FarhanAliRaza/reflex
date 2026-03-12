@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import io
+import tempfile
 import unittest.mock
 import uuid
 from collections.abc import Generator
@@ -1004,6 +1005,68 @@ async def test_upload_file(tmp_path, state, delta, token: str, mocker: MockerFix
         "image1.jpg",
         "image2.jpg",
     ]
+
+    await app.state_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_upload_file_uses_spooled_temporary_file(token: str):
+    """Test that upload copies are backed by spooled temporary files.
+
+    Args:
+        token: a Token.
+    """
+
+    class SpoolState(State):
+        saw_spooled_file: bool = False
+        saw_rolled_file: bool = False
+
+        async def handle_upload(self, files: list[rx.UploadFile]):
+            uploaded = files[0]
+            self.saw_spooled_file = isinstance(
+                uploaded.file, tempfile.SpooledTemporaryFile
+            )
+            self.saw_rolled_file = bool(uploaded.file._rolled)
+
+    app = App(_state=SpoolState)
+
+    request_mock = unittest.mock.Mock()
+    request_mock.headers = {
+        "reflex-client-token": token,
+        "reflex-event-handler": f"{SpoolState.get_full_name()}.handle_upload",
+    }
+
+    data = b"x" * (1024 * 1024 + 1)
+    upload_file_obj = UploadFile(
+        filename="large.bin",
+        file=io.BytesIO(data),
+    )
+
+    async def form():  # noqa: RUF029
+        files_mock = unittest.mock.Mock()
+
+        def getlist(key: str):
+            assert key == "files"
+            return [upload_file_obj]
+
+        files_mock.getlist = getlist
+
+        return files_mock
+
+    request_mock.form = form
+
+    upload_fn = upload(app)
+    streaming_response = await upload_fn(request_mock)
+    assert isinstance(streaming_response, StreamingResponse)
+    async for _ in streaming_response.body_iterator:
+        pass
+
+    current_state = await app.state_manager.get_state(
+        _substate_key(token, SpoolState)
+    )
+    state_dict = current_state.dict()[SpoolState.get_full_name()]
+    assert state_dict["saw_spooled_file"] is True
+    assert state_dict["saw_rolled_file"] is True
 
     await app.state_manager.close()
 
