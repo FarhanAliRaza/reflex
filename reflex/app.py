@@ -122,7 +122,6 @@ from reflex.utils.exec import (
 
 _UPLOAD_SPOOL_MAX_SIZE = 1024 * 1024
 _UPLOAD_COPY_CHUNK_SIZE = 1024 * 1024
-_UPLOAD_DUP_FD_MIN_SIZE = _UPLOAD_SPOOL_MAX_SIZE
 from reflex.utils.imports import ImportVar
 from reflex.utils.misc import run_in_thread
 from reflex.utils.token_manager import RedisTokenManager, TokenManager
@@ -1979,15 +1978,15 @@ def upload(app: App):
                 )
 
             # Starlette multipart parsing already spools uploaded files to a
-            # temporary file. For larger files we can duplicate the underlying
-            # OS file descriptor to avoid an extra full file copy.
+            # temporary file when they exceed in-memory thresholds. Try
+            # duplicating the underlying OS descriptor first to avoid an
+            # extra full read/copy pass (even when `size` metadata is absent).
             content_copy = None
-            if file.size is not None and file.size > _UPLOAD_DUP_FD_MIN_SIZE:
-                await file.seek(0)
-                try:
-                    content_copy = os.fdopen(os.dup(file.file.fileno()), "rb")
-                except (AttributeError, OSError):
-                    content_copy = None
+            await file.seek(0)
+            try:
+                content_copy = os.fdopen(os.dup(file.file.fileno()), "rb")
+            except (AttributeError, OSError):
+                content_copy = None
 
             if content_copy is None:
                 # Fallback: copy uploaded file into a spooled temp file so small

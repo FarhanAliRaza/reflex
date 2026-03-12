@@ -1138,6 +1138,77 @@ async def test_upload_file_avoids_copy_for_large_disk_backed_upload(token: str):
 
 
 @pytest.mark.asyncio
+async def test_upload_file_avoids_copy_for_disk_backed_upload_without_size(token: str):
+    """Test descriptor duplication path does not rely on UploadFile.size metadata.
+
+    Args:
+        token: a Token.
+    """
+
+    class FDNoSizeState(State):
+        used_fd_dup: bool = False
+        byte_count: int = 0
+
+        async def handle_upload(self, files: list[rx.UploadFile]):
+            uploaded = files[0]
+            self.used_fd_dup = not isinstance(
+                uploaded.file, tempfile.SpooledTemporaryFile
+            )
+            self.byte_count = len(await uploaded.read())
+
+    app = App(_state=FDNoSizeState)
+
+    request_mock = unittest.mock.Mock()
+    request_mock.headers = {
+        "reflex-client-token": token,
+        "reflex-event-handler": f"{FDNoSizeState.get_full_name()}.handle_upload",
+    }
+
+    data = b"x" * (1024 * 1024 + 1)
+    disk_file = tempfile.TemporaryFile(mode="w+b")
+    disk_file.write(data)
+    disk_file.seek(0)
+
+    upload_file_obj = UploadFile(
+        filename="large-nosize.bin",
+        file=disk_file,
+        size=None,
+    )
+
+    upload_file_obj.read = AsyncMock(
+        side_effect=AssertionError("read should not be called")
+    )
+
+    async def form():  # noqa: RUF029
+        files_mock = unittest.mock.Mock()
+
+        def getlist(key: str):
+            assert key == "files"
+            return [upload_file_obj]
+
+        files_mock.getlist = getlist
+
+        return files_mock
+
+    request_mock.form = form
+
+    upload_fn = upload(app)
+    streaming_response = await upload_fn(request_mock)
+    assert isinstance(streaming_response, StreamingResponse)
+    async for _ in streaming_response.body_iterator:
+        pass
+
+    current_state = await app.state_manager.get_state(
+        _substate_key(token, FDNoSizeState)
+    )
+    state_dict = current_state.dict()[FDNoSizeState.get_full_name()]
+    assert state_dict["used_fd_dup"] is True
+    assert state_dict["byte_count"] == len(data)
+
+    await app.state_manager.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "state",
     [FileUploadState, ChildFileUploadState, GrandChildFileUploadState],
