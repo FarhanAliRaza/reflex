@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -58,6 +59,7 @@ def _init(
     name: str,
     template: str | None = None,
     ai: bool = False,
+    frontend_target: constants.FrontendTarget = constants.FrontendTarget.REACT,
 ):
     """Initialize a new Reflex app in the given directory."""
     from reflex.utils import exec, frontend_skeleton, prerequisites, templates
@@ -80,11 +82,19 @@ def _init(
     prerequisites.initialize_reflex_user_directory()
     prerequisites.ensure_reflex_installation_id()
 
+    # The web template is initialized before rxconfig.py exists, so persist the
+    # selected frontend target early enough for the scaffold step to see it.
+    os.environ["REFLEX_FRONTEND_TARGET"] = frontend_target.value
+
     # Set up the web project.
     prerequisites.initialize_frontend_dependencies()
 
     # Initialize the app.
-    template = templates.initialize_app(app_name, template)
+    template = templates.initialize_app(
+        app_name,
+        template,
+        frontend_target=frontend_target,
+    )
 
     # Initialize the .gitignore.
     frontend_skeleton.initialize_gitignore()
@@ -122,13 +132,29 @@ def _init(
     is_flag=True,
     help="Use AI to create the initial template. Cannot be used with existing app or `--template` option.",
 )
+@click.option(
+    "--frontend-target",
+    type=click.Choice(
+        [target.value for target in constants.FrontendTarget],
+        case_sensitive=False,
+    ),
+    default=constants.FrontendTarget.REACT.value,
+    show_default=True,
+    help="The frontend target to initialize the app with.",
+)
 def init(
     name: str,
     template: str | None,
     ai: bool,
+    frontend_target: str,
 ):
     """Initialize a new Reflex app in the current directory."""
-    _init(name, template, ai)
+    _init(
+        name,
+        template,
+        ai,
+        constants.FrontendTarget(frontend_target.lower()),
+    )
 
 
 def _run(
@@ -139,6 +165,7 @@ def _run(
     backend_port: int | None = None,
     backend_host: str | None = None,
     single_port: bool = False,
+    frontend_target: constants.FrontendTarget | None = None,
 ):
     """Run the app in the given directory."""
     import atexit
@@ -148,6 +175,10 @@ def _run(
     from reflex.utils.exec import should_use_granian
 
     config = get_config()
+
+    if frontend_target is not None and frontend_target != config.frontend_target:
+        config._set_persistent(frontend_target=frontend_target.value)
+        config = get_config(reload=True)
 
     backend_host = backend_host or config.backend_host
 
@@ -166,7 +197,7 @@ def _run(
 
     # Check that the app is initialized.
     if frontend and prerequisites.needs_reinit():
-        _init(name=config.app_name)
+        _init(name=config.app_name, frontend_target=config.frontend_target)
 
     # Delete the states folder if it exists.
     reset_disk_state_manager()
@@ -351,6 +382,14 @@ def _run(
     help="Run both frontend and backend on the same port.",
     default=False,
 )
+@click.option(
+    "--frontend-target",
+    type=click.Choice(
+        [target.value for target in constants.FrontendTarget],
+        case_sensitive=False,
+    ),
+    help="Override the configured frontend target for this run.",
+)
 def run(
     env: LITERAL_ENV,
     frontend_only: bool,
@@ -359,6 +398,7 @@ def run(
     backend_port: int | None,
     backend_host: str | None,
     single_port: bool,
+    frontend_target: str | None,
 ):
     """Run the app in the current directory."""
     if frontend_only and backend_only:
@@ -400,6 +440,11 @@ def run(
         backend_port,
         backend_host,
         single_port,
+        (
+            constants.FrontendTarget(frontend_target.lower())
+            if frontend_target is not None
+            else None
+        ),
     )
 
 

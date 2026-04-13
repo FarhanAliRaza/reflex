@@ -325,7 +325,22 @@ def test_create_config(app_name: str, expected_config_name: str, mocker: MockerF
     mocker.patch("pathlib.Path.write_text")
     tmpl_mock = mocker.patch("reflex.compiler.templates.rxconfig_template")
     templates.create_config(app_name)
-    tmpl_mock.assert_called_with(app_name=app_name)
+    tmpl_mock.assert_called_with(
+        app_name=app_name,
+        frontend_target=constants.FrontendTarget.REACT,
+    )
+
+
+def test_create_config_svelte_target(mocker: MockerFixture):
+    """Test create_config forwards a non-default frontend target."""
+
+    mocker.patch("pathlib.Path.write_text")
+    tmpl_mock = mocker.patch("reflex.compiler.templates.rxconfig_template")
+    templates.create_config("appname", frontend_target=constants.FrontendTarget.SVELTEKIT)
+    tmpl_mock.assert_called_with(
+        app_name="appname",
+        frontend_target=constants.FrontendTarget.SVELTEKIT,
+    )
 
 
 @pytest.fixture

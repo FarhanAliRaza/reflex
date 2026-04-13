@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from types import SimpleNamespace
 
-from .base import IS_WINDOWS
+from .base import FrontendTarget, IS_WINDOWS
 from .utils import classproperty
 
 
@@ -106,6 +106,8 @@ class PackageJson(SimpleNamespace):
 
         DEV = "react-router dev --host"
         EXPORT = "react-router build"
+        SVELTEKIT_DEV = "vite dev --host"
+        SVELTEKIT_EXPORT = "vite build"
 
         @staticmethod
         def get_prod_command(frontend_path: str = "") -> str:
@@ -121,11 +123,33 @@ class PackageJson(SimpleNamespace):
             fallback = f"{stripped}/404.html" if stripped else "404.html"
             return f"sirv ./build/client --single {fallback} --host"
 
+        @staticmethod
+        def get_sveltekit_prod_command(frontend_path: str = "") -> str:
+            """Get the static sirv command for SvelteKit output.
+
+            Args:
+                frontend_path: The frontend path prefix (e.g. "/app").
+
+            Returns:
+                The sirv command with the correct SPA fallback path.
+            """
+            stripped = frontend_path.strip("/")
+            fallback = f"{stripped}/200.html" if stripped else "200.html"
+            return f"sirv ./build/client --single {fallback} --host"
+
     PATH = "package.json"
 
     _react_version = _determine_react_version()
 
     _react_router_version = _determine_react_router_version()
+
+    @staticmethod
+    def _normalize_target(
+        frontend_target: FrontendTarget | str,
+    ) -> str:
+        if isinstance(frontend_target, FrontendTarget):
+            return frontend_target.value
+        return frontend_target
 
     @classproperty
     @classmethod
@@ -149,6 +173,21 @@ class PackageJson(SimpleNamespace):
             "universal-cookie": "7.2.2",
         }
 
+    @classproperty
+    @classmethod
+    def SVELTEKIT_DEPENDENCIES(cls) -> dict[str, str]:
+        """Dependencies for the SvelteKit frontend target."""
+        return {
+            "@radix-ui/themes": "3.3.0",
+            "bits-ui": "2.9.6",
+            "clsx": "2.1.1",
+            "json5": "2.2.3",
+            "lucide-svelte": "0.577.0",
+            "socket.io-client": "4.8.3",
+            "svelte": "5.38.6",
+            "universal-cookie": "7.2.2",
+        }
+
     DEV_DEPENDENCIES = {
         "@emotion/react": "11.14.0",
         "autoprefixer": "10.4.27",
@@ -158,8 +197,66 @@ class PackageJson(SimpleNamespace):
         "@react-router/fs-routes": _react_router_version,
         "vite": "8.0.0",
     }
+    SVELTEKIT_DEV_DEPENDENCIES = {
+        "@sveltejs/adapter-static": "3.0.9",
+        "@sveltejs/kit": "2.37.0",
+        "@sveltejs/vite-plugin-svelte": "6.1.4",
+        "@tailwindcss/postcss": "4.1.12",
+        "autoprefixer": "10.4.27",
+        "postcss": "8.5.8",
+        "postcss-import": "16.1.1",
+        "sirv-cli": "3.0.1",
+        "tailwindcss": "4.1.12",
+        "vite": "8.0.0",
+    }
     OVERRIDES = {
         # This should always match the `react` version in DEPENDENCIES for recharts compatibility.
         "react-is": _react_version,
         "cookie": "1.1.1",
     }
+
+    @classmethod
+    def get_scripts(
+        cls,
+        frontend_target: FrontendTarget | str,
+        frontend_path: str = "",
+    ) -> dict[str, str]:
+        """Get scripts for the chosen frontend target."""
+        target = cls._normalize_target(frontend_target)
+        if target == FrontendTarget.SVELTEKIT.value:
+            return {
+                "dev": cls.Commands.SVELTEKIT_DEV,
+                "export": cls.Commands.SVELTEKIT_EXPORT,
+                "prod": cls.Commands.get_sveltekit_prod_command(frontend_path),
+            }
+        return {
+            "dev": cls.Commands.DEV,
+            "export": cls.Commands.EXPORT,
+            "prod": cls.Commands.get_prod_command(frontend_path),
+        }
+
+    @classmethod
+    def get_dependencies(cls, frontend_target: FrontendTarget | str) -> dict[str, str]:
+        """Get dependencies for the chosen frontend target."""
+        target = cls._normalize_target(frontend_target)
+        if target == FrontendTarget.SVELTEKIT.value:
+            return cls.SVELTEKIT_DEPENDENCIES
+        return cls.DEPENDENCIES
+
+    @classmethod
+    def get_dev_dependencies(
+        cls, frontend_target: FrontendTarget | str
+    ) -> dict[str, str]:
+        """Get development dependencies for the chosen frontend target."""
+        target = cls._normalize_target(frontend_target)
+        if target == FrontendTarget.SVELTEKIT.value:
+            return cls.SVELTEKIT_DEV_DEPENDENCIES
+        return cls.DEV_DEPENDENCIES
+
+    @classmethod
+    def get_overrides(cls, frontend_target: FrontendTarget | str) -> dict[str, str]:
+        """Get overrides for the chosen frontend target."""
+        target = cls._normalize_target(frontend_target)
+        if target == FrontendTarget.SVELTEKIT.value:
+            return {}
+        return cls.OVERRIDES

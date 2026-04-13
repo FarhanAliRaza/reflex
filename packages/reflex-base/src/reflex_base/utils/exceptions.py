@@ -218,6 +218,10 @@ class InvalidLifespanTaskTypeError(ReflexError, TypeError):
     """Raised when an invalid task type is registered as a lifespan task."""
 
 
+class UnsupportedFrontendTargetError(ReflexError, ValueError):
+    """Raised when a feature is not supported by the selected frontend target."""
+
+
 class DynamicComponentMissingLibraryError(ReflexError, ValueError):
     """Raised when a dynamic component is missing a library."""
 

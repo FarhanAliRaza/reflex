@@ -21,7 +21,11 @@ class Constants(SimpleNamespace):
     # The Tailwind config.
     CONFIG = "tailwind.config.js"
     # Default Tailwind content paths
-    CONTENT = [f"./{Dirs.PAGES}/**/*.{{js,ts,jsx,tsx}}", "./utils/**/*.{js,ts,jsx,tsx}"]
+    CONTENT = [
+        f"./{Dirs.PAGES}/**/*.{{js,ts,jsx,tsx}}",
+        "./utils/**/*.{js,ts,jsx,tsx}",
+        "./src/**/*.{js,ts,svelte}",
+    ]
     # Relative tailwind style path to root stylesheet in Dirs.STYLES.
     ROOT_STYLE_PATH = "./tailwind.css"
 
@@ -29,8 +33,7 @@ class Constants(SimpleNamespace):
     ROOT_STYLE_CONTENT = """@layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/preflight.css" layer(base);
-@import "{radix_url}" layer(components);
-@import "tailwindcss/utilities.css" layer(utilities);
+{radix_import}@import "tailwindcss/utilities.css" layer(utilities);
 @config "../tailwind.config.js";
 """
 
@@ -60,11 +63,18 @@ def compile_root_style():
         The compiled Tailwind root style.
     """
     from reflex.compiler.compiler import RADIX_THEMES_STYLESHEET
+    from reflex_base import constants
+    from reflex_base.config import get_config
 
+    radix_import = (
+        f'@import "{RADIX_THEMES_STYLESHEET}" layer(components);\n'
+        if get_config().frontend_target == constants.FrontendTarget.REACT
+        else ""
+    )
     return str(
         Path(Dirs.STYLES) / Constants.ROOT_STYLE_PATH
     ), Constants.ROOT_STYLE_CONTENT.format(
-        radix_url=RADIX_THEMES_STYLESHEET,
+        radix_import=radix_import,
     )
 
 
@@ -124,10 +134,16 @@ def add_tailwind_to_css_file(css_file_content: str) -> str:
     Returns:
         The modified css file content.
     """
-    from reflex.compiler.compiler import RADIX_THEMES_STYLESHEET
-
     if Constants.TAILWIND_CSS.splitlines()[0] in css_file_content:
         return css_file_content
+    from reflex_base import constants
+    from reflex_base.config import get_config
+
+    if get_config().frontend_target == constants.FrontendTarget.SVELTEKIT:
+        return "\n".join((Constants.TAILWIND_CSS, css_file_content))
+
+    from reflex.compiler.compiler import RADIX_THEMES_STYLESHEET
+
     if RADIX_THEMES_STYLESHEET not in css_file_content:
         print(  # noqa: T201
             f"Could not find line with '{RADIX_THEMES_STYLESHEET}' in {Dirs.STYLES}. "

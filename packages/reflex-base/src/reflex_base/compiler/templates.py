@@ -13,7 +13,7 @@ from reflex_base.vars.base import VarData
 
 if TYPE_CHECKING:
     from reflex.compiler.utils import _ImportDict
-    from reflex_base.components.component import Component, StatefulComponent
+    from reflex_base.components.component import Component
 
 
 def _sort_hooks(
@@ -121,20 +121,30 @@ class _RenderUtils:
         return f'import "{module["lib"]}"'
 
 
-def rxconfig_template(app_name: str):
+def rxconfig_template(
+    app_name: str,
+    frontend_target: constants.FrontendTarget | str = constants.FrontendTarget.REACT,
+):
     """Template for the Reflex config file.
 
     Args:
         app_name: The name of the application.
+        frontend_target: The selected frontend target.
 
     Returns:
         Rendered Reflex config file content as string.
     """
+    frontend_target_line = (
+        f'    frontend_target="{frontend_target.value if isinstance(frontend_target, constants.FrontendTarget) else frontend_target}",\n'
+        if frontend_target != constants.FrontendTarget.REACT
+        and frontend_target != constants.FrontendTarget.REACT.value
+        else ""
+    )
     return f"""import reflex as rx
 
 config = rx.Config(
     app_name="{app_name}",
-    plugins=[
+{frontend_target_line}    plugins=[
         rx.plugins.SitemapPlugin(),
         rx.plugins.TailwindV4Plugin(),
     ]
@@ -417,7 +427,7 @@ export function StateProvider({{ children }}) {{
 }}"""
 
 
-def component_template(component: Component | StatefulComponent):
+def component_template(component: Component):
     """Template to render a component tag.
 
     Args:
@@ -618,24 +628,23 @@ export default defineConfig((config) => ({{
 }}));"""
 
 
-def stateful_component_template(
-    tag_name: str, memo_trigger_hooks: list[str], component: Component, export: bool
-):
-    """Template for stateful component.
+def dynamic_component_template(
+    tag_name: str, component: Component, export: bool
+) -> str:
+    """Template for a dynamic SSR component function declaration.
 
     Args:
         tag_name: The tag name for the component.
-        memo_trigger_hooks: The memo trigger hooks for the component.
         component: The component to render.
         export: Whether to export the component.
 
     Returns:
-        Rendered stateful component code as string.
+        Rendered dynamic component code as string.
     """
     all_hooks = component._get_all_hooks()
     return f"""
 {"export " if export else ""}function {tag_name} () {{
-  {_render_hooks(all_hooks, memo_trigger_hooks)}
+  {_render_hooks(all_hooks)}
   return (
     {_RenderUtils.render(component.render())}
   )
@@ -643,15 +652,17 @@ def stateful_component_template(
 """
 
 
-def stateful_components_template(imports: list[_ImportDict], memoized_code: str) -> str:
-    """Template for stateful components.
+def dynamic_components_module_template(
+    imports: list[_ImportDict], memoized_code: str
+) -> str:
+    """Template for a dynamic-SSR components module.
 
     Args:
         imports: List of import statements.
-        memoized_code: Memoized code for stateful components.
+        memoized_code: Code for the module body.
 
     Returns:
-        Rendered stateful components code as string.
+        Rendered module code as string.
     """
     imports_str = "\n".join([_RenderUtils.get_import(imp) for imp in imports])
     return f"{imports_str}\n{memoized_code}"
@@ -718,9 +729,8 @@ def styles_template(stylesheets: list[str]) -> str:
     Returns:
         Rendered styles.css content as string.
     """
-    return "@layer __reflex_base;\n" + "\n".join([
-        f"@import url('{sheet_name}');" for sheet_name in stylesheets
-    ])
+    imports = "\n".join([f"@import url('{sheet_name}');" for sheet_name in stylesheets])
+    return f"{imports}\n@layer __reflex_base;"
 
 
 def _render_hooks(hooks: dict[str, VarData | None], memo: list | None = None) -> str:

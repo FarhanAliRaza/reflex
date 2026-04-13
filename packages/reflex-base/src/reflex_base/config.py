@@ -166,6 +166,7 @@ class BaseConfig:
         static_page_generation_timeout: Timeout to do a production build of a frontend page.
         cors_allowed_origins: Comma separated list of origins that are allowed to connect to the backend API.
         vite_allowed_hosts: Allowed hosts for the Vite dev server. Set to True to allow all hosts, or provide a list of hostnames (e.g. ["myservice.local"]) to allow specific ones. Prevents 403 errors in Docker, Codespaces, reverse proxies, etc.
+        frontend_target: Which frontend runtime/compiler target to use.
         react_strict_mode: Whether to use React strict mode.
         frontend_packages: Additional frontend packages to install.
         state_manager_mode: Indicate which type of state manager to use.
@@ -218,6 +219,8 @@ class BaseConfig:
     ] = dataclasses.field(default=("*",))
 
     vite_allowed_hosts: bool | list[str] = False
+
+    frontend_target: constants.FrontendTarget = constants.FrontendTarget.REACT
 
     react_strict_mode: bool = True
 
@@ -333,6 +336,8 @@ class Config(BaseConfig):
             if key not in class_fields:
                 setattr(self, key, value)
 
+        self._normalize_enum_fields()
+
         # Clean up this code when we remove plain envvar in 0.8.0
         env_loglevel = os.environ.get("REFLEX_LOGLEVEL")
         if env_loglevel is not None:
@@ -344,6 +349,7 @@ class Config(BaseConfig):
         env_kwargs = self.update_from_env()
         for key, env_value in env_kwargs.items():
             setattr(self, key, env_value)
+        self._normalize_enum_fields()
 
         # Normalize disable_plugins: convert strings and Plugin subclasses to instances.
         self._normalize_disable_plugins()
@@ -414,6 +420,27 @@ class Config(BaseConfig):
                     f"reflex.Config.disable_plugins should contain Plugin subclasses, but got {entry!r}.",
                 )
         self.disable_plugins = normalized
+
+    def _normalize_enum_fields(self):
+        """Normalize string-backed enum config values.
+
+        Config values supplied directly in ``rxconfig.py`` are plain Python
+        values, so dataclass initialization does not coerce strings into their
+        enum types for us.
+        """
+
+        if isinstance(self.frontend_target, str):
+            self.frontend_target = constants.FrontendTarget(
+                self.frontend_target.lower()
+            )
+
+        if isinstance(self.loglevel, str):
+            self.loglevel = constants.LogLevel.from_string(self.loglevel)
+
+        if isinstance(self.state_manager_mode, str):
+            self.state_manager_mode = constants.StateManagerMode(
+                self.state_manager_mode.lower()
+            )
 
     def _add_builtin_plugins(self):
         """Add the builtin plugins to the config."""
@@ -594,6 +621,7 @@ class Config(BaseConfig):
             if value is not None:
                 os.environ[self._prefixes[0] + key.upper()] = str(value)
             setattr(self, key, value)
+        self._normalize_enum_fields()
         self._non_default_attributes.update(kwargs)
         self._replace_defaults(**kwargs)
 

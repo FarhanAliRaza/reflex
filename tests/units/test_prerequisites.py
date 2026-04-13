@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from reflex_base import constants
 from click.testing import CliRunner
 from reflex_base.config import Config
 from reflex_base.constants.installer import PackageJson
@@ -10,11 +11,14 @@ from reflex_base.utils.decorator import cached_procedure
 
 from reflex.reflex import cli
 from reflex.testing import chdir
+from reflex.utils import build, frontend_skeleton
 from reflex.utils.frontend_skeleton import (
     _compile_package_json,
+    _update_sveltekit_layout_config,
     _compile_vite_config,
     _update_react_router_config,
 )
+from reflex.utils.prerequisites import needs_reinit
 from reflex.utils.rename import rename_imports_and_app_name
 from reflex.utils.telemetry import CpuInfo, get_cpu_info
 
@@ -131,6 +135,239 @@ def test_compile_package_json_prod_command(config, expected_prod_script, monkeyp
     monkeypatch.setattr("reflex.utils.frontend_skeleton.get_config", lambda: config)
     output = _compile_package_json()
     assert f'"prod": "{expected_prod_script}"' in output
+
+
+@pytest.mark.parametrize(
+    ("frontend_path", "expected_command"),
+    [
+        ("", "sirv ./build/client --single 200.html --host"),
+        ("/", "sirv ./build/client --single 200.html --host"),
+        ("/app", "sirv ./build/client --single app/200.html --host"),
+    ],
+)
+def test_get_sveltekit_prod_command(frontend_path, expected_command):
+    assert (
+        PackageJson.Commands.get_sveltekit_prod_command(frontend_path)
+        == expected_command
+    )
+
+
+def test_compile_package_json_sveltekit(monkeypatch):
+    config = Config(
+        app_name="test",
+        frontend_target=constants.FrontendTarget.SVELTEKIT,
+    )
+    monkeypatch.setattr("reflex.utils.frontend_skeleton.get_config", lambda: config)
+    output = _compile_package_json()
+    assert '"dev": "vite dev --host"' in output
+    assert '"export": "vite build"' in output
+    assert '"prod": "sirv ./build/client --single 200.html --host"' in output
+    assert '"@radix-ui/themes"' in output
+    assert '"@sveltejs/kit"' in output
+    assert '"@tailwindcss/postcss"' in output
+    assert '"lucide-svelte"' in output
+    assert '"react-router"' not in output
+
+
+def test_needs_reinit_when_web_template_mismatches_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """A stale React .web skeleton should be rebuilt for a Svelte target."""
+
+    reflex_dir = tmp_path / ".reflex"
+    reflex_dir.mkdir()
+    web_dir = tmp_path / ".web"
+    web_dir.mkdir()
+    (web_dir / "react-router.config.js").write_text("export default {};")
+
+    monkeypatch.setenv("REFLEX_DIR", str(reflex_dir))
+    monkeypatch.setenv("REFLEX_WEB_WORKDIR", str(web_dir))
+    monkeypatch.setattr(
+        "reflex.utils.prerequisites.get_config",
+        lambda: Config(
+            app_name="test",
+            frontend_target=constants.FrontendTarget.SVELTEKIT,
+        ),
+    )
+    monkeypatch.setattr(
+        "reflex.utils.prerequisites._is_app_compiled_with_same_reflex_version",
+        lambda: True,
+    )
+
+    assert needs_reinit() is True
+
+
+def test_needs_reinit_when_sveltekit_generated_modules_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """A stale SvelteKit skeleton missing generated modules should be rebuilt."""
+
+    reflex_dir = tmp_path / ".reflex"
+    reflex_dir.mkdir()
+    web_dir = tmp_path / ".web"
+    (web_dir / "src" / "routes").mkdir(parents=True)
+    (web_dir / "svelte.config.js").write_text("export default {};")
+    (web_dir / "src" / "routes" / "+layout.svelte").write_text("<slot />")
+
+    monkeypatch.setenv("REFLEX_DIR", str(reflex_dir))
+    monkeypatch.setenv("REFLEX_WEB_WORKDIR", str(web_dir))
+    monkeypatch.setattr(
+        "reflex.utils.prerequisites.get_config",
+        lambda: Config(
+            app_name="test",
+            frontend_target=constants.FrontendTarget.SVELTEKIT,
+        ),
+    )
+    monkeypatch.setattr(
+        "reflex.utils.prerequisites._is_app_compiled_with_same_reflex_version",
+        lambda: True,
+    )
+
+    assert needs_reinit() is True
+
+
+def test_svelte_generated_modules_are_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """SvelteKit metadata modules should be written into src/lib/reflex/generated."""
+
+    web_dir = tmp_path / ".web"
+    monkeypatch.setenv("REFLEX_WEB_WORKDIR", str(web_dir))
+
+    config = Config(
+        app_name="test",
+        api_url="http://localhost:8000",
+        frontend_target=constants.FrontendTarget.SVELTEKIT,
+    )
+    monkeypatch.setattr("reflex.utils.frontend_skeleton.get_config", lambda: config)
+    monkeypatch.setattr("reflex.utils.build.get_config", lambda: config)
+    monkeypatch.setattr("reflex_base.config.get_config", lambda: config)
+
+    frontend_skeleton.init_reflex_json(project_hash=123)
+    build.set_env_json()
+
+    reflex_module = web_dir / "src" / "lib" / "reflex" / "generated" / "reflex.js"
+    env_module = web_dir / "src" / "lib" / "reflex" / "generated" / "env.js"
+
+    assert reflex_module.exists()
+    assert env_module.exists()
+    assert (
+        reflex_module.read_text()
+        == f'export default {{"project_hash": 123, "version": "{constants.Reflex.VERSION}"}};\n'
+    )
+    env_text = env_module.read_text()
+    assert env_text.startswith("export default ")
+    assert '"PING": "http://localhost:8000/ping"' in env_text
+    assert '"EVENT": "ws://localhost:8000/_event"' in env_text
+
+
+def test_sveltekit_layout_keeps_ssr_enabled_for_prerender():
+    """SvelteKit prerendering needs SSR enabled during the build."""
+
+    layout_config = (
+        constants.Templates.Dirs.WEB_SVELTEKIT_TEMPLATE
+        / "src"
+        / "routes"
+        / "+layout.js"
+    ).read_text()
+
+    assert "export const prerender = !dev;" in layout_config
+    assert "export const ssr = dev;" not in layout_config
+
+
+def test_svelte_runtime_reuses_pending_socket_connection():
+    """The Svelte runtime should reuse a pending socket instead of opening a new one."""
+
+    runtime_template = (
+        constants.Templates.Dirs.WEB_SVELTEKIT_TEMPLATE
+        / "src"
+        / "lib"
+        / "reflex"
+        / "runtime.svelte.js"
+    ).read_text()
+
+    assert """if (this.socket) {
+      if (!this.socket.connected && !this.socket.wait_connect) {
+        this.socket.reconnect();
+      }
+      return;
+    }""" in runtime_template
+    assert "reconnection: false," in runtime_template
+    assert """if (socket.rehydrate) {
+        socket.rehydrate = false;
+        this.queueEvents(this._initialEvents(), true);
+      }""" in runtime_template
+    assert """if (this._hasStatefulEvents() && !this.socket?.connected) {
+      await this.ensureSocketConnected();
+      return;
+    }""" in runtime_template
+
+
+def test_svelte_radix_templates_follow_react_theme_tokens():
+    """Svelte radix wrappers should use the same theme token geometry as React."""
+
+    component_root = (
+        constants.Templates.Dirs.WEB_SVELTEKIT_TEMPLATE
+        / "src"
+        / "lib"
+        / "reflex"
+        / "components"
+    )
+
+    style_template = (component_root / "style.js").read_text()
+    button_template = (component_root / "radix" / "Button.svelte").read_text()
+    link_template = (component_root / "radix" / "Link.svelte").read_text()
+    badge_template = (component_root / "radix" / "Badge.svelte").read_text()
+    avatar_template = (component_root / "radix" / "Avatar.svelte").read_text()
+    container_template = (component_root / "radix" / "Container.svelte").read_text()
+    section_template = (component_root / "radix" / "Section.svelte").read_text()
+
+    assert '"8": "calc(var(--font-size-8) * var(--heading-font-size-adjust))"' in (
+        style_template
+    )
+    assert 'xs: "30em"' in style_template
+    assert 'xl: "96em"' in style_template
+    assert 'return CONTAINER_WIDTH["3"];' in style_template
+
+    assert "background-color: var(--accent-12);" in button_template
+    assert "box-shadow: inset 0 0 0 1px var(--accent-a8);" in button_template
+    assert 'height: "var(--space-7)"' in button_template
+
+    assert 'color: "inherit"' in link_template
+    assert "`rxs-link--underline-${underline}`" in link_template
+
+    assert "background-color: var(--accent-surface);" in badge_template
+    assert "font-weight: 500;" in badge_template
+    assert "height: fit-content;" in badge_template
+
+    assert 'variant = "soft"' in avatar_template
+    assert 'size = "3"' in avatar_template
+    assert 'class={fallbackClasses}' in avatar_template
+    assert "background-color: var(--accent-a3);" in avatar_template
+
+    assert 'max-width: ${containerWidth(size)}' in container_template
+    assert 'class="rxs-container__inner"' in container_template
+
+    assert '"2": "var(--space-7)"' in section_template
+    assert '"4": "calc(80px * var(--scaling))"' in section_template
+
+
+@pytest.mark.parametrize(
+    ("prerender_routes", "expected_output"),
+    [
+        (False, "export const prerender = false;\n"),
+        (True, "export const prerender = true;\n"),
+    ],
+)
+def test_update_sveltekit_layout_config(prerender_routes, expected_output):
+    output = _update_sveltekit_layout_config(
+        Config(
+            app_name="test",
+            frontend_target=constants.FrontendTarget.SVELTEKIT,
+        ),
+        prerender_routes=prerender_routes,
+    )
+    assert output == expected_output
 
 
 def test_cached_procedure():
