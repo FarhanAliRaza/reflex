@@ -3,9 +3,10 @@
   import { mergeClasses, mergeStyles } from "$lib/reflex/components/style.js";
 
   const SIZE_PADDING = {
-    "1": "1.5rem",
-    "2": "2.25rem",
-    "3": "3rem",
+    "1": "var(--space-5)",
+    "2": "var(--space-7)",
+    "3": "var(--space-9)",
+    "4": "calc(80px * var(--scaling))",
   };
 
   let {
@@ -34,3 +35,10 @@
   children={children}
   {...restProps}
 />
+
+<style>
+  :global(.rxs-section) {
+    box-sizing: border-box;
+    flex-shrink: 0;
+  }
+</style>

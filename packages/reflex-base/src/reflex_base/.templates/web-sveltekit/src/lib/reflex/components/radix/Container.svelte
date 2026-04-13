@@ -16,13 +16,9 @@
   } = $props();
 
   const classes = $derived(mergeClasses("rxs-container", className));
-  const containerStyle = $derived(
-    mergeStyles(
-      `width: min(100%, ${containerWidth(size)})`,
-      "margin-inline: auto",
-      "padding-inline: 1rem",
-      style,
-    ),
+  const containerStyle = $derived(mergeStyles(style));
+  const innerStyle = $derived(
+    mergeStyles("width: 100%", `max-width: ${containerWidth(size)}`),
   );
 </script>
 
@@ -31,6 +27,24 @@
   className={classes}
   css={css}
   style={containerStyle}
-  children={children}
   {...restProps}
-/>
+>
+  <div class="rxs-container__inner" style={innerStyle}>
+    {@render children?.()}
+  </div>
+</Primitive>
+
+<style>
+  :global(.rxs-container) {
+    align-items: center;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    flex-shrink: 0;
+  }
+
+  :global(.rxs-container__inner) {
+    width: 100%;
+  }
+</style>

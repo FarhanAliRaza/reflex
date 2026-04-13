@@ -275,6 +275,83 @@ def test_sveltekit_layout_keeps_ssr_enabled_for_prerender():
     assert "export const ssr = dev;" not in layout_config
 
 
+def test_svelte_runtime_reuses_pending_socket_connection():
+    """The Svelte runtime should reuse a pending socket instead of opening a new one."""
+
+    runtime_template = (
+        constants.Templates.Dirs.WEB_SVELTEKIT_TEMPLATE
+        / "src"
+        / "lib"
+        / "reflex"
+        / "runtime.svelte.js"
+    ).read_text()
+
+    assert """if (this.socket) {
+      if (!this.socket.connected && !this.socket.wait_connect) {
+        this.socket.reconnect();
+      }
+      return;
+    }""" in runtime_template
+    assert "reconnection: false," in runtime_template
+    assert """if (socket.rehydrate) {
+        socket.rehydrate = false;
+        this.queueEvents(this._initialEvents(), true);
+      }""" in runtime_template
+    assert """if (this._hasStatefulEvents() && !this.socket?.connected) {
+      await this.ensureSocketConnected();
+      return;
+    }""" in runtime_template
+
+
+def test_svelte_radix_templates_follow_react_theme_tokens():
+    """Svelte radix wrappers should use the same theme token geometry as React."""
+
+    component_root = (
+        constants.Templates.Dirs.WEB_SVELTEKIT_TEMPLATE
+        / "src"
+        / "lib"
+        / "reflex"
+        / "components"
+    )
+
+    style_template = (component_root / "style.js").read_text()
+    button_template = (component_root / "radix" / "Button.svelte").read_text()
+    link_template = (component_root / "radix" / "Link.svelte").read_text()
+    badge_template = (component_root / "radix" / "Badge.svelte").read_text()
+    avatar_template = (component_root / "radix" / "Avatar.svelte").read_text()
+    container_template = (component_root / "radix" / "Container.svelte").read_text()
+    section_template = (component_root / "radix" / "Section.svelte").read_text()
+
+    assert '"8": "calc(var(--font-size-8) * var(--heading-font-size-adjust))"' in (
+        style_template
+    )
+    assert 'xs: "30em"' in style_template
+    assert 'xl: "96em"' in style_template
+    assert 'return CONTAINER_WIDTH["3"];' in style_template
+
+    assert "background-color: var(--accent-12);" in button_template
+    assert "box-shadow: inset 0 0 0 1px var(--accent-a8);" in button_template
+    assert 'height: "var(--space-7)"' in button_template
+
+    assert 'color: "inherit"' in link_template
+    assert "`rxs-link--underline-${underline}`" in link_template
+
+    assert "background-color: var(--accent-surface);" in badge_template
+    assert "font-weight: 500;" in badge_template
+    assert "height: fit-content;" in badge_template
+
+    assert 'variant = "soft"' in avatar_template
+    assert 'size = "3"' in avatar_template
+    assert 'class={fallbackClasses}' in avatar_template
+    assert "background-color: var(--accent-a3);" in avatar_template
+
+    assert 'max-width: ${containerWidth(size)}' in container_template
+    assert 'class="rxs-container__inner"' in container_template
+
+    assert '"2": "var(--space-7)"' in section_template
+    assert '"4": "calc(80px * var(--scaling))"' in section_template
+
+
 @pytest.mark.parametrize(
     ("prerender_routes", "expected_output"),
     [

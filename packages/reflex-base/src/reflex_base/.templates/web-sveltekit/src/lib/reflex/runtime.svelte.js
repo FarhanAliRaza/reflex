@@ -308,6 +308,10 @@ export class ReflexRuntime {
     return event?.name?.startsWith("reflex___state");
   }
 
+  _hasStatefulEvents() {
+    return this.eventQueue.some((event) => this._isStatefulEvent(event));
+  }
+
   _mergeDelta(delta) {
     for (const substate in delta) {
       if (!(substate in this.state)) {
@@ -442,26 +446,26 @@ export class ReflexRuntime {
     if (this.processing || this.eventQueue.length === 0) {
       return;
     }
+
+    if (this._hasStatefulEvents() && !this.socket?.connected) {
+      await this.ensureSocketConnected();
+      return;
+    }
+
     this.processing = true;
     try {
-      while (this.eventQueue.length > 0) {
-        const event = this.eventQueue.shift();
-        if (this._isStatefulEvent(event) && !this.socket?.connected) {
-          this.processing = false;
-          await this.ensureSocketConnected();
-          this.processing = true;
-          if (!this.socket?.connected) {
-            break;
-          }
-        }
-        if (event.handler) {
-          await this._applyRestEvent(event);
-        } else {
-          await this._applyFrontendEvent(event);
-        }
+      const event = this.eventQueue.shift();
+      if (event?.handler) {
+        await this._applyRestEvent(event);
+      } else {
+        await this._applyFrontendEvent(event);
       }
     } finally {
       this.processing = false;
+    }
+
+    if (this.eventQueue.length > 0) {
+      await this.processEvent();
     }
   }
 
@@ -482,6 +486,10 @@ export class ReflexRuntime {
       eventActions ?? {},
     );
 
+    if (!mergedEventActions?.temporal) {
+      void this.ensureSocketConnected();
+    }
+
     return applyEventActions(
       () => this.queueEvents(filteredEvents, false),
       mergedEventActions,
@@ -492,45 +500,94 @@ export class ReflexRuntime {
   }
 
   async ensureSocketConnected() {
-    if (!browser || this._isBackendDisabled()) {
-      return;
-    }
-    if (this.socket?.connected) {
+    if (!browser || !this.mounted || this._isBackendDisabled()) {
       return;
     }
     if (Object.keys(this.state).length <= 1 && !this.stateName) {
       return;
     }
+    if (this.socket) {
+      if (!this.socket.connected && !this.socket.wait_connect) {
+        this.socket.reconnect();
+      }
+      return;
+    }
 
     const endpoint = this._getBackendURL(env.EVENT);
-    this.socket = io(endpoint.href, {
+    const socket = (this.socket = io(endpoint.href, {
       path: endpoint.pathname,
       transports: [env.TRANSPORT],
       protocols: [reflexEnvironment.version],
       autoUnref: false,
       query: { token: this._getToken() },
-      reconnection: true,
-    });
-    this.socket.io.encoder.replacer = (key, value) =>
+      reconnection: false,
+    }));
+    socket.wait_connect = !socket.connected;
+    socket.rehydrate = false;
+    socket.io.encoder.replacer = (key, value) =>
       value === undefined ? null : value;
-    this.socket.io.decoder.tryParse = (value) => {
+    socket.io.decoder.tryParse = (value) => {
       try {
         return JSON5.parse(value);
       } catch {
         return false;
       }
     };
+    socket.reconnect = () => {
+      if (this.socket !== socket || socket.connected || socket.wait_connect) {
+        return;
+      }
+      socket.wait_connect = true;
+      socket.rehydrate = true;
+      socket.io.opts.query = { token: this._getToken() };
+      socket.connect();
+    };
 
-    this.socket.on("connect", async () => {
+    socket.on("connect", async () => {
+      if (this.socket !== socket) {
+        return;
+      }
+      socket.wait_connect = false;
       this.connectErrors = [];
-      this.queueEvents(this._initialEvents(), true);
+      if (socket.rehydrate) {
+        socket.rehydrate = false;
+        this.queueEvents(this._initialEvents(), true);
+      }
+      while (this.eventQueue.length > 0) {
+        await this.processEvent();
+      }
     });
 
-    this.socket.on("connect_error", (error) => {
-      this.connectErrors = [...this.connectErrors.slice(-9), error];
+    socket.on("connect_error", (error) => {
+      if (this.socket !== socket) {
+        return;
+      }
+      socket.wait_connect = false;
+      const nextErrors = [...this.connectErrors.slice(-9), error];
+      this.connectErrors = nextErrors;
+      window.setTimeout(() => {
+        if (this.socket === socket && !socket.connected) {
+          socket.reconnect();
+        }
+      }, 200 * nextErrors.length);
     });
 
-    this.socket.on("event", (update) => {
+    socket.on("disconnect", (reason) => {
+      if (this.socket !== socket) {
+        return;
+      }
+      socket.wait_connect = false;
+      const tryReconnect =
+        reason !== "io server disconnect" && reason !== "io client disconnect";
+      if (tryReconnect) {
+        socket.reconnect();
+      }
+    });
+
+    socket.on("event", (update) => {
+      if (this.socket !== socket) {
+        return;
+      }
       if (update.delta && Object.keys(update.delta).length > 0) {
         this._mergeDelta(update.delta);
       }
@@ -539,7 +596,10 @@ export class ReflexRuntime {
       }
     });
 
-    this.socket.on("new_token", (newToken) => {
+    socket.on("new_token", (newToken) => {
+      if (this.socket !== socket) {
+        return;
+      }
       this.token = newToken;
       if (browser) {
         window.sessionStorage.setItem(TOKEN_KEY, newToken);
@@ -555,5 +615,14 @@ export class ReflexRuntime {
     this._applyColorMode(this.defaultColorMode);
     this.queueEvents(this._initialEvents(), true);
     void this.ensureSocketConnected();
+  }
+
+  unmount() {
+    this.mounted = false;
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket.off();
+      this.socket = null;
+    }
   }
 }

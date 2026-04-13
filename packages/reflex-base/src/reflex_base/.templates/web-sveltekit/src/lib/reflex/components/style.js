@@ -1,13 +1,13 @@
 const SPACE_SCALE = {
-  "1": "0.25rem",
-  "2": "0.5rem",
-  "3": "0.75rem",
-  "4": "1rem",
-  "5": "1.5rem",
-  "6": "2rem",
-  "7": "2.5rem",
-  "8": "3rem",
-  "9": "4rem",
+  "1": "var(--space-1)",
+  "2": "var(--space-2)",
+  "3": "var(--space-3)",
+  "4": "var(--space-4)",
+  "5": "var(--space-5)",
+  "6": "var(--space-6)",
+  "7": "var(--space-7)",
+  "8": "var(--space-8)",
+  "9": "var(--space-9)",
 };
 
 const ALIGN_MAP = {
@@ -28,42 +28,90 @@ const JUSTIFY_MAP = {
 };
 
 const HEADING_SCALE = {
-  "1": "1rem",
-  "2": "1.125rem",
-  "3": "1.25rem",
-  "4": "1.5rem",
-  "5": "1.75rem",
-  "6": "2.125rem",
-  "7": "2.5rem",
-  "8": "3rem",
-  "9": "3.75rem",
+  "1": "calc(var(--font-size-1) * var(--heading-font-size-adjust))",
+  "2": "calc(var(--font-size-2) * var(--heading-font-size-adjust))",
+  "3": "calc(var(--font-size-3) * var(--heading-font-size-adjust))",
+  "4": "calc(var(--font-size-4) * var(--heading-font-size-adjust))",
+  "5": "calc(var(--font-size-5) * var(--heading-font-size-adjust))",
+  "6": "calc(var(--font-size-6) * var(--heading-font-size-adjust))",
+  "7": "calc(var(--font-size-7) * var(--heading-font-size-adjust))",
+  "8": "calc(var(--font-size-8) * var(--heading-font-size-adjust))",
+  "9": "calc(var(--font-size-9) * var(--heading-font-size-adjust))",
 };
 
 const TEXT_SCALE = {
-  "1": "0.75rem",
-  "2": "0.875rem",
-  "3": "0.95rem",
-  "4": "1rem",
-  "5": "1.125rem",
-  "6": "1.25rem",
-  "7": "1.5rem",
-  "8": "1.75rem",
-  "9": "2rem",
+  "1": "var(--font-size-1)",
+  "2": "var(--font-size-2)",
+  "3": "var(--font-size-3)",
+  "4": "var(--font-size-4)",
+  "5": "var(--font-size-5)",
+  "6": "var(--font-size-6)",
+  "7": "var(--font-size-7)",
+  "8": "var(--font-size-8)",
+  "9": "var(--font-size-9)",
+};
+
+const TEXT_LINE_HEIGHT_SCALE = {
+  "1": "var(--line-height-1)",
+  "2": "var(--line-height-2)",
+  "3": "var(--line-height-3)",
+  "4": "var(--line-height-4)",
+  "5": "var(--line-height-5)",
+  "6": "var(--line-height-6)",
+  "7": "var(--line-height-7)",
+  "8": "var(--line-height-8)",
+  "9": "var(--line-height-9)",
+};
+
+const TEXT_LETTER_SPACING_SCALE = {
+  "1": "var(--letter-spacing-1)",
+  "2": "var(--letter-spacing-2)",
+  "3": "var(--letter-spacing-3)",
+  "4": "var(--letter-spacing-4)",
+  "5": "var(--letter-spacing-5)",
+  "6": "var(--letter-spacing-6)",
+  "7": "var(--letter-spacing-7)",
+  "8": "var(--letter-spacing-8)",
+  "9": "var(--letter-spacing-9)",
+};
+
+const HEADING_LINE_HEIGHT_SCALE = {
+  "1": "var(--heading-line-height-1)",
+  "2": "var(--heading-line-height-2)",
+  "3": "var(--heading-line-height-3)",
+  "4": "var(--heading-line-height-4)",
+  "5": "var(--heading-line-height-5)",
+  "6": "var(--heading-line-height-6)",
+  "7": "var(--heading-line-height-7)",
+  "8": "var(--heading-line-height-8)",
+  "9": "var(--heading-line-height-9)",
+};
+
+const HEADING_LETTER_SPACING_SCALE = {
+  "1": "calc(var(--letter-spacing-1) + var(--heading-letter-spacing))",
+  "2": "calc(var(--letter-spacing-2) + var(--heading-letter-spacing))",
+  "3": "calc(var(--letter-spacing-3) + var(--heading-letter-spacing))",
+  "4": "calc(var(--letter-spacing-4) + var(--heading-letter-spacing))",
+  "5": "calc(var(--letter-spacing-5) + var(--heading-letter-spacing))",
+  "6": "calc(var(--letter-spacing-6) + var(--heading-letter-spacing))",
+  "7": "calc(var(--letter-spacing-7) + var(--heading-letter-spacing))",
+  "8": "calc(var(--letter-spacing-8) + var(--heading-letter-spacing))",
+  "9": "calc(var(--letter-spacing-9) + var(--heading-letter-spacing))",
 };
 
 const CONTAINER_WIDTH = {
-  "1": "42rem",
-  "2": "56rem",
-  "3": "72rem",
-  "4": "84rem",
+  "1": "var(--container-1)",
+  "2": "var(--container-2)",
+  "3": "var(--container-3)",
+  "4": "var(--container-4)",
 };
 
 const BREAKPOINTS = {
-  sm: "40rem",
-  md: "48rem",
-  lg: "64rem",
-  xl: "80rem",
-  "2xl": "96rem",
+  xs: "30em",
+  sm: "48em",
+  md: "62em",
+  lg: "80em",
+  xl: "96em",
 };
 
 const RADIUS_SCALE = {
@@ -169,15 +217,52 @@ export function justifyValue(value) {
 }
 
 export function headingSize(value) {
-  return HEADING_SCALE[String(value)] ?? String(value ?? HEADING_SCALE["6"]);
+  if (value === undefined || value === null || value === "") {
+    return HEADING_SCALE["6"];
+  }
+  return HEADING_SCALE[String(value)] ?? String(value);
+}
+
+export function headingLineHeight(value) {
+  if (value === undefined || value === null || value === "") {
+    return HEADING_LINE_HEIGHT_SCALE["6"];
+  }
+  return HEADING_LINE_HEIGHT_SCALE[String(value)] ?? String(value);
+}
+
+export function headingLetterSpacing(value) {
+  if (value === undefined || value === null || value === "") {
+    return HEADING_LETTER_SPACING_SCALE["6"];
+  }
+  return HEADING_LETTER_SPACING_SCALE[String(value)] ?? String(value);
 }
 
 export function textSize(value) {
-  return TEXT_SCALE[String(value)] ?? String(value ?? TEXT_SCALE["4"]);
+  if (value === undefined || value === null || value === "") {
+    return TEXT_SCALE["4"];
+  }
+  return TEXT_SCALE[String(value)] ?? String(value);
+}
+
+export function textLineHeight(value) {
+  if (value === undefined || value === null || value === "") {
+    return "var(--default-line-height)";
+  }
+  return TEXT_LINE_HEIGHT_SCALE[String(value)] ?? String(value);
+}
+
+export function textLetterSpacing(value) {
+  if (value === undefined || value === null || value === "") {
+    return "inherit";
+  }
+  return TEXT_LETTER_SPACING_SCALE[String(value)] ?? String(value);
 }
 
 export function containerWidth(value) {
-  return CONTAINER_WIDTH[String(value)] ?? "72rem";
+  if (value === undefined || value === null || value === "") {
+    return CONTAINER_WIDTH["3"];
+  }
+  return CONTAINER_WIDTH[String(value)] ?? String(value);
 }
 
 export function radiusValue(value, fallback = "0.75rem") {
@@ -239,11 +324,11 @@ function appendDeclaration(target, prop, value) {
 function createResponsiveBuckets() {
   return {
     base: [],
+    xs: [],
     sm: [],
     md: [],
     lg: [],
     xl: [],
-    "2xl": [],
   };
 }
 

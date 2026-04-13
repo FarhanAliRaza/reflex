@@ -1,6 +1,12 @@
 <script>
   import Primitive from "$lib/reflex/components/Primitive.svelte";
-  import { headingSize, mergeClasses, mergeStyles } from "$lib/reflex/components/style.js";
+  import {
+    headingLetterSpacing,
+    headingLineHeight,
+    headingSize,
+    mergeClasses,
+    mergeStyles,
+  } from "$lib/reflex/components/style.js";
 
   let {
     as = "h1",
@@ -18,8 +24,9 @@
   const headingStyle = $derived(
     mergeStyles(
       `font-size: ${headingSize(size)}`,
-      "line-height: 1.05",
-      weight ? `font-weight: ${weight === "bold" ? "800" : weight}` : "",
+      `line-height: ${headingLineHeight(size)}`,
+      `letter-spacing: ${headingLetterSpacing(size)}`,
+      weight ? `font-weight: ${weight === "bold" ? "700" : weight}` : "",
       align ? `text-align: ${align}` : "",
       style,
     ),
@@ -38,8 +45,9 @@
 <style>
   :global(.rxs-heading) {
     color: var(--gray-12);
-    font-weight: 800;
-    letter-spacing: -0.04em;
+    font-family: var(--heading-font-family, inherit);
+    font-style: var(--heading-font-style, normal);
+    font-weight: 700;
     margin: 0;
     text-wrap: balance;
   }

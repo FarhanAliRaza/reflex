@@ -1,7 +1,7 @@
 <script>
   import "$/styles/__reflex_global_styles.css";
 
-  import { onMount, setContext } from "svelte";
+  import { onDestroy, onMount, setContext } from "svelte";
 
   import {
     clientStorage,
@@ -23,6 +23,7 @@
   setContext(REFLEX_RUNTIME, runtime);
 
   onMount(() => runtime.mount());
+  onDestroy(() => runtime.unmount());
 </script>
 
 <div
