@@ -1338,6 +1338,54 @@ class Component(BaseComponent, ABC):
         self._cached_render_result = rendered_dict
         return rendered_dict
 
+    def render_structured(self) -> dict:
+        """Render the component while preserving structured attributes.
+
+        Returns:
+            The render dictionary with raw attributes/spreads for target-aware
+            serializers such as Svelte.
+        """
+        from reflex_base.components.tags.tag import render_prop
+
+        try:
+            return self._cached_structured_render_result
+        except AttributeError:
+            pass
+
+        tag = self._render()
+        children = [
+            child.render_structured()
+            if hasattr(child, "render_structured")
+            else child.render()
+            for child in self.children
+        ]
+        rendered_dict = dict(tag.set(children=children))
+        self._replace_prop_names(rendered_dict)
+
+        attributes = {
+            name: render_prop(value)
+            for name, value in tag.props.items()
+            if tag.is_valid_prop(value)
+        }
+        if self._rename_props and attributes:
+            renamed_attributes: dict[str, Any] = {}
+            for name, value in attributes.items():
+                new_name = name
+                for old_prop, new_prop in self._rename_props.items():
+                    if name.startswith(old_prop):
+                        new_name = name.replace(old_prop, new_prop, 1)
+                        break
+                renamed_attributes[new_name] = value
+            attributes = renamed_attributes
+
+        if attributes:
+            rendered_dict["attributes"] = attributes
+        if tag.special_props:
+            rendered_dict["spreads"] = [render_prop(prop) for prop in tag.special_props]
+
+        self._cached_structured_render_result = rendered_dict
+        return rendered_dict
+
     def _replace_prop_names(self, rendered_dict: dict) -> None:
         """Replace the prop names in the render dictionary.
 

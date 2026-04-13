@@ -1001,7 +1001,7 @@ class App(MiddlewareMixin, LifespanMixin):
             for i, tags in imports.items()
             if i not in dependencies
             and i not in dev_dependencies
-            and not any(i.startswith(prefix) for prefix in ["/", "$/", "."])
+            and not any(i.startswith(prefix) for prefix in ["/", "$/", "$lib/", "."])
             and i != ""
             and any(tag.install for tag in tags)
         }

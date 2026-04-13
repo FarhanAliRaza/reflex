@@ -146,6 +146,8 @@ class Templates(SimpleNamespace):
         BASE = Reflex.ROOT_DIR / ".templates"
         # The web subdirectory of the template directory.
         WEB_TEMPLATE = BASE / "web"
+        # The SvelteKit web subdirectory of the template directory.
+        WEB_SVELTEKIT_TEMPLATE = BASE / "web-sveltekit"
         # Where the code for the templates is stored.
         CODE = "code"
 
@@ -178,6 +180,31 @@ class ReactRouter(Javascript):
     )
 
     SPA_FALLBACK = "__spa-fallback.html"
+
+
+class SvelteKit(Javascript):
+    """Constants related to SvelteKit."""
+
+    CONFIG_FILE = "svelte.config.js"
+
+    VITE_CONFIG_FILE = "vite.config.js"
+
+    DEV_FRONTEND_LISTENING_REGEX = r"Local:[\s]+"
+
+    PROD_FRONTEND_LISTENING_REGEX = r"(?:Accepting connections at|Available on:)[\s]+"
+
+    FRONTEND_LISTENING_REGEX = (
+        rf"(?:{DEV_FRONTEND_LISTENING_REGEX}|{PROD_FRONTEND_LISTENING_REGEX})(.*)"
+    )
+
+    SPA_FALLBACK = "200.html"
+
+
+class FrontendTarget(str, Enum):
+    """Supported frontend targets."""
+
+    REACT = "react"
+    SVELTEKIT = "sveltekit"
 
 
 # Color mode variables

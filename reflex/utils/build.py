@@ -10,20 +10,29 @@ from reflex_base import constants
 from reflex_base.config import get_config
 from rich.progress import MofNCompleteColumn, Progress, TimeElapsedColumn
 
-from reflex.utils import console, js_runtimes, path_ops, prerequisites, processes
+from reflex.utils import (
+    console,
+    frontend_skeleton,
+    js_runtimes,
+    path_ops,
+    prerequisites,
+    processes,
+)
 from reflex.utils.exec import is_in_app_harness
 
 
 def set_env_json():
     """Write the upload url to a REFLEX_JSON."""
+    env_payload = {
+        **{endpoint.name: endpoint.get_url() for endpoint in constants.Endpoint},
+        "TRANSPORT": get_config().transport,
+        "TEST_MODE": is_in_app_harness(),
+    }
     path_ops.update_json_file(
         str(prerequisites.get_web_dir() / constants.Dirs.ENV_JSON),
-        {
-            **{endpoint.name: endpoint.get_url() for endpoint in constants.Endpoint},
-            "TRANSPORT": get_config().transport,
-            "TEST_MODE": is_in_app_harness(),
-        },
+        env_payload,
     )
+    frontend_skeleton.write_svelte_env_module(env_payload)
 
 
 def _zip(
@@ -194,16 +203,25 @@ def build():
         SystemExit: If the build process fails.
     """
     wdir = prerequisites.get_web_dir()
+    config = get_config()
 
     # Clean the static directory if it exists.
     path_ops.rm(str(wdir / constants.Dirs.BUILD_DIR))
-
-    checkpoints = [
-        "building client environment for production...",
-        "modules transformed",
-        "building ssr environment for production...",
-        "built in",
-    ]
+    checkpoints = (
+        [
+            "building client environment for production...",
+            "modules transformed",
+            "building ssr environment for production...",
+            "built in",
+        ]
+        if config.frontend_target == constants.FrontendTarget.REACT
+        else [
+            "vite v",
+            "rendering chunks",
+            "computing gzip size",
+            "built in",
+        ]
+    )
 
     # Start the subprocess with the progress bar.
     process = processes.new_process(
@@ -228,7 +246,12 @@ def build():
         raise SystemExit(1)
     _duplicate_index_html_to_parent_directory(wdir / constants.Dirs.STATIC)
 
-    spa_fallback = wdir / constants.Dirs.STATIC / constants.ReactRouter.SPA_FALLBACK
+    spa_fallback_name = (
+        constants.SvelteKit.SPA_FALLBACK
+        if config.frontend_target == constants.FrontendTarget.SVELTEKIT
+        else constants.ReactRouter.SPA_FALLBACK
+    )
+    spa_fallback = wdir / constants.Dirs.STATIC / spa_fallback_name
     if not spa_fallback.exists():
         spa_fallback = wdir / constants.Dirs.STATIC / "index.html"
 
@@ -237,8 +260,6 @@ def build():
             spa_fallback,
             wdir / constants.Dirs.STATIC / "404.html",
         )
-
-    config = get_config()
 
     if frontend_path := config.frontend_path.strip("/"):
         frontend_path = PosixPath(frontend_path)

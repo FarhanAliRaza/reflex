@@ -151,12 +151,18 @@ def initialize_requirements_txt(
 def initialize_web_directory():
     """Initialize the web directory on reflex init."""
     console.log("Initializing the web directory.")
+    config = get_config()
 
     # Reuse the hash if one is already created, so we don't over-write it when running reflex init
     project_hash = get_project_hash()
 
-    console.debug(f"Copying {constants.Templates.Dirs.WEB_TEMPLATE} to {get_web_dir()}")
-    path_ops.copy_tree(constants.Templates.Dirs.WEB_TEMPLATE, str(get_web_dir()))
+    template_dir = (
+        constants.Templates.Dirs.WEB_SVELTEKIT_TEMPLATE
+        if config.frontend_target == constants.FrontendTarget.SVELTEKIT
+        else constants.Templates.Dirs.WEB_TEMPLATE
+    )
+    console.debug(f"Copying {template_dir} to {get_web_dir()}")
+    path_ops.copy_tree(template_dir, str(get_web_dir()))
 
     console.debug("Initializing the web directory.")
     initialize_package_json()
@@ -170,10 +176,11 @@ def initialize_web_directory():
     console.debug("Initializing the public directory.")
     path_ops.mkdir(get_web_dir() / constants.Dirs.PUBLIC)
 
-    console.debug("Initializing the react-router.config.js file.")
-    update_react_router_config()
+    if config.frontend_target == constants.FrontendTarget.REACT:
+        console.debug("Initializing the react-router.config.js file.")
+        update_react_router_config()
 
-    console.debug("Initializing the vite.config.js file.")
+    console.debug("Initializing the Vite config file.")
     initialize_vite_config()
 
     console.debug("Initializing the reflex.json file.")
@@ -224,19 +231,55 @@ def _update_react_router_config(config: Config, prerender_routes: bool = False):
     return f"export default {json.dumps(react_router_config)};"
 
 
+def update_sveltekit_layout_config(prerender_routes: bool = False):
+    """Update src/routes/+layout.js config for the SvelteKit target.
+
+    Args:
+        prerender_routes: Whether to prerender the generated static routes.
+    """
+    layout_config_file_path = get_web_dir() / "src" / "routes" / "+layout.js"
+
+    new_layout_config = _update_sveltekit_layout_config(
+        get_config(), prerender_routes=prerender_routes
+    )
+
+    old_layout_config = (
+        layout_config_file_path.read_text()
+        if layout_config_file_path.exists()
+        else ""
+    )
+    if old_layout_config != new_layout_config:
+        layout_config_file_path.write_text(new_layout_config)
+
+
+def _update_sveltekit_layout_config(
+    config: Config, prerender_routes: bool = False
+) -> str:
+    """Generate the SvelteKit layout route config.
+
+    Args:
+        config: The Reflex config.
+        prerender_routes: Whether to prerender the generated static routes.
+
+    Returns:
+        The src/routes/+layout.js content.
+    """
+    del config
+    return f"export const prerender = {json.dumps(prerender_routes)};\n"
+
+
 def _compile_package_json():
     config = get_config()
     return templates.package_json_template(
-        scripts={
-            "dev": constants.PackageJson.Commands.DEV,
-            "export": constants.PackageJson.Commands.EXPORT,
-            "prod": constants.PackageJson.Commands.get_prod_command(
-                config.frontend_path
-            ),
-        },
-        dependencies=constants.PackageJson.DEPENDENCIES,
-        dev_dependencies=constants.PackageJson.DEV_DEPENDENCIES,
-        overrides=constants.PackageJson.OVERRIDES,
+        scripts=constants.PackageJson.get_scripts(
+            config.frontend_target,
+            config.frontend_path,
+        ),
+        dependencies=constants.PackageJson.get_dependencies(config.frontend_target),
+        dev_dependencies=constants.PackageJson.get_dev_dependencies(
+            config.frontend_target
+        ),
+        overrides=constants.PackageJson.get_overrides(config.frontend_target),
     )
 
 
@@ -263,8 +306,15 @@ def _compile_vite_config(config: Config):
 
 def initialize_vite_config():
     """Render and write in .web the vite.config.js file using Reflex config."""
-    vite_config_file_path = get_web_dir() / constants.ReactRouter.VITE_CONFIG_FILE
-    vite_config_file_path.write_text(_compile_vite_config(get_config()))
+    config = get_config()
+    if config.frontend_target == constants.FrontendTarget.SVELTEKIT:
+        return
+    vite_config_file_path = get_web_dir() / (
+        constants.SvelteKit.VITE_CONFIG_FILE
+        if config.frontend_target == constants.FrontendTarget.SVELTEKIT
+        else constants.ReactRouter.VITE_CONFIG_FILE
+    )
+    vite_config_file_path.write_text(_compile_vite_config(config))
 
 
 def initialize_bun_config():
@@ -295,6 +345,46 @@ def initialize_npmrc():
     npmrc_path.write_text(npmrc_content)
 
 
+def _write_svelte_generated_module(filename: str, payload: dict[str, object]) -> None:
+    """Write a generated Svelte frontend module.
+
+    Args:
+        filename: The generated module filename.
+        payload: The JSON-serializable payload to export.
+    """
+    if get_config().frontend_target != constants.FrontendTarget.SVELTEKIT:
+        return
+
+    target = (
+        get_web_dir()
+        / "src"
+        / "lib"
+        / "reflex"
+        / "generated"
+        / filename
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(f"export default {json.dumps(payload, sort_keys=True)};\n")
+
+
+def write_svelte_env_module(payload: dict[str, object]) -> None:
+    """Write the generated Svelte env module.
+
+    Args:
+        payload: The current frontend environment payload.
+    """
+    _write_svelte_generated_module("env.js", payload)
+
+
+def write_svelte_reflex_module(payload: dict[str, object]) -> None:
+    """Write the generated Svelte Reflex metadata module.
+
+    Args:
+        payload: The Reflex metadata payload.
+    """
+    _write_svelte_generated_module("reflex.js", payload)
+
+
 def init_reflex_json(project_hash: int | None):
     """Write the hash of the Reflex project to a REFLEX_JSON.
 
@@ -318,3 +408,4 @@ def init_reflex_json(project_hash: int | None):
         "project_hash": project_hash,
     }
     path_ops.update_json_file(get_web_dir() / constants.Reflex.JSON, reflex_json)
+    write_svelte_reflex_module(reflex_json)

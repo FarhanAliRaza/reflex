@@ -6,6 +6,7 @@ import dataclasses
 from collections.abc import Callable
 from typing import Any
 
+from reflex_base import constants
 from reflex_base.components.component import BaseComponent, Component, ComponentStyle
 from reflex_base.config import get_config
 from reflex_base.plugins import CompileContext, PageContext, PageDefinition, Plugin
@@ -411,12 +412,15 @@ def default_page_plugins(
     theme: Component | None = None,
 ) -> tuple[Plugin, ...]:
     """Return the default compiler plugin ordering for page compilation."""
-    from reflex.compiler.plugins.memoize import MemoizeStatefulPlugin
 
     plugins: list[Plugin] = [DefaultPagePlugin()]
     if style is not None:
         plugins.append(ApplyStylePlugin(style=style, theme=theme))
-    plugins.extend((MemoizeStatefulPlugin(), DefaultCollectorPlugin()))
+    if get_config().frontend_target == constants.FrontendTarget.REACT:
+        from reflex.compiler.plugins.memoize import MemoizeStatefulPlugin
+
+        plugins.append(MemoizeStatefulPlugin())
+    plugins.append(DefaultCollectorPlugin())
     return tuple(plugins)
 
 

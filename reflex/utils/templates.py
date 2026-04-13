@@ -22,17 +22,26 @@ class Template:
     code_url: str
 
 
-def create_config(app_name: str):
+def create_config(
+    app_name: str,
+    frontend_target: constants.FrontendTarget | str = constants.FrontendTarget.REACT,
+):
     """Create a new rxconfig file.
 
     Args:
         app_name: The name of the app.
+        frontend_target: The frontend target to persist in the config.
     """
     # Import here to avoid circular imports.
     from reflex.compiler import templates
 
     console.debug(f"Creating {constants.Config.FILE}")
-    constants.Config.FILE.write_text(templates.rxconfig_template(app_name=app_name))
+    constants.Config.FILE.write_text(
+        templates.rxconfig_template(
+            app_name=app_name,
+            frontend_target=frontend_target,
+        )
+    )
 
 
 def initialize_app_directory(
@@ -98,22 +107,31 @@ def initialize_app_directory(
     )
 
 
-def initialize_default_app(app_name: str):
+def initialize_default_app(
+    app_name: str,
+    frontend_target: constants.FrontendTarget | str = constants.FrontendTarget.REACT,
+):
     """Initialize the default app.
 
     Args:
         app_name: The name of the app.
+        frontend_target: The frontend target to persist in the config.
     """
-    create_config(app_name)
+    create_config(app_name, frontend_target=frontend_target)
     initialize_app_directory(app_name)
 
 
-def create_config_init_app_from_remote_template(app_name: str, template_url: str):
+def create_config_init_app_from_remote_template(
+    app_name: str,
+    template_url: str,
+    frontend_target: constants.FrontendTarget | str = constants.FrontendTarget.REACT,
+):
     """Create new rxconfig and initialize app using a remote template.
 
     Args:
         app_name: The name of the app.
         template_url: The path to the template source code as a zip file.
+        frontend_target: The frontend target to persist in the config.
 
     Raises:
         SystemExit: If any download, file operations fail or unexpected zip file format.
@@ -175,7 +193,7 @@ def create_config_init_app_from_remote_template(app_name: str, template_url: str
     # the source code repo name on github.
     template_name = new_config.app_name
 
-    create_config(app_name)
+    create_config(app_name, frontend_target=frontend_target)
     initialize_app_directory(
         app_name,
         template_name=template_name,
@@ -198,7 +216,10 @@ def create_config_init_app_from_remote_template(app_name: str, template_url: str
 
 
 def validate_and_create_app_using_remote_template(
-    app_name: str, template: str, templates: dict[str, Template]
+    app_name: str,
+    template: str,
+    templates: dict[str, Template],
+    frontend_target: constants.FrontendTarget | str = constants.FrontendTarget.REACT,
 ):
     """Validate and create an app using a remote template.
 
@@ -236,7 +257,9 @@ def validate_and_create_app_using_remote_template(
         return
 
     create_config_init_app_from_remote_template(
-        app_name=app_name, template_url=template_url
+        app_name=app_name,
+        template_url=template_url,
+        frontend_target=frontend_target,
     )
 
 
@@ -362,12 +385,17 @@ def prompt_for_template_options(templates: list[Template]) -> str:
     return templates[template_index].name
 
 
-def initialize_app(app_name: str, template: str | None = None) -> str | None:
+def initialize_app(
+    app_name: str,
+    template: str | None = None,
+    frontend_target: constants.FrontendTarget | str = constants.FrontendTarget.REACT,
+) -> str | None:
     """Initialize the app either from a remote template or a blank app. If the config file exists, it is considered as reinit.
 
     Args:
         app_name: The name of the app.
         template: The name of the template to use.
+        frontend_target: The frontend target to persist in the generated config.
 
     Returns:
         The name of the template.
@@ -403,10 +431,13 @@ def initialize_app(app_name: str, template: str | None = None) -> str | None:
     # If the blank template is selected, create a blank app.
     if template == constants.Templates.DEFAULT:
         # Default app creation behavior: a blank app.
-        initialize_default_app(app_name)
+        initialize_default_app(app_name, frontend_target=frontend_target)
     else:
         validate_and_create_app_using_remote_template(
-            app_name=app_name, template=template, templates=templates
+            app_name=app_name,
+            template=template,
+            templates=templates,
+            frontend_target=frontend_target,
         )
 
     telemetry.send("init", template=template)

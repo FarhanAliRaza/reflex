@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 import reflex_base.config
 from pytest_mock import MockerFixture
-from reflex_base.constants import Endpoint, Env
+from reflex_base.constants import Endpoint, Env, FrontendTarget
 from reflex_base.plugins import Plugin
 from reflex_base.plugins.sitemap import SitemapPlugin
 
@@ -96,6 +96,26 @@ def test_update_from_env_path(
     assert os.environ.get("REFLEX_BUN_PATH") == str(tmp_path)
     config = rx.Config(**base_config_values)
     assert config.bun_path == tmp_path
+
+
+def test_update_from_env_frontend_target(
+    base_config_values: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Test that the frontend target can be set from the environment."""
+
+    monkeypatch.setenv("REFLEX_FRONTEND_TARGET", FrontendTarget.SVELTEKIT.value)
+    config = rx.Config(**base_config_values)
+    assert config.frontend_target == FrontendTarget.SVELTEKIT
+
+
+def test_frontend_target_string_is_normalized(
+    base_config_values: dict[str, Any],
+):
+    """Test that string frontend targets from rxconfig.py are normalized."""
+
+    config = rx.Config(**base_config_values, frontend_target="sveltekit")
+    assert config.frontend_target == FrontendTarget.SVELTEKIT
 
 
 def test_update_from_env_cors(
@@ -252,6 +272,14 @@ def test_replace_defaults(
     c._set_persistent(**set_persistent_vars)
     for key, value in exp_config_values.items():
         assert getattr(c, key) == value
+
+
+def test_set_persistent_frontend_target() -> None:
+    """Test that frontend_target can be overridden persistently."""
+
+    config = rx.Config(app_name="a")
+    config._set_persistent(frontend_target=FrontendTarget.SVELTEKIT.value)
+    assert config.frontend_target == FrontendTarget.SVELTEKIT
 
 
 def reflex_dir_constant() -> Path:

@@ -3,6 +3,7 @@
 from .base import (
     APP_HARNESS_FLAG,
     COOKIES,
+    FrontendTarget,
     IS_LINUX,
     IS_MACOS,
     IS_WINDOWS,
@@ -20,6 +21,7 @@ from .base import (
     ReactRouter,
     Reflex,
     ReflexHostingCLI,
+    SvelteKit,
     Templates,
 )
 from .compiler import (
@@ -94,6 +96,7 @@ __all__ = [
     "EventTriggers",
     "Expiration",
     "Ext",
+    "FrontendTarget",
     "GitIgnore",
     "Hooks",
     "Imports",
@@ -115,5 +118,6 @@ __all__ = [
     "RouteVar",
     "SocketEvent",
     "StateManagerMode",
+    "SvelteKit",
     "Templates",
 ]

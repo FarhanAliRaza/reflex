@@ -121,20 +121,30 @@ class _RenderUtils:
         return f'import "{module["lib"]}"'
 
 
-def rxconfig_template(app_name: str):
+def rxconfig_template(
+    app_name: str,
+    frontend_target: constants.FrontendTarget | str = constants.FrontendTarget.REACT,
+):
     """Template for the Reflex config file.
 
     Args:
         app_name: The name of the application.
+        frontend_target: The selected frontend target.
 
     Returns:
         Rendered Reflex config file content as string.
     """
+    frontend_target_line = (
+        f'    frontend_target="{frontend_target.value if isinstance(frontend_target, constants.FrontendTarget) else frontend_target}",\n'
+        if frontend_target != constants.FrontendTarget.REACT
+        and frontend_target != constants.FrontendTarget.REACT.value
+        else ""
+    )
     return f"""import reflex as rx
 
 config = rx.Config(
     app_name="{app_name}",
-    plugins=[
+{frontend_target_line}    plugins=[
         rx.plugins.SitemapPlugin(),
         rx.plugins.TailwindV4Plugin(),
     ]
@@ -719,9 +729,8 @@ def styles_template(stylesheets: list[str]) -> str:
     Returns:
         Rendered styles.css content as string.
     """
-    return "@layer __reflex_base;\n" + "\n".join([
-        f"@import url('{sheet_name}');" for sheet_name in stylesheets
-    ])
+    imports = "\n".join([f"@import url('{sheet_name}');" for sheet_name in stylesheets])
+    return f"{imports}\n@layer __reflex_base;"
 
 
 def _render_hooks(hooks: dict[str, VarData | None], memo: list | None = None) -> str:

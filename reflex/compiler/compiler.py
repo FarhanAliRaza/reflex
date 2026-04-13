@@ -33,6 +33,7 @@ from reflex_components_core.base.fragment import Fragment
 from rich.progress import MofNCompleteColumn, Progress, TimeElapsedColumn
 
 from reflex.compiler import templates, utils
+from reflex.compiler import svelte as svelte_compiler
 from reflex.compiler.plugins import default_page_plugins
 from reflex.experimental.memo import (
     EXPERIMENTAL_MEMOS,
@@ -44,6 +45,12 @@ from reflex.state import BaseState, code_uses_state_contexts
 from reflex.utils import console, frontend_skeleton, path_ops, prerequisites
 from reflex.utils.exec import get_compile_context, is_prod_mode
 from reflex.utils.prerequisites import get_web_dir
+
+
+def _is_sveltekit_target() -> bool:
+    """Whether the configured frontend target is SvelteKit."""
+
+    return get_config().frontend_target == constants.FrontendTarget.SVELTEKIT
 
 
 def _set_progress_total(
@@ -58,6 +65,8 @@ def _set_progress_total(
 def _apply_common_imports(
     imports: dict[str, list[ImportVar]],
 ):
+    if _is_sveltekit_target():
+        return
     imports.setdefault("@emotion/react", []).append(ImportVar("jsx"))
     imports.setdefault("react", []).extend(
         [ImportVar("Fragment"), ImportVar("useEffect")],
@@ -151,8 +160,13 @@ def _compile_contexts(state: type[BaseState] | None, theme: Component | None) ->
     if appearance is None or str(LiteralVar.create(appearance)) == '"inherit"':
         appearance = LiteralVar.create(SYSTEM_COLOR_MODE)
 
+    template = (
+        svelte_compiler.context_template
+        if _is_sveltekit_target()
+        else templates.context_template
+    )
     return (
-        templates.context_template(
+        template(
             initial_state=utils.compile_state(state),
             state_name=state.get_name(),
             client_storage=utils.compile_client_storage(state),
@@ -160,10 +174,30 @@ def _compile_contexts(state: type[BaseState] | None, theme: Component | None) ->
             default_color_mode=str(appearance),
         )
         if state
-        else templates.context_template(
+        else template(
             is_dev_mode=not is_prod_mode(),
             default_color_mode=str(appearance),
         )
+    )
+
+
+def _render_svelte_page(
+    imports: dict[str, list[ImportVar]],
+    dynamic_imports: Iterable[str],
+    custom_codes: Iterable[str],
+    hooks: Any,
+    component: BaseComponent,
+) -> str:
+    """Render a Svelte page from its collected pieces."""
+    imports = svelte_compiler.normalize_imports(imports)
+    return svelte_compiler.page_template(
+        imports=utils.compile_imports(imports),
+        dynamic_imports=sorted(dynamic_imports),
+        custom_codes=custom_codes,
+        hooks=hooks,
+        render=component.render_structured()
+        if isinstance(component, Component)
+        else component.render(),
     )
 
 
@@ -177,6 +211,15 @@ def _compile_page(component: BaseComponent) -> str:
         The compiled component.
     """
     imports = component._get_all_imports()
+    if _is_sveltekit_target():
+        return _render_svelte_page(
+            imports=imports,
+            dynamic_imports=component._get_all_dynamic_imports(),
+            custom_codes=component._get_all_custom_code(),
+            hooks=component._get_all_hooks(),
+            component=component,
+        )
+
     _apply_common_imports(imports)
     imports = utils.compile_imports(imports)
 
@@ -245,6 +288,15 @@ def _validate_stylesheet(stylesheet_full_path: Path, assets_app_path: Path) -> N
 
 
 RADIX_THEMES_STYLESHEET = "@radix-ui/themes/styles.css"
+RADIX_THEMES_TOKENS_STYLESHEET = "@radix-ui/themes/tokens.css"
+
+
+def _get_radix_theme_stylesheets() -> list[str]:
+    """Get the Radix theme stylesheets for the active frontend target."""
+
+    if _is_sveltekit_target():
+        return [RADIX_THEMES_TOKENS_STYLESHEET]
+    return [RADIX_THEMES_STYLESHEET]
 
 
 def _compile_root_stylesheet(stylesheets: list[str], reset_style: bool = True) -> str:
@@ -268,14 +320,12 @@ def _compile_root_stylesheet(stylesheets: list[str], reset_style: bool = True) -
         # Reference the vendored style reset file (automatically copied from .templates/web)
         sheets.append(f"./{ResetStylesheet.FILENAME}")
 
-    sheets.extend(
-        [RADIX_THEMES_STYLESHEET]
-        + [
-            sheet
-            for plugin in get_config().plugins
-            for sheet in plugin.get_stylesheet_paths()
-        ]
-    )
+    sheets.extend(_get_radix_theme_stylesheets())
+    sheets.extend([
+        sheet
+        for plugin in get_config().plugins
+        for sheet in plugin.get_stylesheet_paths()
+    ])
 
     failed_to_import_sass = False
     assets_app_path = Path.cwd() / constants.Dirs.APP_ASSETS
@@ -510,7 +560,11 @@ def compile_contexts(
         The path and code of the compiled context.
     """
     # Get the path for the output file.
-    output_path = utils.get_context_path()
+    output_path = (
+        svelte_compiler.get_context_path()
+        if _is_sveltekit_target()
+        else utils.get_context_path()
+    )
 
     return output_path, _compile_contexts(state, theme)
 
@@ -526,7 +580,11 @@ def compile_page(path: str, component: BaseComponent) -> tuple[str, str]:
         The path and code of the compiled page.
     """
     # Get the path for the output file.
-    output_path = utils.get_page_path(path)
+    output_path = (
+        svelte_compiler.get_page_path(path)
+        if _is_sveltekit_target()
+        else utils.get_page_path(path)
+    )
 
     # Add the style to the component.
     code = _compile_page(component)
@@ -542,13 +600,25 @@ def compile_page_from_context(page_ctx: PageContext) -> tuple[str, str]:
     Returns:
         The path and code of the compiled page.
     """
-    output_path = utils.get_page_path(page_ctx.route)
     imports = {
         lib: list(fields)
         for lib, fields in (
             page_ctx.frontend_imports or page_ctx.merged_imports(collapse=True)
         ).items()
     }
+    if _is_sveltekit_target():
+        return (
+            svelte_compiler.get_page_path(page_ctx.route),
+            _render_svelte_page(
+                imports=imports,
+                dynamic_imports=page_ctx.dynamic_imports,
+                custom_codes=page_ctx.custom_code_dict(),
+                hooks=page_ctx.hooks,
+                component=page_ctx.root_component,
+            ),
+        )
+
+    output_path = utils.get_page_path(page_ctx.route)
     _apply_common_imports(imports)
 
     code = templates.page_template(
@@ -589,6 +659,13 @@ def purge_web_pages_dir():
         return
 
     # Empty out the web pages directory.
+    if _is_sveltekit_target():
+        utils.empty_dir(
+            get_web_dir() / "src" / "routes",
+            keep_files=["+layout.js", "+layout.svelte", "+error.svelte"],
+        )
+        return
+
     utils.empty_dir(
         get_web_dir() / constants.Dirs.PAGES,
         keep_files=["routes.js", "entry.client.js"],
@@ -860,7 +937,10 @@ def compile_app(
     use_rich: bool = True,
 ) -> None:
     """Compile an app using the compiler plugin pipeline."""
-    from reflex_base.utils.exceptions import ReflexRuntimeError
+    from reflex_base.utils.exceptions import (
+        ReflexRuntimeError,
+        UnsupportedFrontendTargetError,
+    )
 
     app._apply_decorated_pages()
     app._pages = {}
@@ -883,6 +963,7 @@ def compile_app(
 
     app.style = evaluate_style_namespaces(app.style)
     config = get_config()
+    is_svelte_target = config.frontend_target == constants.FrontendTarget.SVELTEKIT
 
     if not should_compile and not dry_run:
         with console.timing("Evaluate Pages (Backend)"):
@@ -903,7 +984,7 @@ def compile_app(
         if use_rich
         else console.PoorProgress()
     )
-    fixed_steps = 7
+    fixed_steps = 3 if is_svelte_target else 7
     base_total = (len(app._unevaluated_pages) * 2) + fixed_steps + len(config.plugins)
     progress.start()
     task = progress.add_task("Compiling:", total=base_total)
@@ -969,37 +1050,45 @@ def compile_app(
         raise ReflexRuntimeError(msg)
     progress.advance(task)
 
-    app_wrappers = _resolve_app_wrap_components(app, compile_ctx.app_wrap_components)
-    app_root = app._app_root(app_wrappers)
-    all_imports = utils.merge_imports(all_imports, app_root._get_all_imports())
+    if is_svelte_target:
+        if compile_ctx.auto_memo_components:
+            msg = (
+                "Auto-memoized React components are not supported on the "
+                "SvelteKit frontend target yet."
+            )
+            raise UnsupportedFrontendTargetError(msg)
+    else:
+        app_wrappers = _resolve_app_wrap_components(app, compile_ctx.app_wrap_components)
+        app_root = app._app_root(app_wrappers)
+        all_imports = utils.merge_imports(all_imports, app_root._get_all_imports())
 
-    (
-        memo_components_output,
-        memo_components_result,
-        memo_components_imports,
-    ) = compile_memo_components(
-        dict.fromkeys(CUSTOM_COMPONENTS.values()),
         (
-            *tuple(EXPERIMENTAL_MEMOS.values()),
-            *tuple(compile_ctx.auto_memo_components.values()),
-        ),
-    )
-    compile_results.append((memo_components_output, memo_components_result))
-    all_imports = utils.merge_imports(all_imports, memo_components_imports)
-    progress.advance(task)
-
-    compile_results.append(
-        compile_document_root(
-            app.head_components,
-            html_lang=app.html_lang,
-            html_custom_attrs=(
-                {"suppressHydrationWarning": True, **app.html_custom_attrs}
-                if app.html_custom_attrs
-                else {"suppressHydrationWarning": True}
+            memo_components_output,
+            memo_components_result,
+            memo_components_imports,
+        ) = compile_memo_components(
+            dict.fromkeys(CUSTOM_COMPONENTS.values()),
+            (
+                *tuple(EXPERIMENTAL_MEMOS.values()),
+                *tuple(compile_ctx.auto_memo_components.values()),
             ),
         )
-    )
-    progress.advance(task)
+        compile_results.append((memo_components_output, memo_components_result))
+        all_imports = utils.merge_imports(all_imports, memo_components_imports)
+        progress.advance(task)
+
+        compile_results.append(
+            compile_document_root(
+                app.head_components,
+                html_lang=app.html_lang,
+                html_custom_attrs=(
+                    {"suppressHydrationWarning": True, **app.html_custom_attrs}
+                    if app.html_custom_attrs
+                    else {"suppressHydrationWarning": True}
+                ),
+            )
+        )
+        progress.advance(task)
 
     assets_src = Path.cwd() / constants.Dirs.APP_ASSETS
     if assets_src.is_dir() and not dry_run:
@@ -1044,8 +1133,9 @@ def compile_app(
     compile_results.append(compile_root_stylesheet(app.stylesheets, app.reset_style))
     progress.advance(task)
 
-    compile_results.append(compile_theme(app.style))
-    progress.advance(task)
+    if not is_svelte_target:
+        compile_results.append(compile_theme(app.style))
+        progress.advance(task)
 
     for task_fn, args, kwargs in save_tasks:
         result = task_fn(*args, **kwargs)
@@ -1063,28 +1153,47 @@ def compile_app(
         app.theme.appearance = None  # pyright: ignore[reportAttributeAccessIssue]
     progress.advance(task)
 
-    compile_results.append(compile_app_root(app_root))
-    progress.advance(task)
+    if not is_svelte_target:
+        compile_results.append(compile_app_root(app_root))
+        progress.advance(task)
 
     progress.stop()
 
     if dry_run:
         return
 
+    if is_svelte_target:
+        all_imports = svelte_compiler.normalize_imports(all_imports)
+
     with console.timing("Install Frontend Packages"):
         app._get_frontend_packages(all_imports)
 
-    frontend_skeleton.update_react_router_config(
-        prerender_routes=prerender_routes,
-    )
+    if is_svelte_target:
+        frontend_skeleton.update_sveltekit_layout_config(
+            prerender_routes=prerender_routes,
+        )
+    else:
+        frontend_skeleton.update_react_router_config(
+            prerender_routes=prerender_routes,
+        )
 
     if is_prod_mode():
         purge_web_pages_dir()
     else:
         keep_files = [Path(output_path) for output_path, _ in compile_results]
-        for page_file in Path(
-            prerequisites.get_web_dir() / constants.Dirs.PAGES / constants.Dirs.ROUTES
-        ).rglob("*"):
+        route_root = (
+            prerequisites.get_web_dir() / "src" / "routes"
+            if is_svelte_target
+            else prerequisites.get_web_dir()
+            / constants.Dirs.PAGES
+            / constants.Dirs.ROUTES
+        )
+        if is_svelte_target:
+            keep_files.extend(
+                route_root / filename
+                for filename in ("+layout.js", "+layout.svelte", "+error.svelte")
+            )
+        for page_file in route_root.rglob("*"):
             if page_file.is_file() and page_file not in keep_files:
                 page_file.unlink()
 

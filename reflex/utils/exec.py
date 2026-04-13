@@ -30,6 +30,13 @@ from reflex.utils.prerequisites import get_web_dir
 frontend_process = None
 
 
+def _get_frontend_listening_regex() -> str:
+    """Get the listening regex for the configured frontend target."""
+    if get_config().frontend_target == constants.FrontendTarget.SVELTEKIT:
+        return constants.SvelteKit.FRONTEND_LISTENING_REGEX
+    return constants.ReactRouter.FRONTEND_LISTENING_REGEX
+
+
 def get_package_json_and_hash(package_json_path: Path) -> tuple[PackageJson, str]:
     """Get the content of package.json and its hash.
 
@@ -217,7 +224,7 @@ def run_process_and_launch_url(
                         + format_change("Dev Dependencies", dev_dependencies_change)
                     )
 
-                match = re.search(constants.ReactRouter.FRONTEND_LISTENING_REGEX, line)
+                match = re.search(_get_frontend_listening_regex(), line)
                 if match:
                     if first_run:
                         url = match.group(1)

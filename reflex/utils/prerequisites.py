@@ -544,6 +544,9 @@ def needs_reinit() -> bool:
     if not _is_app_compiled_with_same_reflex_version():
         return True
 
+    if not _is_web_dir_initialized_for_target():
+        return True
+
     if constants.IS_WINDOWS:
         console.warn(
             """Windows Subsystem for Linux (WSL) is recommended for improving initial install times."""
@@ -563,6 +566,27 @@ def _is_app_compiled_with_same_reflex_version() -> bool:
         return False
     app_version = json.loads(json_file.read_text()).get("version")
     return app_version == constants.Reflex.VERSION
+
+
+def _is_web_dir_initialized_for_target() -> bool:
+    """Check whether the generated frontend skeleton matches the current target."""
+
+    web_dir = get_web_dir()
+    config = get_config()
+    if config.frontend_target == constants.FrontendTarget.SVELTEKIT:
+        return (
+            (web_dir / constants.SvelteKit.CONFIG_FILE).exists()
+            and (web_dir / "src" / "routes" / "+layout.svelte").exists()
+            and (web_dir / "src" / "lib" / "reflex" / "generated" / "env.js").exists()
+            and (
+                web_dir / "src" / "lib" / "reflex" / "generated" / "reflex.js"
+            ).exists()
+        )
+
+    return (
+        (web_dir / constants.ReactRouter.CONFIG_FILE).exists()
+        and (web_dir / constants.Dirs.PAGES / constants.PageNames.APP_ROOT).exists()
+    )
 
 
 def ensure_reflex_installation_id() -> int | None:
