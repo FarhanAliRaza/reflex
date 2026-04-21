@@ -155,6 +155,16 @@ def initialize_web_directory():
     # Reuse the hash if one is already created, so we don't over-write it when running reflex init
     project_hash = get_project_hash()
 
+    # For the astro frontend target, skip scaffolding the Vite/React-Router
+    # template entirely. The astro compiler emits its own package.json,
+    # astro.config.mjs, tsconfig.json, and pages. Only the public/ dir and
+    # reflex.json are shared with the default path.
+    if get_config().frontend_target == "astro":
+        path_ops.mkdir(get_web_dir())
+        path_ops.mkdir(get_web_dir() / constants.Dirs.PUBLIC)
+        init_reflex_json(project_hash=project_hash)
+        return
+
     console.debug(f"Copying {constants.Templates.Dirs.WEB_TEMPLATE} to {get_web_dir()}")
     path_ops.copy_tree(constants.Templates.Dirs.WEB_TEMPLATE, str(get_web_dir()))
 
