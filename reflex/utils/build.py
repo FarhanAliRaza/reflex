@@ -293,6 +293,18 @@ def build():
         _SUPPORTED_ENCODINGS[fmt].suffix for fmt in config.frontend_compression_formats
     )
 
+    # Astro emits a fully-baked static site with index.html and 404.html
+    # already at the top of the static dir, so SPA-fallback duplication is a
+    # no-op. But compression still matters: without it, the bundled radix CSS
+    # ships uncompressed and blocks first paint. The astro emitter writes
+    # compress-static.js + helpers into the web dir, so we can invoke them.
+    if config.frontend_target == "astro":
+        _compress_static_output(
+            wdir / constants.Dirs.STATIC,
+            tuple(config.frontend_compression_formats),
+        )
+        return
+
     _duplicate_index_html_to_parent_directory(
         wdir / constants.Dirs.STATIC, sidecar_suffixes
     )

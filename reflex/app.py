@@ -1281,11 +1281,18 @@ class App(MiddlewareMixin, LifespanMixin):
 
         progress.advance(task)
 
-        # Reinitialize vite config in case runtime options have changed.
-        compile_results.append((
-            constants.ReactRouter.VITE_CONFIG_FILE,
-            frontend_skeleton._compile_vite_config(config),
-        ))
+        # For the astro frontend target (MVP), skip all Vite/React-Router
+        # scaffolding: no vite.config, no app root, no document root, no
+        # state context, no stateful_components. The astro emitter produces
+        # a self-contained static project further down.
+        _astro_target = config.frontend_target == "astro"
+
+        if not _astro_target:
+            # Reinitialize vite config in case runtime options have changed.
+            compile_results.append((
+                constants.ReactRouter.VITE_CONFIG_FILE,
+                frontend_skeleton._compile_vite_config(config),
+            ))
         progress.advance(task)
 
         # Track imports found.
@@ -1311,17 +1318,19 @@ class App(MiddlewareMixin, LifespanMixin):
             if component is not None:
                 app_wrappers[key] = component
 
-        # Compile custom components.
-        (
-            memo_components_output,
-            memo_components_result,
-            memo_components_imports,
-        ) = compiler.compile_memo_components(
-            dict.fromkeys(CUSTOM_COMPONENTS.values()),
-            tuple(EXPERIMENTAL_MEMOS.values()),
-        )
-        compile_results.append((memo_components_output, memo_components_result))
-        all_imports.update(memo_components_imports)
+        # Compile custom components. Skipped for astro target: the emitter
+        # inlines per-page components directly and doesn't share a memo file.
+        if not _astro_target:
+            (
+                memo_components_output,
+                memo_components_result,
+                memo_components_imports,
+            ) = compiler.compile_memo_components(
+                dict.fromkeys(CUSTOM_COMPONENTS.values()),
+                tuple(EXPERIMENTAL_MEMOS.values()),
+            )
+            compile_results.append((memo_components_output, memo_components_result))
+            all_imports.update(memo_components_imports)
         progress.advance(task)
 
         with console.timing("Collect all imports and app wraps"):
@@ -1355,22 +1364,24 @@ class App(MiddlewareMixin, LifespanMixin):
                 "subclass of rx.State must be defined in the app."
             )
             raise ReflexRuntimeError(msg)
-        compile_results.append((stateful_components_path, stateful_components_code))
+        if not _astro_target:
+            compile_results.append((stateful_components_path, stateful_components_code))
 
         progress.advance(task)
 
         # Compile the root document before fork.
-        compile_results.append(
-            compiler.compile_document_root(
-                self.head_components,
-                html_lang=self.html_lang,
-                html_custom_attrs=(
-                    {"suppressHydrationWarning": True, **self.html_custom_attrs}
-                    if self.html_custom_attrs
-                    else {"suppressHydrationWarning": True}
-                ),
+        if not _astro_target:
+            compile_results.append(
+                compiler.compile_document_root(
+                    self.head_components,
+                    html_lang=self.html_lang,
+                    html_custom_attrs=(
+                        {"suppressHydrationWarning": True, **self.html_custom_attrs}
+                        if self.html_custom_attrs
+                        else {"suppressHydrationWarning": True}
+                    ),
+                )
             )
-        )
 
         progress.advance(task)
 
@@ -1409,25 +1420,29 @@ class App(MiddlewareMixin, LifespanMixin):
                 result_futures.append(f)
 
             # Compile the pre-compiled pages.
-            for route in self._pages:
-                _submit_work(
-                    ExecutorSafeFunctions.compile_page,
-                    route,
-                )
+            # For astro target, the astro emitter renders pages directly from
+            # self._pages; skip the React-Router per-page emission.
+            if not _astro_target:
+                for route in self._pages:
+                    _submit_work(
+                        ExecutorSafeFunctions.compile_page,
+                        route,
+                    )
 
             # Compile the root stylesheet with base styles. theme_roots lets
             # the compiler ship only the Radix color scales that are actually
             # referenced by Theme components in the tree.
             theme_roots = [self.theme, *self._pages.values()]
-            _submit_work(
-                compiler.compile_root_stylesheet,
-                self.stylesheets,
-                self.reset_style,
-                theme_roots,
-            )
+            if not _astro_target:
+                _submit_work(
+                    compiler.compile_root_stylesheet,
+                    self.stylesheets,
+                    self.reset_style,
+                    theme_roots,
+                )
 
-            # Compile the theme.
-            _submit_work(compile_theme, self.style)
+                # Compile the theme.
+                _submit_work(compile_theme, self.style)
 
             def _submit_work_without_advancing(
                 fn: Callable[P, list[tuple[str, str]] | tuple[str, str] | None],
@@ -1460,64 +1475,92 @@ class App(MiddlewareMixin, LifespanMixin):
 
         progress.advance(task, advance=len(config.plugins))
 
-        app_root = self._app_root(app_wrappers=app_wrappers)
+        if _astro_target:
+            # Astro emitter: produce a self-contained static project.
+            # Reuses self._pages (rendered components) and per-route title/
+            # description from UnevaluatedPage metadata.
+            from reflex.compiler.astro import compile_astro_project
 
-        # Get imports from AppWrap components.
-        all_imports.update(app_root._get_all_imports())
+            page_meta: dict[str, dict[str, str]] = {}
+            for route, page in self._unevaluated_pages.items():
+                meta: dict[str, str] = {}
+                if isinstance(page.title, str):
+                    meta["title"] = page.title
+                if isinstance(page.description, str):
+                    meta["description"] = page.description
+                page_meta[route] = meta
 
-        progress.advance(task)
+            compile_results.extend(
+                compile_astro_project(
+                    pages=self._pages,
+                    page_meta=page_meta,
+                    app_name=config.app_name,
+                    theme_roots=theme_roots,
+                    theme_component=self.theme,
+                )
+            )
+            progress.advance(task, advance=3)
+            progress.stop()
+        else:
+            app_root = self._app_root(app_wrappers=app_wrappers)
 
-        # Compile the contexts.
-        compile_results.append(
-            compiler.compile_contexts(self._state, self.theme),
-        )
-        if self.theme is not None:
-            # Fix #2992 by removing the top-level appearance prop
-            self.theme.appearance = None  # pyright: ignore[reportAttributeAccessIssue]
-        progress.advance(task)
+            # Get imports from AppWrap components.
+            all_imports.update(app_root._get_all_imports())
 
-        # Star imports of large libraries (e.g. @radix-ui/themes) defeat
-        # Rolldown tree-shaking for window.__reflex; pass per-source dicts
-        # so tags from multiple pages union instead of clobbering.
-        window_library_imports = compiler.collect_window_library_imports([
-            *(p._get_all_imports() for p in self._pages.values()),
-            app_root._get_all_imports(),
-        ])
+            progress.advance(task)
 
-        # Compile the app root.
-        compile_results.append(
-            compiler.compile_app(app_root, window_library_imports),
-        )
-        progress.advance(task)
+            # Compile the contexts.
+            compile_results.append(
+                compiler.compile_contexts(self._state, self.theme),
+            )
+            if self.theme is not None:
+                # Fix #2992 by removing the top-level appearance prop
+                self.theme.appearance = None  # pyright: ignore[reportAttributeAccessIssue]
+            progress.advance(task)
 
-        progress.stop()
+            # Star imports of large libraries (e.g. @radix-ui/themes) defeat
+            # Rolldown tree-shaking for window.__reflex; pass per-source dicts
+            # so tags from multiple pages union instead of clobbering.
+            window_library_imports = compiler.collect_window_library_imports([
+                *(p._get_all_imports() for p in self._pages.values()),
+                app_root._get_all_imports(),
+            ])
+
+            # Compile the app root.
+            compile_results.append(
+                compiler.compile_app(app_root, window_library_imports),
+            )
+            progress.advance(task)
+
+            progress.stop()
 
         if dry_run:
             return
 
         # Install frontend packages.
-        with console.timing("Install Frontend Packages"):
-            self._get_frontend_packages(all_imports)
+        if not _astro_target:
+            with console.timing("Install Frontend Packages"):
+                self._get_frontend_packages(all_imports)
 
-        # Setup the react-router.config.js
-        frontend_skeleton.update_react_router_config(
-            prerender_routes=prerender_routes,
-        )
+            # Setup the react-router.config.js
+            frontend_skeleton.update_react_router_config(
+                prerender_routes=prerender_routes,
+            )
 
-        if is_prod_mode():
-            # Empty the .web pages directory.
-            compiler.purge_web_pages_dir()
-        else:
-            # In dev mode, delete removed pages and update existing pages.
-            keep_files = [Path(output_path) for output_path, _ in compile_results]
-            for p in Path(
-                prerequisites.get_web_dir()
-                / constants.Dirs.PAGES
-                / constants.Dirs.ROUTES
-            ).rglob("*"):
-                if p.is_file() and p not in keep_files:
-                    # Remove pages that are no longer in the app.
-                    p.unlink()
+            if is_prod_mode():
+                # Empty the .web pages directory.
+                compiler.purge_web_pages_dir()
+            else:
+                # In dev mode, delete removed pages and update existing pages.
+                keep_files = [Path(output_path) for output_path, _ in compile_results]
+                for p in Path(
+                    prerequisites.get_web_dir()
+                    / constants.Dirs.PAGES
+                    / constants.Dirs.ROUTES
+                ).rglob("*"):
+                    if p.is_file() and p not in keep_files:
+                        # Remove pages that are no longer in the app.
+                        p.unlink()
 
         output_mapping: dict[Path, str] = {}
         for output_path, code in compile_results:
@@ -1557,6 +1600,11 @@ class App(MiddlewareMixin, LifespanMixin):
         with console.timing("Write to Disk"):
             for output_path, code in output_mapping.items():
                 compiler_utils.write_file(output_path, code)
+
+        if _astro_target:
+            from reflex.compiler.astro import install_dependencies
+
+            install_dependencies()
 
     def _write_stateful_pages_marker(self):
         """Write list of routes that create dynamic states for the backend to use later."""

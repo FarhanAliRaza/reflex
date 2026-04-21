@@ -182,6 +182,7 @@ class BaseConfig:
         plugins: List of plugins to use in the app.
         disable_plugins: List of plugin types to disable in the app.
         transport: The transport method for client-server communication.
+        frontend_target: The frontend renderer target. "react" (default) emits a Vite/React-Router SPA. "astro" emits a static Astro project (MVP: supports stateless pages only).
     """
 
     app_name: str
@@ -263,6 +264,8 @@ class BaseConfig:
     disable_plugins: list[type[Plugin]] = dataclasses.field(default_factory=list)
 
     transport: Literal["websocket", "polling"] = "websocket"
+
+    frontend_target: str = "react"
 
     # Whether to skip plugin checks.
     _skip_plugins_checks: bool = dataclasses.field(default=False, repr=False)
