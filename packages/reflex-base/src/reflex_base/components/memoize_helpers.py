@@ -148,6 +148,28 @@ def fix_event_triggers_for_memo(component: Component) -> None:
         component.event_triggers[event_trigger] = memo_trigger
 
 
+def is_snapshot_boundary(component: Component) -> bool:
+    """Whether ``component`` owns its subtree for memoization purposes.
+
+    Snapshot boundaries (``MemoizationLeaf``-style components with
+    ``_memoization_mode.recursive=False``) encapsulate internal machinery as
+    their own structural children. The auto-memoize compiler pass must wrap
+    them whole and not walk or independently memoize that subtree.
+
+    The check is the behavioral flag, not ``isinstance(MemoizationLeaf)``, so
+    components that opt into non-recursive memoization without subclassing
+    ``MemoizationLeaf`` are handled identically.
+
+    Args:
+        component: The component to classify.
+
+    Returns:
+        ``True`` iff descendants of ``component`` must not be independently
+        memoized and the memo wrapper must carry the full subtree snapshot.
+    """
+    return not component._memoization_mode.recursive
+
+
 def invalidate_event_trigger_caches(component: Component) -> None:
     """Drop caches that depend on ``component.event_triggers``.
 
@@ -171,4 +193,5 @@ __all__ = [
     "fix_event_triggers_for_memo",
     "get_memoized_event_triggers",
     "invalidate_event_trigger_caches",
+    "is_snapshot_boundary",
 ]

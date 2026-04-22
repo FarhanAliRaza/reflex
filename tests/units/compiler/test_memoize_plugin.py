@@ -214,6 +214,86 @@ def test_shared_subtree_across_pages_uses_same_tag() -> None:
         assert f"jsx({tag}," in output
 
 
+def test_memoization_leaf_internal_hooks_do_not_leak_into_page() -> None:
+    """Hooks from a ``MemoizationLeaf``'s internal children stay in its memo body.
+
+    ``MemoizationLeaf``-derived components (e.g. ``rx.upload.root``) build
+    internal machinery as their own structural children, attaching stateful
+    hooks via ``special_props``/``VarData``. Those hooks belong to the memo
+    component's function body — not to the page — because the whole point of
+    the leaf is to isolate its subtree from page-level re-renders.
+
+    The test asserts both directions: the hook lines do not appear in the
+    page's collected hooks, *and* they do appear in the compiled memo module
+    (otherwise a regression that drops them entirely would pass the negative
+    check).
+    """
+    from reflex_base.components.component import MemoizationLeaf
+    from reflex_base.event import EventChain
+    from reflex_base.vars.base import Var
+
+    from reflex.compiler.compiler import compile_memo_components
+
+    class StatefulLeaf(MemoizationLeaf):
+        tag = "StatefulLeaf"
+        library = "stateful-leaf-lib"
+
+        @classmethod
+        def create(cls, *children, **props):
+            # Simulate what rx.upload.root does: build an internal child whose
+            # special_props carry stateful hook lines via VarData.
+            internal_hook_var = Var(
+                _js_expr="__internal_leaf_probe()",
+                _var_type=None,
+                _var_data=VarData(
+                    hooks={
+                        "const __internal_leaf_probe = useLeafProbe();": None,
+                        "const on_drop_xyz = useCallback(() => {}, []);": None,
+                    },
+                    state="LeafState",
+                ),
+            )
+            internal_child = Plain.create(*children)
+            internal_child.special_props = [internal_hook_var]
+            return super().create(internal_child, **props)
+
+    stateful_event = Var(_js_expr="evt")._replace(
+        _var_type=EventChain,
+        merge_var_data=VarData(state="LeafState"),
+    )
+    leaf = StatefulLeaf.create()
+    leaf.event_triggers["on_something"] = stateful_event
+
+    ctx, page_ctx = _compile_single_page(lambda: leaf)
+
+    page_hook_lines = list(page_ctx.hooks)
+    leaking_hooks = [
+        hook
+        for hook in page_hook_lines
+        if "useLeafProbe" in hook or "on_drop_xyz" in hook
+    ]
+    assert not leaking_hooks, (
+        f"MemoizationLeaf internal hooks leaked into page: {leaking_hooks!r}"
+    )
+
+    # The hooks must survive somewhere — in the compiled memo module for the
+    # generated leaf wrapper. Compile the auto-memo definitions collected
+    # during the page compile and check that the hook lines are present.
+    assert ctx.auto_memo_components, (
+        "expected an auto-memo wrapper to be generated for the leaf"
+    )
+    _output_path, memo_code, _memo_imports = compile_memo_components(
+        components=(),
+        experimental_memos=tuple(ctx.auto_memo_components.values()),
+    )
+    assert "useLeafProbe" in memo_code, (
+        "leaf's internal probe hook was dropped from the memo module"
+    )
+    assert "on_drop_xyz" in memo_code, (
+        "leaf's internal useCallback hook was dropped from the memo module"
+    )
+
+
 def test_plugin_only_registered_once_in_default_page_plugins() -> None:
     """MemoizeStatefulPlugin appears exactly once in the default plugin pipeline."""
     plugins = default_page_plugins()
