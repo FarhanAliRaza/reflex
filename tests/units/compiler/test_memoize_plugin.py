@@ -9,6 +9,7 @@ from reflex_base.constants.compiler import MemoizationDisposition, MemoizationMo
 from reflex_base.plugins import CompileContext, CompilerHooks, PageContext
 from reflex_base.vars import VarData
 from reflex_base.vars.base import LiteralVar, Var
+from reflex_components_core.base.bare import Bare
 from reflex_components_core.base.fragment import Fragment
 
 from reflex.compiler.plugins import DefaultCollectorPlugin, default_page_plugins
@@ -69,16 +70,22 @@ def test_should_memoize_catches_direct_state_var_in_prop() -> None:
     assert _should_memoize(comp)
 
 
-def test_should_memoize_catches_state_var_in_child_bare() -> None:
+def test_should_not_memoize_state_var_in_child_bare() -> None:
     """A component whose Bare child contains state VarData should memoize."""
     comp = Plain.create(STATE_VAR)
-    assert _should_memoize(comp)
+    assert not _should_memoize(comp)
 
 
 def test_should_not_memoize_plain_component() -> None:
     """A component with no state vars and no event triggers is not memoized."""
     comp = Plain.create(LiteralVar.create("static-content"))
     assert not _should_memoize(comp)
+
+
+def test_should_memoize_state_var_in_child_cond() -> None:
+    """A Bare containing state VarData should memoize."""
+    comp = Bare.create(STATE_VAR)
+    assert _should_memoize(comp)
 
 
 def test_should_not_memoize_when_disposition_never() -> None:
@@ -143,14 +150,16 @@ def test_memoization_leaf_suppresses_descendant_wrapping() -> None:
 
 def test_generated_memo_component_is_not_itself_memoized() -> None:
     """The generated memo component instance itself is skipped by the heuristic."""
-    wrapper_factory, _definition = create_passthrough_component_memo("MyTag")
+    wrapper_factory, _definition = create_passthrough_component_memo(
+        "MyTag", Fragment.create()
+    )
     wrapper = wrapper_factory(Plain.create())
     assert isinstance(wrapper, ExperimentalMemoComponent)
     assert not _should_memoize(wrapper)
 
 
-def test_event_trigger_memoization_emits_usecallback_in_page_hooks() -> None:
-    """Components with event triggers get useCallback wrappers at the page level."""
+def test_event_trigger_memoization_not_emit_usecallback_in_page_hooks() -> None:
+    """Components with event triggers do not get useCallback wrappers at the page level."""
     from reflex_base.event import EventChain
 
     # Construct an event chain referencing state so _get_memoized_event_triggers
@@ -166,15 +175,17 @@ def test_event_trigger_memoization_emits_usecallback_in_page_hooks() -> None:
 
     # Check that a useCallback hook line was added to the page hooks dict.
     hook_lines = list(page_ctx.hooks.keys())
-    assert any(
+    assert not any(
         "useCallback" in hook_line and "on_click_" in hook_line
         for hook_line in hook_lines
-    ), f"Expected on_click useCallback hook in {hook_lines!r}"
+    ), f"Expected no on_click useCallback hook in {hook_lines!r}"
 
 
 def test_generated_memo_component_renders_as_its_exported_tag() -> None:
     """The generated experimental memo component renders as its exported tag."""
-    wrapper_factory, definition = create_passthrough_component_memo("MyWrapper_abc")
+    wrapper_factory, definition = create_passthrough_component_memo(
+        "MyWrapper_abc", Fragment.create()
+    )
     wrapper = wrapper_factory(Plain.create())
     assert isinstance(wrapper, ExperimentalMemoComponent)
     assert wrapper.tag == "MyWrapper_abc"
@@ -208,9 +219,9 @@ def test_plugin_only_registered_once_in_default_page_plugins() -> None:
     plugins = default_page_plugins()
     memoize_plugins = [p for p in plugins if isinstance(p, MemoizeStatefulPlugin)]
     assert len(memoize_plugins) == 1
-    # And it is registered before the DefaultCollectorPlugin.
+    # And it is registered after the DefaultCollectorPlugin.
     collector_index = next(
         i for i, p in enumerate(plugins) if isinstance(p, DefaultCollectorPlugin)
     )
     memoize_index = plugins.index(memoize_plugins[0])
-    assert memoize_index < collector_index
+    assert memoize_index > collector_index

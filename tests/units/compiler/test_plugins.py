@@ -761,8 +761,8 @@ def test_default_page_plugins_are_minimal_and_ordered() -> None:
     assert len(plugins) == 4
     assert isinstance(plugins[0], DefaultPagePlugin)
     assert isinstance(plugins[1], ApplyStylePlugin)
-    assert isinstance(plugins[2], MemoizeStatefulPlugin)
-    assert isinstance(plugins[3], DefaultCollectorPlugin)
+    assert isinstance(plugins[2], DefaultCollectorPlugin)
+    assert isinstance(plugins[3], MemoizeStatefulPlugin)
 
 
 def test_compile_context_compiles_pages_and_matches_legacy_output() -> None:

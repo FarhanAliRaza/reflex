@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
-from functools import cache
 from typing import Any
 
 from reflex_base.components.component import (
@@ -50,7 +49,7 @@ from reflex.experimental.memo import create_passthrough_component_memo
 def _child_var(child: Component) -> Var | Component:
     """Return the core Var of a structural child, for memoize-eligibility checks.
 
-    For special wrappers (``Bare``/``Cond``/``Foreach``/``Match``) we peek at
+    For special wrappers (``Cond``/``Foreach``/``Match``) we peek at
     the contained Var instead of recursing into the wrapper component itself.
 
     Args:
@@ -59,13 +58,10 @@ def _child_var(child: Component) -> Var | Component:
     Returns:
         The contained Var if ``child`` is a special wrapper, else ``child``.
     """
-    from reflex_components_core.base.bare import Bare
     from reflex_components_core.core.cond import Cond
     from reflex_components_core.core.foreach import Foreach
     from reflex_components_core.core.match import Match
 
-    if isinstance(child, Bare):
-        return child.contents
     if isinstance(child, Cond):
         return child.cond
     if isinstance(child, Foreach):
@@ -109,10 +105,14 @@ def _should_memoize(component: Component) -> bool:
     Returns:
         True if the component should be wrapped in a memo definition.
     """
+    from reflex_components_core.base.bare import Bare
     from reflex_components_core.core.foreach import Foreach
 
     if component._memoization_mode.disposition == MemoizationDisposition.NEVER:
         return False
+    if isinstance(component, Bare) and component.contents._get_all_var_data():
+        # A stateful value will be wrapped in a separate component.
+        return True
     if component.tag is None:
         return False
     if component._memoization_mode.disposition == MemoizationDisposition.ALWAYS:
@@ -123,7 +123,7 @@ def _should_memoize(component: Component) -> bool:
         if prop_var._get_all_var_data():
             return True
 
-    # Special-case structural children that are Var wrappers (Bare/Cond/
+    # Special-case structural children that are Var wrappers (Cond/
     # Foreach/Match). Foreach is always memoized because it produces dynamic
     # child trees that React must reconcile by key.
     for child in component.children:
@@ -139,17 +139,24 @@ def _should_memoize(component: Component) -> bool:
     return bool(component.event_triggers)
 
 
-@cache
-def _get_passthrough_memo_component(tag: str) -> tuple[Any, Any]:
+_KNOWN_MEMO_TAGS: dict[str, tuple[Any, Any]] = {}
+
+
+def _get_passthrough_memo_component(tag: str, component: Component) -> tuple[Any, Any]:
     """Return the generated experimental memo wrapper callable and definition.
 
     Args:
         tag: The wrapper's exported component name.
+        component: The component to wrap.
 
     Returns:
         The memo wrapper callable and its definition.
     """
-    return create_passthrough_component_memo(tag)
+    if tag in _KNOWN_MEMO_TAGS:
+        return _KNOWN_MEMO_TAGS[tag]
+    memo_wrapper, memo_definition = create_passthrough_component_memo(tag, component)
+    _KNOWN_MEMO_TAGS[tag] = (memo_wrapper, memo_definition)
+    return memo_wrapper, memo_definition
 
 
 # --------------------------------------------------------------------------- #
@@ -172,8 +179,8 @@ class MemoizeStatefulPlugin(Plugin):
     recursive visit doesn't re-wrap it.
     """
 
-    _compiler_can_replace_enter_component = True
-    _compiler_can_replace_leave_component = False
+    _compiler_can_replace_enter_component = False
+    _compiler_can_replace_leave_component = True
 
     def enter_component(
         self,
@@ -201,14 +208,6 @@ class MemoizeStatefulPlugin(Plugin):
         if not isinstance(comp, Component):
             return None
 
-        # Re-entry guard: when the walker descends into our wrapped child, it
-        # calls enter_component on the original comp again. Clear the marker
-        # and pass through.
-        if getattr(comp, "_memoize_wrapped", False):
-            with contextlib.suppress(AttributeError):
-                del comp._memoize_wrapped  # pyright: ignore[reportAttributeAccessIssue]
-            return None
-
         # Inside a MemoizationLeaf subtree, do not independently wrap
         # descendants (the leaf owns the wrapping decision for its subtree).
         if getattr(page_context, "_memoize_suppress_depth", 0) > 0:
@@ -225,21 +224,6 @@ class MemoizeStatefulPlugin(Plugin):
                 comp._memoize_pushed_suppression = True  # type: ignore[attr-defined]
             return None
 
-        tag = _compute_memo_tag(comp)
-        if tag is None:
-            return None
-
-        # Memoize event triggers, collect useCallback hooks for the page body.
-        memo_trigger_hooks = fix_event_triggers_for_memo(comp)
-        if memo_trigger_hooks:
-            invalidate_event_trigger_caches(comp)
-        for hook in memo_trigger_hooks:
-            page_context.hooks[hook] = None
-
-        compile_context.memoize_wrappers[tag] = None
-        wrapper_factory, definition = _get_passthrough_memo_component(tag)
-        compile_context.auto_memo_components[tag] = definition
-
         # If comp is a MemoizationLeaf that IS being wrapped, suppress
         # descendant wrapping for its subtree.
         if is_memoization_leaf:
@@ -247,12 +231,6 @@ class MemoizeStatefulPlugin(Plugin):
                 getattr(page_context, "_memoize_suppress_depth", 0) + 1
             )
             comp._memoize_pushed_suppression = True  # type: ignore[attr-defined]
-
-        # Mark the original so the recursive re-enter skips wrapping.
-        comp._memoize_wrapped = True  # type: ignore[attr-defined]
-
-        wrapper = wrapper_factory(comp)
-        return (wrapper, (comp,))
 
     def leave_component(
         self,
@@ -276,14 +254,39 @@ class MemoizeStatefulPlugin(Plugin):
         Returns:
             Always ``None``.
         """
-        del children, compile_context, in_prop_tree
+        if in_prop_tree:
+            return None
+        if not isinstance(comp, Component):
+            return None
+
         if getattr(comp, "_memoize_pushed_suppression", False):
             page_context._memoize_suppress_depth = (  # type: ignore[attr-defined]
                 getattr(page_context, "_memoize_suppress_depth", 1) - 1
             )
             with contextlib.suppress(AttributeError):
                 del comp._memoize_pushed_suppression  # pyright: ignore[reportAttributeAccessIssue]
-        return None
+
+        # Inside a MemoizationLeaf subtree, do not independently wrap
+        # descendants (the leaf owns the wrapping decision for its subtree).
+        if getattr(page_context, "_memoize_suppress_depth", 0) > 0:
+            return None
+
+        if not _should_memoize(comp):
+            return None
+
+        tag = _compute_memo_tag(comp)
+        if tag is None:
+            return None
+
+        # Memoize event triggers, collect useCallback hooks for the page body.
+        fix_event_triggers_for_memo(comp)
+        invalidate_event_trigger_caches(comp)
+
+        compile_context.memoize_wrappers[tag] = None
+        wrapper_factory, definition = _get_passthrough_memo_component(tag, comp)
+        compile_context.auto_memo_components[tag] = definition
+
+        return wrapper_factory()
 
 
 __all__ = ["MemoizeStatefulPlugin"]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 from collections.abc import Callable
+from copy import copy
 from functools import cache, update_wrapper
 from typing import Any, get_args, get_origin, get_type_hints
 
@@ -963,9 +964,9 @@ def _create_component_wrapper(
     return _ExperimentalMemoComponentWrapper(definition)
 
 
-@cache
 def create_passthrough_component_memo(
     export_name: str,
+    component: Component,
 ) -> tuple[
     Callable[..., ExperimentalMemoComponent],
     ExperimentalMemoComponentDefinition,
@@ -978,13 +979,16 @@ def create_passthrough_component_memo(
 
     Args:
         export_name: The exported memo component name.
+        component: The component to wrap.
 
     Returns:
         The callable memo wrapper and its component definition.
     """
 
     def passthrough(children: Var[Component]) -> Component:
-        return Bare.create(children)
+        new_component = copy(component)
+        new_component.children = [Bare.create(children)]
+        return new_component
 
     passthrough.__name__ = format.to_snake_case(export_name)
     passthrough.__qualname__ = passthrough.__name__
