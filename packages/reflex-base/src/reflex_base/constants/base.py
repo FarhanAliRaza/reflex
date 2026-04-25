@@ -167,7 +167,7 @@ class ReactRouter(Javascript):
     VITE_CONFIG_FILE = "vite.config.js"
 
     # Regex to check for message displayed when frontend comes up
-    DEV_FRONTEND_LISTENING_REGEX = r"Local:[\s]+"
+    DEV_FRONTEND_LISTENING_REGEX = r"Local(?:\s*:)?[\s]+"
 
     # Regex to pattern the route path in the config file
     # INFO  Accepting connections at http://localhost:3000
@@ -178,6 +178,12 @@ class ReactRouter(Javascript):
     )
 
     SPA_FALLBACK = "__spa-fallback.html"
+
+
+class Astro(Javascript):
+    """Constants related to Astro."""
+
+    CONFIG_FILE = "astro.config.mjs"
 
 
 # Color mode variables

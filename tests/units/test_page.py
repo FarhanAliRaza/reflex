@@ -50,3 +50,15 @@ def test_page_decorator_with_kwargs():
     }
 
     DECORATED_PAGES.clear()
+
+
+def test_page_decorator_with_render_mode():
+    def foo_():
+        return text("foo")
+
+    DECORATED_PAGES.clear()
+    decorated_foo_ = page(render_mode="islands")(foo_)
+    assert decorated_foo_ == foo_
+    page_data = DECORATED_PAGES.get(get_config().app_name, [])[0][1]
+    assert page_data == {"render_mode": "islands"}
+    DECORATED_PAGES.clear()

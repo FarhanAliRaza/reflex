@@ -48,6 +48,11 @@ class PageDefinition(Protocol):
         """Return the component or callable for this page definition."""
         ...
 
+    @property
+    def render_mode(self) -> str:
+        """Return the render mode for this page definition."""
+        ...
+
 
 ComponentAndChildren: TypeAlias = tuple[BaseComponent, tuple[BaseComponent, ...]]
 ComponentReplacement: TypeAlias = BaseComponent | ComponentAndChildren | None
@@ -678,6 +683,7 @@ class PageContext(BaseContext):
     name: str
     route: str
     root_component: BaseComponent
+    render_mode: str = "app"
     imports: list[ParsedImportDict] = dataclasses.field(default_factory=list)
     module_code: dict[str, None] = dataclasses.field(default_factory=dict)
     hooks: dict[str, VarData | None] = dataclasses.field(default_factory=dict)

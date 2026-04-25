@@ -41,6 +41,7 @@ from reflex.compiler.plugins import (
 class FakePage:
     route: str
     component: Callable[[], Component]
+    render_mode: str = "app"
     title: Var | str | None = None
     description: Var | str | None = None
     image: str = ""
@@ -1003,6 +1004,27 @@ def test_default_page_plugin_handles_var_backed_title_like_legacy_compiler() -> 
         None,
     )
     assert page_ctx.root_component.render() == legacy_component.render()
+
+
+def test_default_page_plugin_preserves_page_render_mode() -> None:
+    """Default page plugin should thread page render mode into page context."""
+    page = UnevaluatedPage(
+        component=lambda: Fragment.create(),
+        route="/render-mode",
+        render_mode="islands",
+    )
+    hooks = CompilerHooks(plugins=(DefaultPagePlugin(),))
+    compile_ctx = create_compile_context(hooks)
+
+    with compile_ctx:
+        page_ctx = hooks.eval_page(
+            page.component,
+            page=page,
+            compile_context=compile_ctx,
+        )
+
+    assert page_ctx is not None
+    assert page_ctx.render_mode == "islands"
 
 
 def test_compile_context_rejects_duplicate_routes() -> None:

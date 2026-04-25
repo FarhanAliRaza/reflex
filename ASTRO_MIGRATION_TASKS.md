@@ -50,17 +50,17 @@ Chosen direction:
 
 ## Master Task 1: Generated Frontend Targets
 
-- [ ] Add a frontend target abstraction:
+- [x] Add a frontend target abstraction:
   - `react_router`: current generated target, kept compatible.
   - `astro`: new static-output target.
   - target selection is explicit in config/CLI during migration.
-- [ ] Generate target-specific `package.json` commands and dependencies:
+- [x] Generate target-specific `package.json` commands and dependencies:
   - React Router target keeps current `react-router dev --host` and `react-router build` commands.
   - Astro target uses `astro dev --host` and `astro build`.
   - React Router dependencies remain scoped to the React Router target.
   - Shared generated runtime adds `zustand` for both targets after Phase A.
   - Astro target adds `astro` and `@astrojs/react`.
-- [ ] Generate `astro.config.mjs` for the Astro target while preserving `react-router.config.js` for the React Router target.
+- [x] Generate `astro.config.mjs` for the Astro target while preserving `react-router.config.js` for the React Router target.
   - Set Astro output to static.
   - Do not install or configure SSR adapters.
   - Preserve `frontend_path`/base path behavior.
@@ -88,7 +88,7 @@ Chosen direction:
 
 ## Master Task 2: Astro Page Modes
 
-- [ ] Add `render_mode: Literal["static", "app", "islands"] = "app"` to the `rx.page` decorator in [reflex/page.py](reflex/page.py). Thread it through to the compilation context used by `compile_page` ([packages/reflex-base/src/reflex_base/plugins/compiler.py:276](packages/reflex-base/src/reflex_base/plugins/compiler.py#L276)).
+- [x] Add `render_mode: Literal["static", "app", "islands"] = "app"` to the `rx.page` decorator in [reflex/page.py](reflex/page.py). Thread it through to the compilation context used by `compile_page` ([packages/reflex-base/src/reflex_base/plugins/compiler.py:276](packages/reflex-base/src/reflex_base/plugins/compiler.py#L276)).
 - [ ] Per-mode output shape (Astro target):
   - `static`: emit `.web/src/pages/<route>.astro` with raw HTML for the rendered tree + `<script>` for the inline head theme setter. No React module import. No runtime.
   - `app` (default): emit `.web/src/pages/<route>.astro` containing one React component import rendered with `client:load`. That component is the page-root island and holds the full rendered tree, the Zustand runtime bootstrap, and `initialEvents` with `HYDRATE` + `onLoadInternalEvent()`.
@@ -103,7 +103,7 @@ Chosen direction:
   - `app`: raise `CompileError` or warn-and-strip the wrapper (pick one; current plan leaves the choice open).
   - `islands`: allowed; merges with compiler-auto-placed islands. Options: `hydrate` ∈ `{"load", "idle", "visible"}` or `{"media": str}`; `client_only: bool`.
 - [ ] `static`-mode rejection in the compiler walk: on a `render_mode="static"` page, any node whose tree signals match Path A is a `CompileError`. Error includes file, line, component class, and the offending var/trigger name. Implement as a plugin that runs before `MemoizeStatefulPlugin` on `static` pages.
-- [ ] React Router target behavior: `render_mode` is accepted but only `"app"` is honored. `"static"` and `"islands"` emit a `console.deprecate`-style warning ("Astro-only; compiling as 'app'") and fall through to the existing codegen path.
+- [x] React Router target behavior: `render_mode` is accepted but only `"app"` is honored. `"static"` and `"islands"` emit a `console.deprecate`-style warning ("Astro-only; compiling as 'app'") and fall through to the existing codegen path.
 - [ ] Navigation model (applies to `app` and `islands`):
   - Cross-route `rx.link(...)` compiles to `<a href=...>` (document navigation). No `<Link>` component from a framework router.
   - `rx.redirect(...)` events call `window.location.href = url` for internal routes.
@@ -467,7 +467,7 @@ Chosen direction:
 - [ ] Target selection: add `frontend_target: Literal["react_router", "astro"] = "react_router"` to `rx.Config`. Wire it through `reflex run` / `reflex export` / `reflex init` / `AppHarness` so the same Reflex app can be compiled against either target based on config.
 - [ ] Compile-time defaults for Astro target (no user code changes required to migrate an existing app):
   - `render_mode` on every existing page defaults to `"app"`.
-  - `on_load` + `render_mode` combo: if user picks `static`/`islands` with an `on_load` present, raise `CompileError` at the page-registration site in [reflex/page.py](reflex/page.py) with message `"on_load is only supported in render_mode='app' on the Astro target. Remove the handler or switch the page to app mode."`
+  - ✅ `on_load` + `render_mode` combo: if user picks `static`/`islands` with an `on_load` present, raise `CompileError` at the page-registration site in [reflex/page.py](reflex/page.py) with message `"on_load is only supported in render_mode='app' on the Astro target. Remove the handler or switch the page to app mode."`
   - Custom components with no `requires_hydration` ClassVar used on an `islands` page: emit a single `console.deprecate`-style warning with the class name and suggest `HydratedComponent(Component)` subclassing.
   - `static` pages using state/events: `CompileError` naming offending node (handled by Master Task 7A classifier).
 - [ ] Compatibility shim policy (one table, one version per row):

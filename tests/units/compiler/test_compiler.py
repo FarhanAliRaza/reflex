@@ -6,6 +6,7 @@ import pytest
 from pytest_mock import MockerFixture
 from reflex_base import constants
 from reflex_base.components.dynamic import bundle_library, reset_bundled_libraries
+from reflex_base.config import Config
 from reflex_base.constants.compiler import PageNames
 from reflex_base.utils.imports import ImportVar, ParsedImportDict
 from reflex_base.vars.base import Var
@@ -15,6 +16,36 @@ from reflex_components_core.el.elements.metadata import Link
 
 import reflex as rx
 from reflex.compiler import compiler, utils
+
+
+@pytest.mark.parametrize(
+    ("frontend_target", "expected_keep_files"),
+    [
+        ("react_router", ["routes.js", "entry.client.js"]),
+        ("astro", []),
+    ],
+)
+def test_purge_web_pages_dir_target_specific_keep_files(
+    mocker: MockerFixture,
+    tmp_path: Path,
+    frontend_target: str,
+    expected_keep_files: list[str],
+):
+    """Ensure purge keep-list is target-aware."""
+    empty_dir = mocker.patch("reflex.compiler.compiler.utils.empty_dir")
+    mocker.patch("reflex.compiler.compiler.is_prod_mode", return_value=True)
+    mocker.patch(
+        "reflex.compiler.compiler.get_config",
+        return_value=Config(app_name="test", frontend_target=frontend_target),
+    )
+    mocker.patch("reflex.compiler.compiler.get_web_dir", return_value=tmp_path)
+
+    compiler.purge_web_pages_dir()
+
+    empty_dir.assert_called_once_with(
+        tmp_path / constants.Dirs.PAGES,
+        keep_files=expected_keep_files,
+    )
 
 
 @pytest.mark.parametrize(

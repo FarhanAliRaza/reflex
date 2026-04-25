@@ -104,8 +104,23 @@ class PackageJson(SimpleNamespace):
     class Commands(SimpleNamespace):
         """The commands to define in package.json."""
 
-        DEV = "react-router dev --host"
-        EXPORT = "react-router build"
+        @classproperty
+        @classmethod
+        def DEV(cls) -> str:
+            """Return the frontend dev command for the active target."""
+            del cls
+            return (
+                "astro dev --host"
+                if _get_frontend_target() == "astro"
+                else "react-router dev --host"
+            )
+
+        @classproperty
+        @classmethod
+        def EXPORT(cls) -> str:
+            """Return the frontend export/build command for the active target."""
+            del cls
+            return "astro build" if _get_frontend_target() == "astro" else "react-router build"
 
     PATH = "package.json"
 
@@ -121,11 +136,8 @@ class PackageJson(SimpleNamespace):
         Returns:
             A dictionary of dependencies with their versions.
         """
-        return {
+        dependencies = {
             "json5": "2.2.3",
-            "react-router": cls._react_router_version,
-            "react-router-dom": cls._react_router_version,
-            "@react-router/node": cls._react_router_version,
             "react": cls._react_version,
             "react-helmet": "6.1.0",
             "react-dom": cls._react_version,
@@ -133,18 +145,62 @@ class PackageJson(SimpleNamespace):
             "socket.io-client": "4.8.3",
             "universal-cookie": "7.2.2",
         }
+        if _get_frontend_target() == "astro":
+            dependencies.update(
+                {
+                    "astro": "5.13.8",
+                    "@astrojs/react": "4.4.0",
+                }
+            )
+            return dependencies
 
-    DEV_DEPENDENCIES = {
-        "@emotion/react": "11.14.0",
-        "autoprefixer": "10.4.27",
-        "postcss": "8.5.8",
-        "postcss-import": "16.1.1",
-        "@react-router/dev": _react_router_version,
-        "@react-router/fs-routes": _react_router_version,
-        "vite": "8.0.0",
-    }
+        dependencies.update(
+            {
+                "react-router": cls._react_router_version,
+                "react-router-dom": cls._react_router_version,
+                "@react-router/node": cls._react_router_version,
+            }
+        )
+        return dependencies
+
+    @classproperty
+    @classmethod
+    def DEV_DEPENDENCIES(cls) -> dict[str, str]:
+        """The devDependencies to include in package.json.
+
+        Returns:
+            A dictionary of development dependencies with their versions.
+        """
+        dev_dependencies = {
+            "@emotion/react": "11.14.0",
+            "autoprefixer": "10.4.27",
+            "postcss": "8.5.8",
+            "postcss-import": "16.1.1",
+            "vite": "8.0.0",
+        }
+        if _get_frontend_target() == "astro":
+            return dev_dependencies
+
+        dev_dependencies.update(
+            {
+                "@react-router/dev": cls._react_router_version,
+                "@react-router/fs-routes": cls._react_router_version,
+            }
+        )
+        return dev_dependencies
     OVERRIDES = {
         # This should always match the `react` version in DEPENDENCIES for recharts compatibility.
         "react-is": _react_version,
         "cookie": "1.1.1",
     }
+
+
+def _get_frontend_target() -> str:
+    """Return the configured frontend target with a safe default.
+
+    Returns:
+        The configured frontend target.
+    """
+    from reflex_base.config import get_config
+
+    return getattr(get_config(), "frontend_target", "react_router")

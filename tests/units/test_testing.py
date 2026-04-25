@@ -1,11 +1,13 @@
 """Unit tests for the included testing tools."""
 
+import re
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 import pytest
 import reflex_base.config
+from reflex_base import constants as base_constants
 from reflex_base.components.component import CUSTOM_COMPONENTS
 from reflex_base.constants import IS_WINDOWS
 
@@ -14,6 +16,27 @@ import reflex.testing as reflex_testing
 import reflex.utils.prerequisites
 from reflex.experimental.memo import EXPERIMENTAL_MEMOS
 from reflex.testing import AppHarness
+
+
+@pytest.mark.parametrize(
+    ("line", "expected_url"),
+    [
+        ("Local:   http://localhost:3000/", "http://localhost:3000/"),
+        ("➜  Local    http://localhost:4321/", "http://localhost:4321/"),
+        (
+            "INFO  Accepting connections at http://localhost:3000",
+            "http://localhost:3000",
+        ),
+    ],
+)
+def test_frontend_listening_regex_matches_supported_dev_servers(
+    line: str, expected_url: str
+):
+    """Frontend listening regex should parse React Router and Astro output lines."""
+    match = re.search(base_constants.ReactRouter.FRONTEND_LISTENING_REGEX, line)
+
+    assert match is not None
+    assert match.group(1) == expected_url
 
 
 @pytest.mark.skip("Slow test that makes network requests.")

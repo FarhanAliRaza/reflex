@@ -670,10 +670,14 @@ def purge_web_pages_dir():
         # Skip purging the web directory in dev mode if REFLEX_PERSIST_WEB_DIR is set.
         return
 
+    keep_files: list[str] = []
+    if get_config().frontend_target != "astro":
+        keep_files = ["routes.js", "entry.client.js"]
+
     # Empty out the web pages directory.
     utils.empty_dir(
         get_web_dir() / constants.Dirs.PAGES,
-        keep_files=["routes.js", "entry.client.js"],
+        keep_files=keep_files,
     )
 
 
@@ -851,6 +855,14 @@ def compile_unevaluated_page(
     Raises:
         Exception: If an error occurs while evaluating the page.
     """
+    if page.render_mode != "app":
+        console.deprecate(
+            feature_name=f"rx.page(render_mode={page.render_mode!r})",
+            reason="Astro-only; compiling as 'app'.",
+            deprecation_version="0.9.0",
+            removal_version="1.0",
+        )
+
     try:
         # Generate the component if it is a callable.
         component = into_component(page.component)
@@ -1070,11 +1082,17 @@ def compile_app(
         if page_ctx.output_path is not None and page_ctx.output_code is not None
     ]
 
-    # Reinitialize vite config in case runtime options have changed.
-    compile_results.append((
-        constants.ReactRouter.VITE_CONFIG_FILE,
-        frontend_skeleton._compile_vite_config(config),
-    ))
+    if config.frontend_target == "astro":
+        compile_results.append((
+            constants.Astro.CONFIG_FILE,
+            frontend_skeleton._compile_astro_config(config),
+        ))
+    else:
+        # Reinitialize vite config in case runtime options have changed.
+        compile_results.append((
+            constants.ReactRouter.VITE_CONFIG_FILE,
+            frontend_skeleton._compile_vite_config(config),
+        ))
 
     all_imports = compile_ctx.all_imports
 
@@ -1197,9 +1215,12 @@ def compile_app(
     with console.timing("Install Frontend Packages"):
         app._get_frontend_packages(all_imports)
 
-    frontend_skeleton.update_react_router_config(
-        prerender_routes=prerender_routes,
-    )
+    if config.frontend_target == "astro":
+        frontend_skeleton.initialize_astro_config()
+    else:
+        frontend_skeleton.update_react_router_config(
+            prerender_routes=prerender_routes,
+        )
 
     if is_prod_mode():
         purge_web_pages_dir()
