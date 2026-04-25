@@ -154,6 +154,7 @@ class BaseConfig:
         loglevel: The log level to use.
         frontend_port: The port to run the frontend on. NOTE: When running in dev mode, the next available port will be used if this is taken.
         frontend_path: The path to run the frontend on. For example, "/app" will run the frontend on http://localhost:3000/app
+        frontend_target: Generated frontend target. ``"react_router"`` keeps current behavior, ``"astro"`` enables Astro-based frontend generation.
         backend_port: The port to run the backend on. NOTE: When running in dev mode, the next available port will be used if this is taken.
         backend_path: The path prefix for backend routes. For example, "/api" mounts the event websocket, /ping, /_upload, /_health, and /_all_routes under /api, and is automatically included in URLs baked into the frontend. Changing this requires a full `reflex run` restart — routes are registered at startup.
         api_url: The backend url the frontend will connect to. This must be updated if the backend is hosted elsewhere, or in production.
@@ -192,6 +193,8 @@ class BaseConfig:
     frontend_port: int | None = None
 
     frontend_path: str = ""
+
+    frontend_target: Literal["react_router", "astro"] = "react_router"
 
     backend_port: int | None = None
 

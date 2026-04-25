@@ -1,3 +1,4 @@
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -10,6 +11,7 @@ from reflex_base.utils.decorator import cached_procedure
 from reflex.reflex import cli
 from reflex.testing import chdir
 from reflex.utils.frontend_skeleton import (
+    _compile_package_json,
     _compile_vite_config,
     _update_react_router_config,
 )
@@ -88,6 +90,40 @@ def test_update_react_router_config(config, export, expected_output):
 def test_initialise_vite_config(config, expected_output):
     output = _compile_vite_config(config)
     assert expected_output in output
+
+
+@pytest.mark.parametrize(
+    ("frontend_target", "expected_dev_script", "expected_export_script"),
+    [
+        ("react_router", "react-router dev --host", "react-router build"),
+        ("astro", "astro dev --host", "astro build"),
+    ],
+)
+def test_compile_package_json_target_specific_scripts_and_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    frontend_target: str,
+    expected_dev_script: str,
+    expected_export_script: str,
+):
+    config = Config(app_name="test", frontend_target=frontend_target)
+    monkeypatch.setattr("reflex_base.config.get_config", lambda reload=False: config)
+    package_json = json.loads(_compile_package_json())
+
+    assert package_json["scripts"]["dev"] == expected_dev_script
+    assert package_json["scripts"]["export"] == expected_export_script
+
+    dependencies = package_json["dependencies"]
+    dev_dependencies = package_json["devDependencies"]
+
+    if frontend_target == "astro":
+        assert "astro" in dependencies
+        assert "@astrojs/react" in dependencies
+        assert "react-router" not in dependencies
+        assert "@react-router/dev" not in dev_dependencies
+    else:
+        assert "react-router" in dependencies
+        assert "@react-router/dev" in dev_dependencies
+        assert "astro" not in dependencies
 
 
 def test_cached_procedure():
