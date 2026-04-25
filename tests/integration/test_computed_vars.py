@@ -61,7 +61,9 @@ def ComputedVars():
         def depends_on_count3(self) -> int:
             return self.count
 
-        # special floats should be properly decoded on the frontend
+        # Compatibility contract for non-finite floats over state sync:
+        # NaN should remain NaN on the frontend (not null/empty), and
+        # +/-inf should render as Infinity/-Infinity.
         @rx.var(cache=True, initial_value=[])
         def special_floats(self) -> list[float]:
             return [42.9, float("nan"), float("inf"), float("-inf")]
@@ -232,6 +234,8 @@ async def test_computed_vars(
 
     special_floats = driver.find_element(By.ID, "special_floats")
     assert special_floats
+    # Keep this assertion explicit: parser fallback changes must not alter
+    # the user-visible non-finite float rendering contract.
     assert special_floats.text == "42.9, NaN, Infinity, -Infinity"
 
     increment = driver.find_element(By.ID, "increment")
