@@ -170,11 +170,15 @@ def initialize_web_directory():
     console.debug("Initializing the public directory.")
     path_ops.mkdir(get_web_dir() / constants.Dirs.PUBLIC)
 
-    console.debug("Initializing the react-router.config.js file.")
-    update_react_router_config()
+    if get_config().frontend_target == "astro":
+        console.debug("Initializing the astro.config.mjs file.")
+        initialize_astro_config()
+    else:
+        console.debug("Initializing the react-router.config.js file.")
+        update_react_router_config()
 
-    console.debug("Initializing the vite.config.js file.")
-    initialize_vite_config()
+        console.debug("Initializing the vite.config.js file.")
+        initialize_vite_config()
 
     console.debug("Initializing the reflex.json file.")
     # Initialize the reflex json file.
@@ -254,6 +258,42 @@ def initialize_vite_config():
     """Render and write in .web the vite.config.js file using Reflex config."""
     vite_config_file_path = get_web_dir() / constants.ReactRouter.VITE_CONFIG_FILE
     vite_config_file_path.write_text(_compile_vite_config(get_config()))
+
+
+def _compile_astro_config(config: Config):
+    base = config.prepend_frontend_path("/")
+    frontend_port = (
+        config.frontend_port if config.frontend_port is not None else constants.DefaultPorts.FRONTEND_PORT
+    )
+    return f"""import {{ defineConfig }} from "astro/config";
+import react from "@astrojs/react";
+import {{ fileURLToPath, URL }} from "url";
+
+export default defineConfig({{
+  output: "static",
+  base: "{base}",
+  integrations: [react()],
+  server: {{
+    host: true,
+    port: {frontend_port},
+  }},
+  vite: {{
+    envPrefix: ["PUBLIC_", "VITE_"],
+    resolve: {{
+      alias: {{
+        "$": fileURLToPath(new URL("./src", import.meta.url)),
+        "@": fileURLToPath(new URL(".", import.meta.url)),
+      }},
+    }},
+  }},
+}});
+"""
+
+
+def initialize_astro_config():
+    """Render and write in .web the astro.config.mjs file using Reflex config."""
+    astro_config_file_path = get_web_dir() / constants.Astro.CONFIG_FILE
+    astro_config_file_path.write_text(_compile_astro_config(get_config()))
 
 
 def initialize_bun_config():

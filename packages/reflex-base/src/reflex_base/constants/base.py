@@ -180,6 +180,12 @@ class ReactRouter(Javascript):
     SPA_FALLBACK = "__spa-fallback.html"
 
 
+class Astro(Javascript):
+    """Constants related to Astro."""
+
+    CONFIG_FILE = "astro.config.mjs"
+
+
 # Color mode variables
 class ColorMode(SimpleNamespace):
     """Constants related to ColorMode."""

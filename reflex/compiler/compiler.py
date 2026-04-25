@@ -1078,11 +1078,17 @@ def compile_app(
         if page_ctx.output_path is not None and page_ctx.output_code is not None
     ]
 
-    # Reinitialize vite config in case runtime options have changed.
-    compile_results.append((
-        constants.ReactRouter.VITE_CONFIG_FILE,
-        frontend_skeleton._compile_vite_config(config),
-    ))
+    if config.frontend_target == "astro":
+        compile_results.append((
+            constants.Astro.CONFIG_FILE,
+            frontend_skeleton._compile_astro_config(config),
+        ))
+    else:
+        # Reinitialize vite config in case runtime options have changed.
+        compile_results.append((
+            constants.ReactRouter.VITE_CONFIG_FILE,
+            frontend_skeleton._compile_vite_config(config),
+        ))
 
     all_imports = compile_ctx.all_imports
 
@@ -1205,9 +1211,12 @@ def compile_app(
     with console.timing("Install Frontend Packages"):
         app._get_frontend_packages(all_imports)
 
-    frontend_skeleton.update_react_router_config(
-        prerender_routes=prerender_routes,
-    )
+    if config.frontend_target == "astro":
+        frontend_skeleton.initialize_astro_config()
+    else:
+        frontend_skeleton.update_react_router_config(
+            prerender_routes=prerender_routes,
+        )
 
     if is_prod_mode():
         purge_web_pages_dir()

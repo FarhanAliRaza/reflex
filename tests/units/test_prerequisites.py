@@ -11,6 +11,7 @@ from reflex_base.utils.decorator import cached_procedure
 from reflex.reflex import cli
 from reflex.testing import chdir
 from reflex.utils.frontend_skeleton import (
+    _compile_astro_config,
     _compile_package_json,
     _compile_vite_config,
     _update_react_router_config,
@@ -90,6 +91,24 @@ def test_update_react_router_config(config, export, expected_output):
 def test_initialise_vite_config(config, expected_output):
     output = _compile_vite_config(config)
     assert expected_output in output
+
+
+def test_compile_astro_config():
+    config = Config(
+        app_name="test",
+        frontend_target="astro",
+        frontend_path="/docs",
+        frontend_port=4321,
+    )
+    output = _compile_astro_config(config)
+
+    assert 'output: "static"' in output
+    assert 'base: "/docs/"' in output
+    assert "integrations: [react()]" in output
+    assert 'envPrefix: ["PUBLIC_", "VITE_"]' in output
+    assert "port: 4321" in output
+    assert '"$": fileURLToPath(new URL("./src", import.meta.url))' in output
+    assert '"@": fileURLToPath(new URL(".", import.meta.url))' in output
 
 
 @pytest.mark.parametrize(
