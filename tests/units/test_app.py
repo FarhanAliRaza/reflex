@@ -302,6 +302,41 @@ def test_add_page_set_route_nested(app: App, index_page: ComponentCallable):
     assert app._unevaluated_pages.keys() == {route}
 
 
+def test_add_page_render_mode(app: App, index_page: ComponentCallable):
+    """Test adding a page with an explicit render mode."""
+    app.add_page(index_page, route="/test", render_mode="islands")
+    assert app._unevaluated_pages["test"].render_mode == "islands"
+
+
+def test_add_page_invalid_render_mode(app: App, index_page: ComponentCallable):
+    """Test adding a page with an invalid render mode raises."""
+    with pytest.raises(exceptions.PageValueError, match="Invalid render mode"):
+        app.add_page(index_page, route="/test", render_mode="invalid")
+
+
+def test_compile_page_warns_for_static_render_mode(
+    app: App, index_page: ComponentCallable, mocker: MockerFixture
+):
+    """Compiling static render mode warns that it is Astro-only for now."""
+    mock_deprecate = mocker.patch("reflex.compiler.compiler.console.deprecate")
+    app.add_page(index_page, route="/test", render_mode="static")
+    app._compile_page("test")
+
+    mock_deprecate.assert_called_once()
+    assert "Astro-only; compiling as 'app'" in mock_deprecate.call_args.kwargs["reason"]
+
+
+def test_compile_page_app_render_mode_does_not_warn(
+    app: App, index_page: ComponentCallable, mocker: MockerFixture
+):
+    """Compiling app render mode should not emit Astro-only warning."""
+    mock_deprecate = mocker.patch("reflex.compiler.compiler.console.deprecate")
+    app.add_page(index_page, route="/test", render_mode="app")
+    app._compile_page("test")
+
+    mock_deprecate.assert_not_called()
+
+
 def test_add_page_invalid_api_route(app: App, index_page: ComponentCallable):
     """Test adding a page with an invalid route to an app.
 

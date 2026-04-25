@@ -851,6 +851,14 @@ def compile_unevaluated_page(
     Raises:
         Exception: If an error occurs while evaluating the page.
     """
+    if page.render_mode != "app":
+        console.deprecate(
+            feature_name=f"rx.page(render_mode={page.render_mode!r})",
+            reason="Astro-only; compiling as 'app'.",
+            deprecation_version="0.9.0",
+            removal_version="1.0",
+        )
+
     try:
         # Generate the component if it is a callable.
         component = into_component(page.component)

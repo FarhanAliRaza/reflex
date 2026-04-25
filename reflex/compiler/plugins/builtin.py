@@ -64,6 +64,7 @@ class DefaultPagePlugin(Plugin):
             name=getattr(page_fn, "__name__", page.route),
             route=page.route,
             root_component=component,
+            render_mode=getattr(page, "render_mode", "app"),
         )
 
 

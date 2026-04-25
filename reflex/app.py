@@ -24,7 +24,7 @@ from collections.abc import (
 )
 from contextvars import Token
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from reflex_base import constants
 from reflex_base.components.component import Component, ComponentStyle
@@ -236,6 +236,7 @@ class UnevaluatedPage:
     description: Var | str | None = None
     image: str = ""
     on_load: EventType[()] | None = None
+    render_mode: Literal["static", "app", "islands"] = "app"
     meta: Sequence[Mapping[str, Any] | Component] = ()
     context: Mapping[str, Any] = dataclasses.field(default_factory=dict)
 
@@ -255,6 +256,9 @@ class UnevaluatedPage:
             if self.description is not None
             else other.description,
             on_load=self.on_load if self.on_load is not None else other.on_load,
+            render_mode=self.render_mode
+            if self.render_mode != "app"
+            else other.render_mode,
             context=self.context if self.context is not None else other.context,
         )
 
@@ -815,6 +819,7 @@ class App(MiddlewareMixin, LifespanMixin):
         description: str | Var | None = None,
         image: str = constants.DefaultPage.IMAGE,
         on_load: EventType[()] | None = None,
+        render_mode: Literal["static", "app", "islands"] = "app",
         meta: Sequence[Mapping[str, Any] | Component] = constants.DefaultPage.META_LIST,
         context: dict[str, Any] | None = None,
     ):
@@ -830,6 +835,7 @@ class App(MiddlewareMixin, LifespanMixin):
             description: The description of the page.
             image: The image to display on the page.
             on_load: The event handler(s) that will be called each time the page load.
+            render_mode: The page render mode for frontend compilation.
             meta: The metadata of the page.
             context: Values passed to page for custom page-specific logic.
 
@@ -863,6 +869,12 @@ class App(MiddlewareMixin, LifespanMixin):
 
         # Check if the route given is valid
         verify_route_validity(route)
+        if render_mode not in {"static", "app", "islands"}:
+            msg = (
+                f"Invalid render mode {render_mode!r}. "
+                "Expected one of: 'static', 'app', 'islands'."
+            )
+            raise exceptions.PageValueError(msg)
 
         unevaluated_page = UnevaluatedPage(
             component=component,
@@ -871,6 +883,7 @@ class App(MiddlewareMixin, LifespanMixin):
             description=description,
             image=image,
             on_load=on_load,
+            render_mode=render_mode,
             meta=meta,
             context=context or {},
         )
