@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from pytest_mock import MockerFixture
 from reflex_base.components.component import Component
+from reflex_base.config import Config
 from reflex_base.constants.state import FIELD_MARKER
 from reflex_base.event import Event
 from reflex_base.event.context import EventContext
@@ -335,6 +336,41 @@ def test_compile_page_app_render_mode_does_not_warn(
     app._compile_page("test")
 
     mock_deprecate.assert_not_called()
+
+
+def test_add_page_on_load_rejected_for_non_app_mode_on_astro_target(
+    app: App, index_page: ComponentCallable, mocker: MockerFixture
+):
+    """Astro target should reject on_load for static/islands pages."""
+
+    def load():
+        return []
+
+    mocker.patch(
+        "reflex.app.get_config",
+        return_value=Config(app_name="test", frontend_target="astro"),
+    )
+    with pytest.raises(
+        exceptions.PageValueError,
+        match="on_load is only supported in render_mode='app' on the Astro target",
+    ):
+        app.add_page(index_page, route="/test", render_mode="static", on_load=load)
+
+
+def test_add_page_on_load_allowed_for_app_mode_on_astro_target(
+    app: App, index_page: ComponentCallable, mocker: MockerFixture
+):
+    """Astro target allows on_load handlers only on app mode pages."""
+
+    def load():
+        return []
+
+    mocker.patch(
+        "reflex.app.get_config",
+        return_value=Config(app_name="test", frontend_target="astro"),
+    )
+    app.add_page(index_page, route="/test", render_mode="app", on_load=load)
+    assert app._unevaluated_pages["test"].on_load == load
 
 
 def test_add_page_invalid_api_route(app: App, index_page: ComponentCallable):

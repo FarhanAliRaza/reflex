@@ -875,6 +875,16 @@ class App(MiddlewareMixin, LifespanMixin):
                 "Expected one of: 'static', 'app', 'islands'."
             )
             raise exceptions.PageValueError(msg)
+        if (
+            get_config().frontend_target == "astro"
+            and on_load is not None
+            and render_mode != "app"
+        ):
+            msg = (
+                "on_load is only supported in render_mode='app' on the Astro target. "
+                "Remove the handler or switch the page to app mode."
+            )
+            raise exceptions.PageValueError(msg)
 
         unevaluated_page = UnevaluatedPage(
             component=component,
