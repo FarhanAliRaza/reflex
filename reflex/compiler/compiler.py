@@ -670,10 +670,14 @@ def purge_web_pages_dir():
         # Skip purging the web directory in dev mode if REFLEX_PERSIST_WEB_DIR is set.
         return
 
+    keep_files: list[str] = []
+    if get_config().frontend_target != "astro":
+        keep_files = ["routes.js", "entry.client.js"]
+
     # Empty out the web pages directory.
     utils.empty_dir(
         get_web_dir() / constants.Dirs.PAGES,
-        keep_files=["routes.js", "entry.client.js"],
+        keep_files=keep_files,
     )
 
 
