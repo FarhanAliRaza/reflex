@@ -957,6 +957,100 @@ def _resolve_radix_themes_plugin(
     return plugin_chain, radix_plugin
 
 
+def _compile_astro_artifacts(
+    app: App,
+    config: Any,
+    compile_ctx: CompileContext,
+) -> list[tuple[str, str]]:
+    """Generate Astro target artifacts to write under ``.web/``.
+
+    Runs at the tail of :func:`compile_app` when ``config.frontend_target ==
+    "astro"``. Output paths are returned relative to the web dir; the existing
+    output writer resolves them against ``.web/``.
+
+    The set is intentionally additive on top of the React Router target's
+    output during the migration window: the Astro pages reference back to the
+    existing Reflex page modules so feature parity is verified end-to-end
+    before the React Router output is removed.
+
+    Args:
+        app: The Reflex App instance being compiled.
+        config: The active ``rx.Config`` (used for ``frontend_path`` /
+            ``deploy_url``).
+        compile_ctx: The compiler run context that owns the per-page contexts.
+
+    Returns:
+        A list of ``(path, contents)`` tuples — one per Astro artifact.
+    """
+    from reflex_base.compiler.astro import (
+        AstroEmitterInput,
+        astro_island_module_path,
+        emit_astro_artifacts,
+    )
+    from reflex_base.compiler.static_mode import reject_static_mode_violations
+
+    page_specs: list[AstroEmitterInput] = []
+    for route, page_ctx in compile_ctx.compiled_pages.items():
+        unevaluated = app._unevaluated_pages.get(route)
+        render_mode = (
+            unevaluated.render_mode
+            if unevaluated is not None and unevaluated.render_mode is not None
+            else "app"
+        )
+        if render_mode == "static":
+            reject_static_mode_violations(route=route, root=page_ctx.root_component)
+        title_value = (
+            unevaluated.title
+            if unevaluated is not None and isinstance(unevaluated.title, str)
+            else route
+        )
+        # Astro page imports the per-route PageRoot island, which itself
+        # re-exports the existing Reflex page module. Compute a relative
+        # path from the .astro page back to the island module:
+        # e.g. src/pages/foo/bar.astro -> ../../reflex/islands/foo/bar/PageRoot.tsx
+        island_path = astro_island_module_path(route, "PageRoot")
+        astro_page_depth = len(_astro_route_segments(route)) + 1
+        rel_to_src = "../" * astro_page_depth
+        page_module_import = (
+            rel_to_src + island_path[len("src/") :]
+            if island_path.startswith("src/")
+            else island_path
+        )
+        page_specs.append(
+            AstroEmitterInput(
+                route=route,
+                title=title_value,
+                render_mode=render_mode,
+                page_module_import=page_module_import if render_mode == "app" else None,
+            )
+        )
+
+    artifacts = emit_astro_artifacts(
+        page_specs,
+        site=config.deploy_url or None,
+        base=config.frontend_path or "",
+        host=config.backend_host or "0.0.0.0",
+        port=config.frontend_port,
+    )
+
+    # For each app-mode page, also emit the page-root island module that
+    # re-exports the React Router target's Reflex page component.
+    return [(a.path, a.contents) for a in artifacts]
+
+
+def _astro_route_segments(route: str) -> list[str]:
+    """Return the non-empty path segments of a Reflex route.
+
+    Args:
+        route: A Reflex route starting with "/".
+
+    Returns:
+        A list of segments (e.g. ``"/foo/bar"`` -> ``["foo", "bar"]``).
+        ``"/"`` returns ``[]``.
+    """
+    return [seg for seg in route.split("/") if seg]
+
+
 def compile_app(
     app: App,
     *,
@@ -1188,6 +1282,9 @@ def compile_app(
 
     compile_results.append(compile_app_root(app_root))
     progress.advance(task)
+
+    if config.frontend_target == "astro":
+        compile_results.extend(_compile_astro_artifacts(app, config, compile_ctx))
 
     progress.stop()
 

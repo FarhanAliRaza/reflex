@@ -23,30 +23,28 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # the "four React-Router-hardcoded surfaces" enumerated in
 # ASTRO_MIGRATION_TASKS.md (Master Task 1) plus the React-Router-only generated
 # template files under .templates/web/app/.
-ALLOW_LIST: frozenset[str] = frozenset(
-    {
-        # Generated React Router target template — replaced by an Astro
-        # template on the Astro target.
-        "packages/reflex-base/src/reflex_base/.templates/web/utils/state.js",
-        # React Router target client entry. Not emitted on the Astro target.
-        "packages/reflex-base/src/reflex_base/.templates/web/app/entry.client.js",
-        # React Router target routes manifest. Not emitted on the Astro target.
-        "packages/reflex-base/src/reflex_base/.templates/web/app/routes.js",
-        # Root template emits Outlet for React Router; Astro emits a different
-        # root template entirely.
-        "packages/reflex-base/src/reflex_base/compiler/templates.py",
-        # Target-aware command/dependency table (this is exactly the place
-        # React Router constants are supposed to live).
-        "packages/reflex-base/src/reflex_base/constants/installer.py",
-        # Target-aware constants module (CONFIG_FILE etc. for each target).
-        "packages/reflex-base/src/reflex_base/constants/base.py",
-        # The Reflex Plugin shipped with the project that targets React
-        # Router specifically.
-        "packages/reflex-base/src/reflex_base/plugins/sitemap.py",
-        # The CI-check script itself.
-        "scripts/check_react_router_isolation.py",
-    }
-)
+ALLOW_LIST: frozenset[str] = frozenset({
+    # Generated React Router target template — replaced by an Astro
+    # template on the Astro target.
+    "packages/reflex-base/src/reflex_base/.templates/web/utils/state.js",
+    # React Router target client entry. Not emitted on the Astro target.
+    "packages/reflex-base/src/reflex_base/.templates/web/app/entry.client.js",
+    # React Router target routes manifest. Not emitted on the Astro target.
+    "packages/reflex-base/src/reflex_base/.templates/web/app/routes.js",
+    # Root template emits Outlet for React Router; Astro emits a different
+    # root template entirely.
+    "packages/reflex-base/src/reflex_base/compiler/templates.py",
+    # Target-aware command/dependency table (this is exactly the place
+    # React Router constants are supposed to live).
+    "packages/reflex-base/src/reflex_base/constants/installer.py",
+    # Target-aware constants module (CONFIG_FILE etc. for each target).
+    "packages/reflex-base/src/reflex_base/constants/base.py",
+    # The Reflex Plugin shipped with the project that targets React
+    # Router specifically.
+    "packages/reflex-base/src/reflex_base/plugins/sitemap.py",
+    # The CI-check script itself.
+    "scripts/check_react_router_isolation.py",
+})
 
 # Patterns that count as a "real" React Router reference. Comments and
 # documentation that just mention the React Router target by name are fine.

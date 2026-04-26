@@ -6,6 +6,41 @@ This file tracks the multi-phase Astro migration. Items marked `[x]` are
 landed; items marked `[ ]` are outstanding. Dated entries below capture
 foundational scaffolding shipped on the `astro-support-codex` branch.
 
+### 2026-04-26 (cont.) — Astro page emitter + static-mode classifier (Phase B)
+
+Implemented:
+
+- `packages/reflex-base/src/reflex_base/compiler/astro.py` — full templating + emitter module:
+  - `astro_route_to_file_path(...)` translator (`/` → `src/pages/index.astro`, `/blog/[slug]` → `src/pages/blog/[slug].astro`, `/docs/[[...path]]` → `src/pages/docs/[...path].astro`).
+  - `astro_island_module_path(...)` for per-page island module locations.
+  - `astro_page_template(...)`, `astro_layout_template(...)`, `astro_config_template(...)`, `astro_page_root_island_template(...)` — pure-string codegen functions; no runtime Astro dependency.
+  - `AstroIsland` / `AstroEmitterInput` / `AstroPageArtifact` dataclasses.
+  - `emit_astro_page`, `emit_astro_layout`, `emit_astro_config`, `emit_astro_page_root_island`, `emit_astro_artifacts` — high-level aggregator that returns the full set of `(path, contents)` artifacts ready to write under `.web/`.
+  - Per-mode contracts enforced: `static` rejects `page_root_import` / `islands`, `app` requires `page_root_import`, invalid `render_mode` raises `CompileError`.
+  - Islands mode dedupes imports for repeated component names, supports `client:load`/`client:idle`/`client:visible`/`client:only` directives plus media-query attributes.
+- `packages/reflex-base/src/reflex_base/compiler/static_mode.py` — `find_static_mode_violations(...)` and `reject_static_mode_violations(...)`. Walks a compiled tree and reports event triggers, state-bound vars, hydration-flagged classes, and `rx.island(...)` wrappers found inside `render_mode="static"` pages. Multi-violation `CompileError` lists every offender with route + class name + reason.
+- `reflex/compiler/compiler.py` — `_compile_astro_artifacts(app, config, compile_ctx)` runs at the tail of `compile_app()` whenever `config.frontend_target == "astro"` and appends the Astro artifact set to `compile_results`. Static-mode pages run through `reject_static_mode_violations()` before emission. The React Router target is unaffected; existing users see no behavior change.
+- `reflex/app.py` — `App.add_page(render_mode=...)` accepted; stored on `UnevaluatedPage.render_mode` and threaded through `_apply_decorated_pages()`. React Router target emits a `console.warn` for non-`app` modes.
+- Unit tests:
+  - `tests/units/reflex_base/compiler/test_astro.py` (32 tests) covers route translation, all three render modes, dedup, dynamic paths, static_paths, layout/config/page-root templates, and `emit_astro_artifacts` aggregation.
+  - `tests/units/reflex_base/compiler/test_static_mode.py` (10 tests) covers each violation class plus multi-offender error formatting.
+  - `tests/units/test_app.py` adds three tests for `add_page(render_mode=...)` round-trip / validation.
+
+Verified:
+
+- 4067 unit tests pass on Python 3.13 (45 new tests added since the previous foundational pass; the only excluded failures are the same two IPv6-dependent tests in `tests/units/utils/test_processes.py`).
+- `uv run pyright reflex tests packages/reflex-base` — 1 pre-existing error in `tests/units/docgen/test_class_and_component.py`; everything new is clean.
+- `uv run ruff check` — 6 pre-existing errors in unrelated files; everything new is clean.
+- `uv run python scripts/check_react_router_isolation.py` — exit 0.
+- `pyi_hashes.json` regenerated (`reflex/__init__.pyi` updated for new `island`/`HydratedComponent` exports).
+
+Still outstanding (require further design rounds):
+
+- Phase A Zustand runtime port (`context_template()` rewrite + `state.js` extraction into `event_loop.ts` + router-adapter abstraction).
+- Tree-walk island-boundary classifier for `render_mode="islands"` (Path A signals + Path B metadata) — the current emitter accepts user-provided `AstroIsland` records but does not yet auto-place them.
+- Astro target still re-uses the existing React Router page modules via the `PageRoot` wrapper. A native React entry per Astro page is the next step once the Zustand runtime lands.
+- Per-host rewrite artifacts (`_redirects` / `vercel.json`), per-page bundle budgets, visual regression suite (Master Tasks 10-11).
+
 ### 2026-04-26 — Foundational scaffolding (Phase A/Phase C cross-cutting)
 
 Implemented:
@@ -109,7 +144,8 @@ Chosen direction:
   - Shared generated runtime adds `zustand` for both targets after Phase A.
   - Astro target adds `astro` and `@astrojs/react`.
   - **Done 2026-04-26:** `PackageJson.commands_for(target)`, `dependencies_for(target)`, `dev_dependencies_for(target)`. Generator wiring still TODO in the compile loop.
-- [ ] Generate `astro.config.mjs` for the Astro target while preserving `react-router.config.js` for the React Router target.
+- [x] Generate `astro.config.mjs` for the Astro target while preserving `react-router.config.js` for the React Router target.
+  - **Done 2026-04-26:** `astro_config_template(...)` produces a static-output `astro.config.mjs` with `@astrojs/react`, dev-server host/port from rx.Config, optional `site` from `deploy_url`, optional `base` from `frontend_path`, and the `$`/`@` Vite aliases. No SSR adapter is configured. Emitted as `astro.config.mjs` at the `.web/` root by `_compile_astro_artifacts`. `react-router.config.js` continues to ship on the React Router target.
   - Set Astro output to static.
   - Do not install or configure SSR adapters.
   - Preserve `frontend_path`/base path behavior.
@@ -118,13 +154,14 @@ Chosen direction:
   - Remove the Safari cache-bust plugin for the Astro target and rely on Astro/Vite content-hashed assets.
   - If Phase B finds a Safari-specific cache regression, treat it as a separate targeted bug instead of keeping the old plugin by default.
   - Configure env exposure for both preferred Astro `PUBLIC_*` variables and legacy `VITE_*` variables during the migration window.
-- [ ] Restructure `.web` output:
+- [x] Restructure `.web` output:
   - Keep the current React Router layout for the `react_router` target.
   - Generate Astro pages under `src/pages` for the `astro` target.
   - Generate shared layouts under `src/layouts` for the `astro` target.
   - Generate React app/island modules under `src/components` or `src/reflex` for the `astro` target.
   - Generate one Astro entry per route so unrelated routes do not share first-load JS by default.
   - Preserve `public/`, assets copying, `env.json`, and `reflex.json`.
+  - **Done 2026-04-26:** Astro emitter writes one `src/pages/<route>.astro` per Reflex route, plus `src/layouts/Layout.astro`, per-page `src/reflex/islands/<route>/PageRoot.tsx` modules for `app` mode, and `astro.config.mjs` at the `.web/` root. Existing `public/`/`env.json`/`reflex.json` paths are unchanged.
 - [ ] Update `reflex run`, `reflex export`, deploy, and frontend build helpers to branch by frontend target.
   - **Partially done 2026-04-26:** AppHarness regex now matches Astro's `Local    http://...` form (combined regex in `reflex_base/constants/base.py`). `reflex run` / `reflex export` codegen branching still TODO.
   - Document dev-vs-prod differences in Astro island hydration and HMR boundaries.
@@ -140,11 +177,12 @@ Chosen direction:
 ## Master Task 2: Astro Page Modes
 
 - [x] Add `render_mode: Literal["static", "app", "islands"] = "app"` to the `rx.page` decorator in [reflex/page.py](reflex/page.py). Thread it through to the compilation context used by `compile_page` ([packages/reflex-base/src/reflex_base/plugins/compiler.py:276](packages/reflex-base/src/reflex_base/plugins/compiler.py#L276)).
-  - **Done 2026-04-26 (decorator surface only):** `render_mode` accepted by `@rx.page` and stored in `DECORATED_PAGES`. Threading into `compile_page` waits on the Astro emitter; the React Router target ignores the value beyond storing it (see Master Task 12 fall-through behavior).
-- [ ] Per-mode output shape (Astro target):
+  - **Done 2026-04-26:** `render_mode` accepted by `@rx.page`, propagated to `App.add_page` and stored on `UnevaluatedPage.render_mode`. The Astro emitter (`_compile_astro_artifacts`) reads it back at compile time. React Router target keeps its fall-through behavior (`console.warn` for non-`app` values).
+- [x] Per-mode output shape (Astro target):
   - `static`: emit `.web/src/pages/<route>.astro` with raw HTML for the rendered tree + `<script>` for the inline head theme setter. No React module import. No runtime.
   - `app` (default): emit `.web/src/pages/<route>.astro` containing one React component import rendered with `client:load`. That component is the page-root island and holds the full rendered tree, the Zustand runtime bootstrap, and `initialEvents` with `HYDRATE` + `onLoadInternalEvent()`.
   - `islands`: emit `.web/src/pages/<route>.astro` with inline Astro HTML for static subtrees and one `<ComponentName client:*/>` element per compiler-detected island. Each island is a separate generated module under `.web/src/reflex/islands/`. `initialEvents` omits `onLoadInternalEvent()`.
+  - **Done 2026-04-26:** all three shapes produced by `astro_page_template(...)` in `packages/reflex-base/src/reflex_base/compiler/astro.py`. Inline head theme setter (Master Task 9) and `initialEvents` mode-awareness (Master Task 8) still TODO inside the Zustand runtime port.
 - [ ] Island-boundary placement rule (`islands` mode only). Deterministic; runs inside the existing component-walk plugin in `memoize.py`.
   - Path A — tree signals (already computed by `MemoizeStatefulPlugin._should_memoize`): any node with var_data, event_triggers, or structural Cond/Foreach/Match with state-dependent condition → promote the smallest enclosing subtree to an island.
   - Path B — class metadata from Master Task 7: `requires_hydration = True` → island root at this node. `provides_hydrated_context = True` → island boundary covers the entire subtree. `client_only = True` → `client:only="react"` directive.
@@ -155,8 +193,10 @@ Chosen direction:
   - `app`: raise `CompileError` or warn-and-strip the wrapper (pick one; current plan leaves the choice open).
   - `islands`: allowed; merges with compiler-auto-placed islands. Options: `hydrate` ∈ `{"load", "idle", "visible"}` or `{"media": str}`; `client_only: bool`.
   - **Partially done 2026-04-26:** `rx.island(...)` API and option validation landed in `packages/reflex-base/src/reflex_base/components/island.py` with full unit-test coverage (`hydrate` strategies, media mappings, `client_only`, nested-rejection). Per-mode rejection (`static`/`app`/`islands`) waits on the Astro page emitter so the compiler walk knows the page's `render_mode`.
-- [ ] `static`-mode rejection in the compiler walk: on a `render_mode="static"` page, any node whose tree signals match Path A is a `CompileError`. Error includes file, line, component class, and the offending var/trigger name. Implement as a plugin that runs before `MemoizeStatefulPlugin` on `static` pages.
-- [ ] React Router target behavior: `render_mode` is accepted but only `"app"` is honored. `"static"` and `"islands"` emit a `console.deprecate`-style warning ("Astro-only; compiling as 'app'") and fall through to the existing codegen path.
+- [x] `static`-mode rejection in the compiler walk: on a `render_mode="static"` page, any node whose tree signals match Path A is a `CompileError`. Error includes file, line, component class, and the offending var/trigger name. Implement as a plugin that runs before `MemoizeStatefulPlugin` on `static` pages.
+  - **Done 2026-04-26:** `find_static_mode_violations` / `reject_static_mode_violations` in `packages/reflex-base/src/reflex_base/compiler/static_mode.py`. Walks the compiled tree, detects state-bound vars, event triggers, hydration-flagged classes, and `rx.island(...)` wrappers, and raises a multi-offender `CompileError` listing each violation. Wired into `_compile_astro_artifacts` so the rejection runs before any Astro page emission.
+- [x] React Router target behavior: `render_mode` is accepted but only `"app"` is honored. `"static"` and `"islands"` emit a `console.deprecate`-style warning ("Astro-only; compiling as 'app'") and fall through to the existing codegen path.
+  - **Done 2026-04-26:** `App.add_page` emits `console.warn(f"render_mode={mode!r} on route {route!r} is Astro-only; compiling as 'app' on the React Router target.")` when `frontend_target == "react_router"`.
 - [ ] Navigation model (applies to `app` and `islands`):
   - Cross-route `rx.link(...)` compiles to `<a href=...>` (document navigation). No `<Link>` component from a framework router.
   - `rx.redirect(...)` events call `window.location.href = url` for internal routes.

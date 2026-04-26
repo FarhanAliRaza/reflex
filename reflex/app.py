@@ -24,7 +24,7 @@ from collections.abc import (
 )
 from contextvars import Token
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from reflex_base import constants
 from reflex_base.components.component import Component, ComponentStyle
@@ -238,6 +238,9 @@ class UnevaluatedPage:
     on_load: EventType[()] | None = None
     meta: Sequence[Mapping[str, Any] | Component] = ()
     context: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+    # Astro target render mode. None means "use the target's default":
+    # "app" on the Astro target, no-op on the React Router target.
+    render_mode: Literal["static", "app", "islands"] | None = None
 
     def merged_with(self, other: UnevaluatedPage) -> UnevaluatedPage:
         """Merge the other page into this one.
@@ -256,6 +259,9 @@ class UnevaluatedPage:
             else other.description,
             on_load=self.on_load if self.on_load is not None else other.on_load,
             context=self.context if self.context is not None else other.context,
+            render_mode=self.render_mode
+            if self.render_mode is not None
+            else other.render_mode,
         )
 
 
@@ -817,6 +823,7 @@ class App(MiddlewareMixin, LifespanMixin):
         on_load: EventType[()] | None = None,
         meta: Sequence[Mapping[str, Any] | Component] = constants.DefaultPage.META_LIST,
         context: dict[str, Any] | None = None,
+        render_mode: Literal["static", "app", "islands"] | None = None,
     ):
         """Add a page to the app.
 
@@ -832,6 +839,10 @@ class App(MiddlewareMixin, LifespanMixin):
             on_load: The event handler(s) that will be called each time the page load.
             meta: The metadata of the page.
             context: Values passed to page for custom page-specific logic.
+            render_mode: Astro render mode ("static", "app", "islands"). Only
+                consulted on the Astro frontend target; the React Router target
+                accepts the value for source compatibility and ignores
+                non-"app" modes (with a warning at compile time).
 
         Raises:
             PageValueError: When the component is not set for a non-404 page.
@@ -864,6 +875,25 @@ class App(MiddlewareMixin, LifespanMixin):
         # Check if the route given is valid
         verify_route_validity(route)
 
+        if render_mode is not None and render_mode not in ("static", "app", "islands"):
+            from reflex_base.utils.exceptions import CompileError
+
+            msg = (
+                f"Invalid render_mode={render_mode!r} on route {route!r}. "
+                f"Expected 'static', 'app', or 'islands'."
+            )
+            raise CompileError(msg)
+
+        if (
+            render_mode is not None
+            and render_mode != "app"
+            and get_config().frontend_target == "react_router"
+        ):
+            console.warn(
+                f"render_mode={render_mode!r} on route {route!r} is Astro-only; "
+                f"compiling as 'app' on the React Router target.",
+            )
+
         unevaluated_page = UnevaluatedPage(
             component=component,
             route=route,
@@ -873,6 +903,7 @@ class App(MiddlewareMixin, LifespanMixin):
             on_load=on_load,
             meta=meta,
             context=context or {},
+            render_mode=render_mode,
         )
 
         if route in self._unevaluated_pages:
