@@ -1,102 +1,107 @@
-"""Radio component from Radix Themes."""
+"""RadioCards — grid of card-shaped radio tiles, Tailwind-styled."""
+
+from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
-from reflex_base.components.component import field
+from reflex_base.components.component import Component, field
 from reflex_base.event import EventHandler, passthrough_event_spec
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
+from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import LiteralAccentColor, RadixThemesComponent
+from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import LiteralAccentColor
 
 
-class RadioCardsRoot(RadixThemesComponent):
-    """Root element for RadioCards component."""
+class RadioCardsRoot(elements.Div):
+    """Root for a RadioCards grid."""
 
-    tag = "RadioCards.Root"
+    tag = "div"
 
-    as_child: Var[bool] = field(
-        doc="Change the default rendered element for the one passed as a child, merging their props and behavior."
-    )
-
-    size: Var[Responsive[Literal["1", "2", "3"]]] = field(
-        doc='The size of the checkbox cards: "1" | "2" | "3"'
-    )
-
-    variant: Var[Literal["classic", "surface"]] = field(
-        doc='Variant of button: "classic" | "surface" | "soft"'
-    )
-
-    color_scheme: Var[LiteralAccentColor] = field(doc="Override theme color for button")
-
-    high_contrast: Var[bool] = field(
-        doc="Uses a higher contrast color for the component."
-    )
-
+    as_child: Var[bool] = field(doc="Render as child")
+    size: Var[Responsive[Literal["1", "2", "3"]]] = field(doc="Size")
+    variant: Var[Literal["classic", "surface"]] = field(doc="Variant")
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    high_contrast: Var[bool] = field(doc="Higher contrast")
     columns: Var[
         Responsive[str | Literal["1", "2", "3", "4", "5", "6", "7", "8", "9"]]
-    ] = field(doc="The number of columns:")
-
-    gap: Var[Responsive[str | Literal["1", "2", "3", "4", "5", "6", "7", "8", "9"]]] = (
-        field(doc="The gap between the checkbox cards:")
-    )
-
-    default_value: Var[str]
-
-    value: Var[str] = field(
-        doc="The controlled value of the radio item to check. Should be used in conjunction with onValueChange."
-    )
-
-    name: Var[str] = field(
-        doc="The name of the group. Submitted with its owning form as part of a name/value pair."
-    )
-
-    disabled: Var[bool] = field(
-        doc="When true, prevents the user from interacting with radio items."
-    )
-
-    required: Var[bool] = field(
-        doc="When true, indicates that the user must check a radio item before the owning form can be submitted."
-    )
-
-    orientation: Var[Literal["horizontal", "vertical", "undefined"]] = field(
-        doc="The orientation of the component."
-    )
-
-    dir: Var[Literal["ltr", "rtl"]] = field(
-        doc="The reading direction of the radio group. If omitted, inherits globally from DirectionProvider or assumes LTR (left-to-right) reading mode."
-    )
-
-    loop: Var[bool] = field(
-        doc="When true, keyboard navigation will loop from last item to first, and vice versa."
-    )
+    ] = field(doc="Column count")
+    gap: Var[
+        Responsive[str | Literal["1", "2", "3", "4", "5", "6", "7", "8", "9"]]
+    ] = field(doc="Gap between cards")
+    default_value: Var[str] = field(doc="Default value")
+    value: Var[str] = field(doc="Controlled value")
+    name: Var[str] = field(doc="Form name")
+    disabled: Var[bool] = field(doc="Disable")
+    required: Var[bool] = field(doc="Required")
+    orientation: Var[Literal["horizontal", "vertical", "undefined"]] = field(doc="Orientation")
+    dir: Var[Literal["ltr", "rtl"]] = field(doc="Direction")
+    loop: Var[bool] = field(doc="Loop keyboard nav")
 
     on_value_change: EventHandler[passthrough_event_spec(str)] = field(
-        doc="Event handler called when the value changes."
+        doc="Fired when the selected value changes."
     )
 
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a RadioCards grid.
 
-class RadioCardsItem(RadixThemesComponent):
-    """Item element for RadioCards component."""
+        Args:
+            *children: RadioCardsItem children.
+            **props: columns/gap + standard div props.
 
-    tag = "RadioCards.Item"
+        Returns:
+            The grid component.
+        """
+        columns = props.pop("columns", "2")
+        gap = props.pop("gap", "2")
+        existing = props.pop("class_name", "")
+        parts = ["grid"]
+        if isinstance(columns, str):
+            parts.append(f"grid-cols-{columns}")
+        if isinstance(gap, str):
+            parts.append(f"gap-[var(--space-{gap})]")
+        props.setdefault("role", "radiogroup")
+        props["class_name"] = cn(" ".join(parts), existing)
+        return super().create(*children, **props)
 
-    as_child: Var[bool] = field(
-        doc="Change the default rendered element for the one passed as a child, merging their props and behavior."
-    )
 
-    value: Var[str] = field(doc="The value given as data when submitted with a name.")
+class RadioCardsItem(elements.Label):
+    """A card-shaped radio item."""
 
-    disabled: Var[bool] = field(
-        doc="When true, prevents the user from interacting with the radio item."
-    )
+    tag = "label"
 
-    required: Var[bool] = field(
-        doc="When true, indicates that the user must check the radio item before the owning form can be submitted."
-    )
+    as_child: Var[bool] = field(doc="Render as child")
+    value: Var[str] = field(doc="Item value")
+    disabled: Var[bool] = field(doc="Disable")
+    required: Var[bool] = field(doc="Required")
 
     _valid_parents: ClassVar[list[str]] = ["RadioCardsRoot"]
+
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a RadioCards item.
+
+        Args:
+            *children: Item content.
+            **props: Standard label props.
+
+        Returns:
+            The label component.
+        """
+        existing = props.pop("class_name", "")
+        props["class_name"] = cn(
+            "flex items-start gap-2 rounded-(--radius-3) "
+            "border border-[var(--gray-a6)] p-3 cursor-pointer "
+            "hover:bg-[var(--gray-a2)] "
+            "has-[input:checked]:border-[var(--accent-9)] "
+            "has-[input:checked]:bg-[var(--accent-3)] "
+            "transition-colors",
+            existing,
+        )
+        return super().create(*children, **props)
 
 
 class RadioCards(SimpleNamespace):

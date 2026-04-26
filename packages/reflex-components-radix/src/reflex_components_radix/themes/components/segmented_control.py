@@ -1,79 +1,102 @@
-"""SegmentedControl from Radix Themes."""
+"""SegmentedControl — button-group toggle, Tailwind-styled.
+
+Without ``@radix-ui/themes`` we render the Root as a flex container of
+buttons; the active item gets a tinted background. Apps that need the
+controlled / multi-select behaviour bind ``on_change`` per item.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from types import SimpleNamespace
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
-from reflex_base.components.component import field
-from reflex_base.event import EventHandler
+from reflex_base.components.component import Component, field
+from reflex_base.event import EventHandler, passthrough_event_spec
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
+from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import LiteralAccentColor, RadixThemesComponent
-
-
-def on_value_change(
-    value: Var[str | list[str]],
-) -> tuple[Var[str | list[str]]]:
-    """Handle the on_value_change event.
-
-    Args:
-        value: The value of the event.
-
-    Returns:
-        The value of the event.
-    """
-    return (value,)
+from reflex_components_radix._radix_classes import segmented_control_classes
+from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import LiteralAccentColor
 
 
-class SegmentedControlRoot(RadixThemesComponent):
-    """Root element for a SegmentedControl component."""
+class SegmentedControlRoot(elements.Div):
+    """Root element for a SegmentedControl."""
 
-    tag = "SegmentedControl.Root"
+    tag = "div"
 
-    size: Var[Responsive[Literal["1", "2", "3"]]] = field(
-        doc='The size of the segmented control: "1" | "2" | "3"'
+    size: Var[Responsive[Literal["1", "2", "3"]]] = field(doc='Size: "1"|"2"|"3"')
+    variant: Var[Literal["classic", "surface"]] = field(doc="Variant")
+    type: Var[Literal["single", "multiple"]] = field(doc="single|multiple selection")
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    radius: Var[Literal["none", "small", "medium", "large", "full"]] = field(doc="Radius")
+    default_value: Var[str | Sequence[str]] = field(doc="Default value")
+    value: Var[str | Sequence[str]] = field(doc="Controlled value")
+
+    _rename_props: ClassVar[dict[str, str]] = {"onChange": "onValueChange"}
+
+    on_change: EventHandler[passthrough_event_spec(str)] = field(
+        doc="Fired when the active item changes."
     )
 
-    variant: Var[Literal["classic", "surface"]] = field(
-        doc='Variant of button: "classic" | "surface"'
-    )
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a SegmentedControl root.
 
-    type: Var[Literal["single", "multiple"]] = field(
-        doc='The type of the segmented control, either "single" for selecting one option or "multiple" for selecting multiple options.'
-    )
+        Args:
+            *children: SegmentedControlItem children.
+            **props: variant/size/colour props.
 
-    color_scheme: Var[LiteralAccentColor] = field(doc="Override theme color for button")
-
-    radius: Var[Literal["none", "small", "medium", "large", "full"]] = field(
-        doc='The radius of the segmented control: "none" | "small" | "medium" | "large" | "full"'
-    )
-
-    default_value: Var[str | Sequence[str]] = field(
-        doc="The default value of the segmented control."
-    )
-
-    value: Var[str | Sequence[str]] = field(
-        doc="The current value of the segmented control."
-    )
-
-    on_change: EventHandler[on_value_change] = field(
-        doc="Handles the `onChange` event for the SegmentedControl component."
-    )
-
-    _rename_props = {"onChange": "onValueChange"}
+        Returns:
+            The root component.
+        """
+        size = props.pop("size", None)
+        existing = props.pop("class_name", "")
+        selections: dict[str, str] = {}
+        if isinstance(size, str):
+            selections["size"] = size
+        elif size is not None:
+            props["size"] = size
+        props.setdefault("role", "tablist")
+        props["class_name"] = cn(segmented_control_classes(**selections), existing)
+        return super().create(*children, **props)
 
 
-class SegmentedControlItem(RadixThemesComponent):
-    """An item in the SegmentedControl component."""
+class SegmentedControlItem(elements.Button):
+    """An item in the SegmentedControl."""
 
-    tag = "SegmentedControl.Item"
+    tag = "button"
 
     value: Var[str] = field(doc="The value of the item.")
 
     _valid_parents: ClassVar[list[str]] = ["SegmentedControlRoot"]
+
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a SegmentedControl item.
+
+        Args:
+            *children: Item label.
+            **props: ``value`` plus standard button props.
+
+        Returns:
+            The item component.
+        """
+        existing = props.pop("class_name", "")
+        props.setdefault("type", "button")
+        props.setdefault("role", "tab")
+        props["class_name"] = cn(
+            "flex-1 inline-flex items-center justify-center px-3 py-1 "
+            "rounded-(--radius-2) text-[var(--gray-12)] cursor-pointer "
+            "hover:bg-[var(--gray-a3)] "
+            "data-[state=active]:bg-[var(--color-panel-solid)] "
+            "data-[state=active]:shadow-sm "
+            "transition-colors",
+            existing,
+        )
+        return super().create(*children, **props)
 
 
 class SegmentedControl(SimpleNamespace):

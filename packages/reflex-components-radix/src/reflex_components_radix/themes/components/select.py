@@ -1,7 +1,17 @@
-"""Interactive components provided by @radix-ui/themes."""
+"""Select — native ``<select>`` styled with Tailwind utilities.
+
+The original Radix Themes Select supported a custom popup positioned
+via portal, but a native ``<select>`` keeps the same call sites
+working (``rx.select(items, default_value=...)``) without any JS or
+@radix-ui/react-select dependency. Apps that need the fancy popup +
+keyboard navigation can compose that themselves on top of dropdown_menu
+in a follow-up.
+"""
+
+from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 from reflex_base.components.component import Component, ComponentNamespace, field
 from reflex_base.constants.compiler import MemoizationMode
@@ -9,251 +19,172 @@ from reflex_base.event import EventHandler, no_args_event_spec, passthrough_even
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.core.foreach import foreach
+from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import (
-    LiteralAccentColor,
-    LiteralRadius,
-    RadixThemesComponent,
-)
+from reflex_components_radix._radix_classes import select_classes
+from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import LiteralAccentColor, LiteralRadius
 
 
-class SelectRoot(RadixThemesComponent):
-    """Displays a list of options for the user to pick from, triggered by a button."""
+class SelectRoot(elements.Select):
+    """Native ``<select>`` element wired to the Reflex Select API."""
 
-    tag = "Select.Root"
+    tag = "select"
 
-    size: Var[Responsive[Literal["1", "2", "3"]]] = field(
-        doc='The size of the select: "1" | "2" | "3"'
-    )
+    size: Var[Responsive[Literal["1", "2", "3"]]] = field(doc='Size: "1"|"2"|"3"')
+    default_value: Var[str] = field(doc="Initial value")
+    value: Var[str] = field(doc="Controlled value")
+    default_open: Var[bool] = field(doc="(no-op for native select)")
+    open: Var[bool] = field(doc="(no-op for native select)")
+    name: Var[str] = field(doc="Form name")
+    disabled: Var[bool] = field(doc="Disable")
+    required: Var[bool] = field(doc="Required")
+    variant: Var[Literal["classic", "surface", "soft", "ghost"]] = field(doc="Variant")
 
-    default_value: Var[str] = field(
-        doc="The value of the select when initially rendered. Use when you do not need to control the state of the select."
-    )
+    _rename_props: ClassVar[dict[str, str]] = {"onChange": "onValueChange"}
 
-    value: Var[str] = field(
-        doc="The controlled value of the select. Should be used in conjunction with on_change."
-    )
-
-    default_open: Var[bool] = field(
-        doc="The open state of the select when it is initially rendered. Use when you do not need to control its open state."
-    )
-
-    open: Var[bool] = field(
-        doc="The controlled open state of the select. Must be used in conjunction with on_open_change."
-    )
-
-    name: Var[str] = field(
-        doc="The name of the select control when submitting the form."
-    )
-
-    disabled: Var[bool] = field(
-        doc="When True, prevents the user from interacting with select."
-    )
-
-    required: Var[bool] = field(
-        doc="When True, indicates that the user must select a value before the owning form can be submitted."
-    )
-
-    # Props to rename
-    _rename_props = {"onChange": "onValueChange"}
-
-    on_change: EventHandler[passthrough_event_spec(str)] = field(
-        doc="Fired when the value of the select changes."
-    )
-
-    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(
-        doc="Fired when the select is opened or closed."
-    )
-
-
-class SelectTrigger(RadixThemesComponent):
-    """The button that toggles the select."""
-
-    tag = "Select.Trigger"
-
-    variant: Var[Literal["classic", "surface", "soft", "ghost"]] = field(
-        doc="Variant of the select trigger"
-    )
-
-    color_scheme: Var[LiteralAccentColor] = field(doc="The color of the select trigger")
-
-    radius: Var[LiteralRadius] = field(doc="The radius of the select trigger")
-
-    placeholder: Var[str] = field(doc="The placeholder of the select trigger")
-
-    _valid_parents: ClassVar[list[str]] = ["SelectRoot"]
-
-    _memoization_mode = MemoizationMode(recursive=False)
-
-
-class SelectContent(RadixThemesComponent):
-    """The component that pops out when the select is open."""
-
-    tag = "Select.Content"
-
-    variant: Var[Literal["solid", "soft"]] = field(
-        doc="The variant of the select content"
-    )
-
-    color_scheme: Var[LiteralAccentColor] = field(doc="The color of the select content")
-
-    high_contrast: Var[bool] = field(
-        doc="Whether to render the select content with higher contrast color against background"
-    )
-
-    position: Var[Literal["item-aligned", "popper"]] = field(
-        doc="The positioning mode to use, item-aligned is the default and behaves similarly to a native MacOS menu by positioning content relative to the active item. popper positions content in the same way as our other primitives, for example Popover or DropdownMenu."
-    )
-
-    side: Var[Literal["top", "right", "bottom", "left"]] = field(
-        doc="The preferred side of the anchor to render against when open. Will be reversed when collisions occur and avoidCollisions is enabled. Only available when position is set to popper."
-    )
-
-    side_offset: Var[int] = field(
-        doc="The distance in pixels from the anchor. Only available when position is set to popper."
-    )
-
-    align: Var[Literal["start", "center", "end"]] = field(
-        doc="The preferred alignment against the anchor. May change when collisions occur. Only available when position is set to popper."
-    )
-
-    align_offset: Var[int] = field(
-        doc="The vertical distance in pixels from the anchor. Only available when position is set to popper."
-    )
-
-    on_close_auto_focus: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the select content is closed."
-    )
-
-    on_escape_key_down: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the escape key is pressed."
-    )
-
-    on_pointer_down_outside: EventHandler[no_args_event_spec] = field(
-        doc="Fired when a pointer down event happens outside the select content."
-    )
-
-
-class SelectGroup(RadixThemesComponent):
-    """Used to group multiple items."""
-
-    tag = "Select.Group"
-
-    _valid_parents: ClassVar[list[str]] = ["SelectContent"]
-
-
-class SelectItem(RadixThemesComponent):
-    """The component that contains the select items."""
-
-    tag = "Select.Item"
-
-    value: Var[str] = field(
-        doc="The value given as data when submitting a form with a name."
-    )
-
-    disabled: Var[bool] = field(doc="Whether the select item is disabled")
-
-    _valid_parents: ClassVar[list[str]] = ["SelectGroup", "SelectContent"]
-
-
-class SelectLabel(RadixThemesComponent):
-    """Used to render the label of a group, it isn't focusable using arrow keys."""
-
-    tag = "Select.Label"
-
-    _valid_parents: ClassVar[list[str]] = ["SelectGroup"]
-
-
-class SelectSeparator(RadixThemesComponent):
-    """Used to visually separate items in the Select."""
-
-    tag = "Select.Separator"
-
-
-class HighLevelSelect(SelectRoot):
-    """High level wrapper for the Select component."""
-
-    items: Var[Sequence[str]] = field(doc="The items of the select.")
-
-    placeholder: Var[str] = field(doc="The placeholder of the select.")
-
-    label: Var[str] = field(doc="The label of the select.")
-
-    color_scheme: Var[LiteralAccentColor] = field(doc="The color of the select.")
-
-    high_contrast: Var[bool] = field(
-        doc="Whether to render the select with higher contrast color against background."
-    )
-
-    variant: Var[Literal["classic", "surface", "soft", "ghost"]] = field(
-        doc="The variant of the select."
-    )
-
-    radius: Var[LiteralRadius] = field(doc="The radius of the select.")
-
-    width: Var[str] = field(doc="The width of the select.")
-
-    position: Var[Literal["item-aligned", "popper"]] = field(
-        doc='The positioning mode to use. Default is "item-aligned".'
-    )
+    on_change: EventHandler[passthrough_event_spec(str)] = field(doc="Value change.")
+    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(doc="(unused).")
 
     @classmethod
-    def create(cls, items: list[str] | Var[list[str]], **props) -> Component:
-        """Create a select component.
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a native ``<select>``.
 
         Args:
-            items: The items of the select.
-            **props: Additional properties to apply to the select component.
+            *children: ``<option>`` elements.
+            **props: variant/size/colour + standard select props.
 
         Returns:
             The select component.
         """
-        trigger_prop_list = [
-            "id",
-            "placeholder",
-            "variant",
-            "radius",
-            "width",
-            "flex_shrink",
-            "custom_attrs",
-        ]
+        variant = props.pop("variant", None)
+        size = props.pop("size", None)
+        existing = props.pop("class_name", "")
+        selections: dict[str, str] = {}
+        if isinstance(variant, str):
+            selections["variant"] = variant
+        elif variant is not None:
+            props["variant"] = variant
+        if isinstance(size, str):
+            selections["size"] = size
+        elif size is not None:
+            props["size"] = size
+        props["class_name"] = cn(select_classes(**selections), existing)
+        return super().create(*children, **props)
 
-        content_props = {
-            prop: props.pop(prop)
-            for prop in ["high_contrast", "position"]
-            if prop in props
-        }
 
-        trigger_props = {
-            prop: props.pop(prop) for prop in trigger_prop_list if prop in props
-        }
+class SelectTrigger(elements.Div):
+    """No-op kept for API compatibility — native select renders its own trigger."""
 
-        color_scheme = props.pop("color_scheme", None)
+    tag = "div"
 
-        if color_scheme is not None:
-            content_props["color_scheme"] = color_scheme
-            trigger_props["color_scheme"] = color_scheme
+    variant: Var[Literal["classic", "surface", "soft", "ghost"]] = field(doc="Variant")
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    radius: Var[LiteralRadius] = field(doc="Radius")
+    placeholder: Var[str] = field(doc="Trigger placeholder")
 
+    _valid_parents: ClassVar[list[str]] = ["SelectRoot"]
+    _memoization_mode = MemoizationMode(recursive=False)
+
+
+class SelectContent(elements.Div):
+    """No-op kept for API compatibility — items live directly in ``<select>``."""
+
+    tag = "div"
+
+    variant: Var[Literal["solid", "soft"]] = field(doc="Variant")
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    high_contrast: Var[bool] = field(doc="Higher contrast")
+    position: Var[Literal["item-aligned", "popper"]] = field(doc="Position")
+    side: Var[Literal["top", "right", "bottom", "left"]] = field(doc="Side")
+    side_offset: Var[int] = field(doc="Side offset")
+    align: Var[Literal["start", "center", "end"]] = field(doc="Align")
+    align_offset: Var[int] = field(doc="Align offset")
+
+    on_close_auto_focus: EventHandler[no_args_event_spec] = field(doc="(unused).")
+    on_escape_key_down: EventHandler[no_args_event_spec] = field(doc="(unused).")
+    on_pointer_down_outside: EventHandler[no_args_event_spec] = field(doc="(unused).")
+
+
+class SelectGroup(elements.Optgroup):
+    """Wraps a group of select items."""
+
+    tag = "optgroup"
+
+    _valid_parents: ClassVar[list[str]] = ["SelectRoot", "SelectContent"]
+
+
+class SelectItem(elements.Option):
+    """An ``<option>`` inside a select."""
+
+    tag = "option"
+
+    value: Var[str] = field(doc="Item value")
+    disabled: Var[bool] = field(doc="Disable")
+
+    _valid_parents: ClassVar[list[str]] = ["SelectGroup", "SelectContent", "SelectRoot"]
+
+
+class SelectLabel(elements.Optgroup):
+    """A group label (rendered as <optgroup label=...>)."""
+
+    tag = "optgroup"
+
+    _valid_parents: ClassVar[list[str]] = ["SelectGroup"]
+
+
+class SelectSeparator(elements.Hr):
+    """Visual separator inside the popup (no-op for native select)."""
+
+    tag = "hr"
+
+
+class HighLevelSelect(SelectRoot):
+    """High level wrapper taking a list of items."""
+
+    items: Var[Sequence[str]] = field(doc="The items of the select.")
+    placeholder: Var[str] = field(doc="The placeholder of the select.")
+    label: Var[str] = field(doc="The label of the select.")
+    color_scheme: Var[LiteralAccentColor] = field(doc="Accent color")
+    high_contrast: Var[bool] = field(doc="Higher contrast")
+    radius: Var[LiteralRadius] = field(doc="Radius")
+    width: Var[str] = field(doc="Width")
+    position: Var[Literal["item-aligned", "popper"]] = field(doc="Position")
+
+    @classmethod
+    def create(
+        cls, items: list[str] | Var[list[str]], **props: Any,
+    ) -> Component:
+        """Create a high-level select.
+
+        Args:
+            items: The select items.
+            **props: variant/size/value/placeholder etc.
+
+        Returns:
+            The select component.
+        """
         label = props.pop("label", None)
+        placeholder = props.pop("placeholder", None)
 
         if isinstance(items, Var):
-            child = [foreach(items, lambda item: SelectItem.create(item, value=item))]
+            options = [
+                foreach(items, lambda item: SelectItem.create(item, value=item))
+            ]
         else:
-            child = [SelectItem.create(item, value=item) for item in items]
+            options = [SelectItem.create(item, value=item) for item in items]
 
-        return SelectRoot.create(
-            SelectTrigger.create(
-                **trigger_props,
-            ),
-            SelectContent.create(
-                SelectGroup.create(
-                    SelectLabel.create(label) if label is not None else "",
-                    *child,
-                ),
-                **content_props,
-            ),
-            **props,
-        )
+        children: list[Component | str] = []
+        if placeholder is not None:
+            children.append(
+                SelectItem.create(placeholder, value="", disabled=True)
+            )
+        if label is not None:
+            children.append(SelectGroup.create(*options, label=label))
+        else:
+            children.extend(options)
+
+        return SelectRoot.create(*children, **props)
 
 
 class Select(ComponentNamespace):

@@ -1,17 +1,26 @@
-"""Interactive components provided by @radix-ui/themes."""
+"""Slider — native ``<input type=range>`` styled with Tailwind utilities.
+
+Multi-thumb sliders aren't representable with a single native range
+input; ``default_value`` / ``value`` therefore accept either a number
+or a single-item sequence (multi-thumb fall through to the first
+value). Apps needing two-thumb sliders should compose two ``rx.slider``
+inputs side-by-side.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, ClassVar, Literal
 
 from reflex_base.components.component import Component, field
 from reflex_base.event import EventHandler, passthrough_event_spec
 from reflex_base.utils.types import typehint_issubclass
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
+from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import LiteralAccentColor, RadixThemesComponent
+from reflex_components_radix._variants import cn, variants
+from reflex_components_radix.themes.base import LiteralAccentColor
 
 on_value_event_spec = (
     passthrough_event_spec(list[float]),
@@ -19,98 +28,93 @@ on_value_event_spec = (
 )
 
 
-class Slider(RadixThemesComponent):
+_slider_classes = variants(
+    base=(
+        "appearance-none cursor-pointer w-full bg-transparent "
+        "[&::-webkit-slider-runnable-track]:h-1 "
+        "[&::-webkit-slider-runnable-track]:rounded-full "
+        "[&::-webkit-slider-runnable-track]:bg-[var(--gray-a4)] "
+        "[&::-webkit-slider-thumb]:appearance-none "
+        "[&::-webkit-slider-thumb]:size-4 "
+        "[&::-webkit-slider-thumb]:rounded-full "
+        "[&::-webkit-slider-thumb]:bg-white "
+        "[&::-webkit-slider-thumb]:border-2 "
+        "[&::-webkit-slider-thumb]:border-[var(--accent-9)] "
+        "[&::-webkit-slider-thumb]:-mt-1.5 "
+        "[&::-webkit-slider-thumb]:shadow-sm "
+        "[&::-moz-range-track]:h-1 "
+        "[&::-moz-range-track]:rounded-full "
+        "[&::-moz-range-track]:bg-[var(--gray-a4)] "
+        "[&::-moz-range-thumb]:size-4 "
+        "[&::-moz-range-thumb]:rounded-full "
+        "[&::-moz-range-thumb]:bg-white "
+        "[&::-moz-range-thumb]:border-2 "
+        "[&::-moz-range-thumb]:border-[var(--accent-9)]"
+    ),
+    defaults={"size": "2"},
+    size={
+        "1": "h-3",
+        "2": "h-4",
+        "3": "h-6",
+    },
+)
+
+
+class Slider(elements.Input):
     """Provides user selection from a range of values."""
 
-    tag = "Slider"
+    tag = "input"
 
-    as_child: Var[bool] = field(
-        doc="Change the default rendered element for the one passed as a child, merging their props and behavior."
-    )
+    size: Var[Responsive[Literal["1", "2", "3"]]] = field(doc='Slider size "1" - "3"')
+    variant: Var[Literal["classic", "surface", "soft"]] = field(doc="Variant")
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    high_contrast: Var[bool] = field(doc="Higher contrast")
+    radius: Var[Literal["none", "small", "full"]] = field(doc="Override radius")
 
-    size: Var[Responsive[Literal["1", "2", "3"]]] = field(doc='Button size "1" - "3"')
+    default_value: Var[Sequence[float | int] | float | int] = field(doc="Initial value")
+    value: Var[Sequence[float | int]] = field(doc="Controlled value")
+    name: Var[str] = field(doc="Form name")
+    width: Var[str | None] = field(default=Var.create("100%"), doc="Slider width")
+    min: Var[float | int] = field(doc="Min")
+    max: Var[float | int] = field(doc="Max")
+    step: Var[float | int] = field(doc="Step")
+    disabled: Var[bool] = field(doc="Disable")
+    orientation: Var[Literal["horizontal", "vertical"]] = field(doc="Orientation")
 
-    variant: Var[Literal["classic", "surface", "soft"]] = field(doc="Variant of button")
+    _rename_props: ClassVar[dict[str, str]] = {"onChange": "onValueChange"}
 
-    color_scheme: Var[LiteralAccentColor] = field(doc="Override theme color for button")
-
-    high_contrast: Var[bool] = field(
-        doc="Whether to render the button with higher contrast color against background"
-    )
-
-    radius: Var[Literal["none", "small", "full"]] = field(
-        doc='Override theme radius for button: "none" | "small" | "full"'
-    )
-
-    default_value: Var[Sequence[float | int] | float | int] = field(
-        doc="The value of the slider when initially rendered. Use when you do not need to control the state of the slider."
-    )
-
-    value: Var[Sequence[float | int]] = field(
-        doc="The controlled value of the slider. Must be used in conjunction with onValueChange."
-    )
-
-    name: Var[str] = field(
-        doc="The name of the slider. Submitted with its owning form as part of a name/value pair."
-    )
-
-    width: Var[str | None] = field(
-        default=Var.create("100%"), doc="The width of the slider."
-    )
-
-    min: Var[float | int] = field(doc="The minimum value of the slider.")
-
-    max: Var[float | int] = field(doc="The maximum value of the slider.")
-
-    step: Var[float | int] = field(doc="The step value of the slider.")
-
-    disabled: Var[bool] = field(doc="Whether the slider is disabled")
-
-    orientation: Var[Literal["horizontal", "vertical"]] = field(
-        doc="The orientation of the slider."
-    )
-
-    # Props to rename
-    _rename_props = {"onChange": "onValueChange"}
-
-    on_change: EventHandler[on_value_event_spec] = field(
-        doc="Fired when the value of the slider changes."
-    )
-
-    on_value_commit: EventHandler[on_value_event_spec] = field(
-        doc="Fired when a thumb is released after being dragged."
-    )
+    on_change: EventHandler[on_value_event_spec] = field(doc="Fired on value change.")
+    on_value_commit: EventHandler[on_value_event_spec] = field(doc="Fired on commit.")
 
     @classmethod
-    def create(
-        cls,
-        *children,
-        **props,
-    ) -> Component:
-        """Create a Slider component.
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a slider input.
 
         Args:
-            *children: The children of the component.
-            **props: The properties of the component.
+            *children: Ignored.
+            **props: size/min/max/step + standard input props.
 
         Returns:
-            The component.
+            The slider component.
         """
         default_value = props.pop("default_value", [50])
-        width = props.pop("width", "100%")
-
         if isinstance(default_value, Var):
             if typehint_issubclass(default_value._var_type, int | float):
-                default_value = [default_value]
+                pass
+        elif isinstance(default_value, list) and len(default_value) >= 1:
+            default_value = default_value[0]
 
-        elif isinstance(default_value, (int, float)):
-            default_value = [default_value]
-
-        style = props.setdefault("style", {})
-        style.update({
-            "width": width,
-        })
-        return super().create(*children, default_value=default_value, **props)
+        size = props.pop("size", None)
+        existing = props.pop("class_name", "")
+        selections: dict[str, str] = {}
+        if isinstance(size, str):
+            selections["size"] = size
+        elif size is not None:
+            props["size"] = size
+        props["type"] = "range"
+        props["default_value"] = default_value
+        props["class_name"] = cn(_slider_classes(**selections), existing)
+        return super().create(**props)
 
 
 slider = Slider.create

@@ -1,56 +1,75 @@
-"""Components for the CheckboxGroup component of Radix Themes."""
+"""CheckboxGroup — group of checkboxes sharing a name + variant."""
+
+from __future__ import annotations
 
 from collections.abc import Sequence
 from types import SimpleNamespace
-from typing import Literal
+from typing import Any, Literal
 
-from reflex_base.components.component import field
+from reflex_base.components.component import Component, field
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
+from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import LiteralAccentColor, RadixThemesComponent
-
-
-class CheckboxGroupRoot(RadixThemesComponent):
-    """Root element for a CheckboxGroup component."""
-
-    tag = "CheckboxGroup.Root"
-
-    size: Var[Responsive[Literal["1", "2", "3"]]] = field(
-        doc="Use the size prop to control the checkbox size."
-    )
-
-    variant: Var[Literal["classic", "surface", "soft"]] = field(
-        doc='Variant of button: "classic" | "surface" | "soft"'
-    )
-
-    color_scheme: Var[LiteralAccentColor] = field(doc="Override theme color for button")
-
-    high_contrast: Var[bool] = field(
-        doc="Uses a higher contrast color for the component."
-    )
-
-    default_value: Var[Sequence[str]] = field(
-        doc="determines which checkboxes, if any, are checked by default."
-    )
-
-    name: Var[str] = field(
-        doc="used to assign a name to the entire group of checkboxes"
-    )
+from reflex_components_radix._radix_classes import checkbox_classes
+from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import LiteralAccentColor
 
 
-class CheckboxGroupItem(RadixThemesComponent):
-    """An item in the CheckboxGroup component."""
+class CheckboxGroupRoot(elements.Div):
+    """Root element for a CheckboxGroup."""
 
-    tag = "CheckboxGroup.Item"
+    tag = "div"
 
-    value: Var[str] = field(
-        doc="specifies the value associated with a particular checkbox option."
-    )
+    size: Var[Responsive[Literal["1", "2", "3"]]] = field(doc="Checkbox size")
+    variant: Var[Literal["classic", "surface", "soft"]] = field(doc="Variant")
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    high_contrast: Var[bool] = field(doc="Higher contrast")
+    default_value: Var[Sequence[str]] = field(doc="Pre-checked values")
+    name: Var[str] = field(doc="Group name")
 
-    disabled: Var[bool] = field(
-        doc="Use the native disabled attribute to create a disabled checkbox."
-    )
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a CheckboxGroup root.
+
+        Args:
+            *children: CheckboxGroupItem children.
+            **props: variant/size/colour props.
+
+        Returns:
+            The group component.
+        """
+        existing = props.pop("class_name", "")
+        props.setdefault("role", "group")
+        props["class_name"] = cn("flex flex-col gap-2", existing)
+        return super().create(*children, **props)
+
+
+class CheckboxGroupItem(elements.Input):
+    """An item in a CheckboxGroup."""
+
+    tag = "input"
+
+    value: Var[str] = field(doc="Item value")
+    disabled: Var[bool] = field(doc="Disable")
+
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a CheckboxGroup item.
+
+        Args:
+            *children: Ignored.
+            **props: ``value`` plus standard input props.
+
+        Returns:
+            The checkbox component.
+        """
+        existing = props.pop("class_name", "")
+        props["type"] = "checkbox"
+        props["class_name"] = cn(
+            checkbox_classes(), "appearance-none", existing,
+        )
+        return super().create(**props)
 
 
 class CheckboxGroup(SimpleNamespace):
