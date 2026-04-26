@@ -1,90 +1,130 @@
-"""Interactive components provided by @radix-ui/themes."""
+"""Dialog — re-exports the @radix-ui/react-dialog primitive with Tailwind styling.
 
-from typing import Literal
+The original Radix Themes Dialog auto-wrapped content in
+Dialog.Portal + Dialog.Overlay; this rewrite preserves that flow but
+uses the bare ``@radix-ui/react-dialog`` primitive (already vendored
+in ``reflex_components_radix.primitives.dialog``), with a small
+class-name layer for the overlay + content surfaces. No
+``@radix-ui/themes`` dependency.
+"""
 
-from reflex_base.components.component import ComponentNamespace, field
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from reflex_base.components.component import Component, ComponentNamespace, field
 from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.event import EventHandler, no_args_event_spec, passthrough_event_spec
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
-from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import (
-    RadixThemesComponent,
-    RadixThemesTriggerComponent,
+from reflex_components_radix._radix_classes import (
+    dialog_content_classes,
+    dialog_overlay_classes,
+)
+from reflex_components_radix._variants import cn
+from reflex_components_radix.primitives.dialog import (
+    DialogClose as _PrimitiveDialogClose,
+    DialogContent as _PrimitiveDialogContent,
+    DialogDescription as _PrimitiveDialogDescription,
+    DialogOverlay as _PrimitiveDialogOverlay,
+    DialogPortal as _PrimitiveDialogPortal,
+    DialogRoot as _PrimitiveDialogRoot,
+    DialogTitle as _PrimitiveDialogTitle,
+    DialogTrigger as _PrimitiveDialogTrigger,
 )
 
 
-class DialogRoot(RadixThemesComponent):
+class DialogRoot(_PrimitiveDialogRoot):
     """Root component for Dialog."""
 
-    tag = "Dialog.Root"
-
-    open: Var[bool] = field(doc="The controlled open state of the dialog.")
-
-    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(
-        doc="Fired when the open state changes."
-    )
-
-    default_open: Var[bool] = field(
-        doc="The open state of the dialog when it is initially rendered. Use when you do not need to control its open state."
-    )
+    open: Var[bool] = field(doc="Controlled open state")
+    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(doc="Open change.")
+    default_open: Var[bool] = field(doc="Initial open state")
 
 
-class DialogTrigger(RadixThemesTriggerComponent):
-    """Trigger an action or event, to open a Dialog modal."""
-
-    tag = "Dialog.Trigger"
+class DialogTrigger(_PrimitiveDialogTrigger):
+    """Button that opens the dialog."""
 
     _memoization_mode = MemoizationMode(recursive=False)
 
 
-class DialogTitle(RadixThemesComponent):
-    """Title component to display inside a Dialog modal."""
+class DialogTitle(_PrimitiveDialogTitle):
+    """Dialog title."""
 
-    tag = "Dialog.Title"
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a dialog title.
 
+        Args:
+            *children: Title content.
+            **props: Standard props.
 
-class DialogContent(elements.Div, RadixThemesComponent):
-    """Content component to display inside a Dialog modal."""
-
-    tag = "Dialog.Content"
-
-    size: Var[Responsive[Literal["1", "2", "3", "4"]]] = field(
-        doc='DialogContent size "1" - "4"'
-    )
-
-    on_open_auto_focus: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the dialog is opened."
-    )
-
-    on_close_auto_focus: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the dialog is closed."
-    )
-
-    on_escape_key_down: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the escape key is pressed."
-    )
-
-    on_pointer_down_outside: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the pointer is down outside the dialog."
-    )
-
-    on_interact_outside: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the pointer interacts outside the dialog."
-    )
+        Returns:
+            The title component.
+        """
+        existing = props.pop("class_name", "")
+        props["class_name"] = cn(
+            "text-lg font-semibold text-[var(--gray-12)] mb-1", existing,
+        )
+        return super().create(*children, **props)
 
 
-class DialogDescription(RadixThemesComponent):
-    """Description component to display inside a Dialog modal."""
+class DialogContent(_PrimitiveDialogContent):
+    """Dialog content panel — auto-wraps in Portal + Overlay."""
 
-    tag = "Dialog.Description"
+    size: Var[Responsive[Literal["1", "2", "3", "4"]]] = field(doc='Size "1"-"4"')
+
+    on_open_auto_focus: EventHandler[no_args_event_spec] = field(doc="Open focus.")
+    on_close_auto_focus: EventHandler[no_args_event_spec] = field(doc="Close focus.")
+    on_escape_key_down: EventHandler[no_args_event_spec] = field(doc="Escape down.")
+    on_pointer_down_outside: EventHandler[no_args_event_spec] = field(doc="Pointer down outside.")
+    on_interact_outside: EventHandler[no_args_event_spec] = field(doc="Interact outside.")
+
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create dialog content wrapped in Portal + Overlay.
+
+        Args:
+            *children: Dialog body.
+            **props: standard content props.
+
+        Returns:
+            The content component (already inside a portal/overlay).
+        """
+        existing = props.pop("class_name", "")
+        props.pop("size", None)
+        props["class_name"] = cn(dialog_content_classes(), existing)
+        content = super().create(*children, **props)
+        return _PrimitiveDialogPortal.create(
+            _PrimitiveDialogOverlay.create(class_name=dialog_overlay_classes()),
+            content,
+        )
 
 
-class DialogClose(RadixThemesTriggerComponent):
-    """Close button component to close an open Dialog modal."""
+class DialogDescription(_PrimitiveDialogDescription):
+    """Dialog description."""
 
-    tag = "Dialog.Close"
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a dialog description.
+
+        Args:
+            *children: Description content.
+            **props: Standard props.
+
+        Returns:
+            The description component.
+        """
+        existing = props.pop("class_name", "")
+        props["class_name"] = cn(
+            "text-sm text-[var(--gray-11)] mb-3", existing,
+        )
+        return super().create(*children, **props)
+
+
+class DialogClose(_PrimitiveDialogClose):
+    """Close button."""
 
 
 class Dialog(ComponentNamespace):
