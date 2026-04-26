@@ -1,23 +1,26 @@
-"""Components for rendering heading.
+"""Link — semantic anchor with React Router / Astro target awareness.
 
-https://www.radix-ui.com/themes/docs/theme/typography
+Public API matches the original Radix Themes Link plus the existing
+``is_external`` / target-aware routing logic. Tailwind utilities replace
+the ``@radix-ui/themes`` styling.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, ClassVar, Literal
 
 from reflex_base.components.component import Component, MemoizationLeaf, field
 from reflex_base.utils.imports import ImportDict, ImportVar
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
-from reflex_components_core.core.colors import color
 from reflex_components_core.core.cond import cond
 from reflex_components_core.core.markdown_component_map import MarkdownComponentMap
 from reflex_components_core.el.elements.inline import A
 from reflex_components_core.react_router.dom import ReactRouterLink
 
-from reflex_components_radix.themes.base import LiteralAccentColor, RadixThemesComponent
+from reflex_components_radix._radix_classes import link_classes
+from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import LiteralAccentColor
 
 from .base import LiteralTextSize, LiteralTextTrim, LiteralTextWeight
 
@@ -27,38 +30,21 @@ LiteralLinkUnderline = Literal["auto", "hover", "always", "none"]
 _KNOWN_REACT_ROUTER_LINK_PROPS = frozenset(ReactRouterLink.get_props())
 
 
-class Link(RadixThemesComponent, A, MemoizationLeaf, MarkdownComponentMap):
+class Link(A, MemoizationLeaf, MarkdownComponentMap):
     """A semantic element for navigation between pages."""
 
-    tag = "Link"
+    tag = "a"
 
-    as_child: Var[bool] = field(
-        doc="Change the default rendered element for the one passed as a child, merging their props and behavior."
-    )
-
+    as_child: Var[bool] = field(doc="Render as child")
     size: Var[Responsive[LiteralTextSize]] = field(doc='Text size: "1" - "9"')
+    weight: Var[Responsive[LiteralTextWeight]] = field(doc='Thickness: light|regular|medium|bold')
+    trim: Var[Responsive[LiteralTextTrim]] = field(doc='Trim: normal|start|end|both')
+    underline: Var[LiteralLinkUnderline] = field(doc='Underline: auto|hover|always|none')
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    high_contrast: Var[bool] = field(doc="Higher contrast variant")
+    is_external: Var[bool] = field(doc="If True, opens in a new tab")
 
-    weight: Var[Responsive[LiteralTextWeight]] = field(
-        doc='Thickness of text: "light" | "regular" | "medium" | "bold"'
-    )
-
-    trim: Var[Responsive[LiteralTextTrim]] = field(
-        doc='Removes the leading trim space: "normal" | "start" | "end" | "both"'
-    )
-
-    underline: Var[LiteralLinkUnderline] = field(
-        doc='Sets the visibility of the underline affordance: "auto" | "hover" | "always" | "none"'
-    )
-
-    color_scheme: Var[LiteralAccentColor] = field(
-        doc="Overrides the accent color inherited from the Theme."
-    )
-
-    high_contrast: Var[bool] = field(
-        doc="Whether to render the text with higher contrast color"
-    )
-
-    is_external: Var[bool] = field(doc="If True, the link will open in a new tab")
+    _rename_props: ClassVar[dict[str, str]] = {"colorScheme": "data-accent-color"}
 
     def add_imports(self) -> ImportDict:
         """Add imports for the Link component.
@@ -76,7 +62,7 @@ class Link(RadixThemesComponent, A, MemoizationLeaf, MarkdownComponentMap):
         }
 
     @classmethod
-    def create(cls, *children, **props) -> Component:
+    def create(cls, *children: Any, **props: Any) -> Component:
         """Create a Link component.
 
         Args:
@@ -84,16 +70,26 @@ class Link(RadixThemesComponent, A, MemoizationLeaf, MarkdownComponentMap):
             **props: The props of the component.
 
         Returns:
-            Component: The link component
+            The link component.
 
         Raises:
-            ValueError: in case of missing children
+            ValueError: If a non-empty href is provided without children.
         """
-        props.setdefault("_hover", {"color": color("accent", 8)})
+        underline = props.pop("underline", None)
+        existing = props.pop("class_name", "")
+        selections: dict[str, str] = {}
+        if isinstance(underline, str):
+            selections["underline"] = underline
+        elif underline is not None:
+            props["underline"] = underline
+        for key in ("size", "weight"):
+            value = props.pop(key, None)
+            if value is not None:
+                props[key] = value
+        props["class_name"] = cn(link_classes(**selections), existing)
+
         href = props.get("href")
-
         is_external = props.pop("is_external", None)
-
         if is_external is not None:
             props["target"] = cond(is_external, "_blank", "")
 
@@ -106,30 +102,21 @@ class Link(RadixThemesComponent, A, MemoizationLeaf, MarkdownComponentMap):
                 from reflex_base.config import get_config
 
                 if (config := get_config()).frontend_target == "astro":
-                    # Astro target: rx.link compiles to a plain <a href>;
-                    # no React Router involvement, no inner A wrapper. The
-                    # Radix Link IS an <a>, so we just keep ``href`` on it.
                     for unsupported in _KNOWN_REACT_ROUTER_LINK_PROPS - {
-                        "href",
-                        "rel",
-                        "target",
+                        "href", "rel", "target",
                     }:
                         props.pop(unsupported, None)
                     if isinstance(href_value := props.get("href"), str):
                         props["href"] = config.resolve_internal_link_href(href_value)
                     return super().create(*children, **props)
 
-                # Extract props for the ReactRouterLink, the rest go to the Link/A element.
-                react_router_link_props = {}
+                react_router_link_props: dict[str, Any] = {}
                 for prop in props.copy():
                     if prop in _KNOWN_REACT_ROUTER_LINK_PROPS:
                         react_router_link_props[prop] = props.pop(prop)
 
-                react_router_link_props["to"] = react_router_link_props.pop(
-                    "href", href
-                )
+                react_router_link_props["to"] = react_router_link_props.pop("href", href)
 
-                # If user does not use `as_child`, by default we render using react_router_link to avoid page refresh during internal navigation
                 return super().create(
                     ReactRouterLink.create(*children, **react_router_link_props),
                     as_child=True,

@@ -1,55 +1,65 @@
-"""Components for rendering heading.
+"""Heading — Tailwind-styled heading element.
 
-https://www.radix-ui.com/themes/docs/theme/typography
+Public API matches the original Radix Themes ``Heading``. Renders as
+a plain ``<h1>`` (or whatever ``as_`` specifies) with Tailwind classes
+referencing Radix's CSS variables.
 """
 
 from __future__ import annotations
 
-from reflex_base.components.component import field
+from typing import Any, ClassVar
+
+from reflex_base.components.component import Component, field
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.core.markdown_component_map import MarkdownComponentMap
 from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import LiteralAccentColor, RadixThemesComponent
+from reflex_components_radix._radix_classes import heading_classes
+from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import LiteralAccentColor
 
 from .base import LiteralTextAlign, LiteralTextSize, LiteralTextTrim, LiteralTextWeight
 
 
-class Heading(elements.H1, RadixThemesComponent, MarkdownComponentMap):
-    """A foundational text primitive based on the <span> element."""
+class Heading(elements.H1, MarkdownComponentMap):
+    """A foundational heading primitive based on the <h1>...<h6> elements."""
 
-    tag = "Heading"
+    tag = "h1"
 
-    as_child: Var[bool] = field(
-        doc="Change the default rendered element for the one passed as a child, merging their props and behavior."
-    )
-
-    as_: Var[str] = field(
-        doc="Change the default rendered element into a semantically appropriate alternative (cannot be used with asChild)"
-    )
+    as_child: Var[bool] = field(doc="Render as child element merging props")
+    as_: Var[str] = field(doc="Override semantic element (h1..h6, span, etc.)")
 
     size: Var[Responsive[LiteralTextSize]] = field(doc='Text size: "1" - "9"')
+    weight: Var[Responsive[LiteralTextWeight]] = field(doc='Thickness: light|regular|medium|bold')
+    align: Var[Responsive[LiteralTextAlign]] = field(doc='Alignment: left|center|right')
+    trim: Var[Responsive[LiteralTextTrim]] = field(doc='Trim: normal|start|end|both')
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    high_contrast: Var[bool] = field(doc="Higher contrast variant")
 
-    weight: Var[Responsive[LiteralTextWeight]] = field(
-        doc='Thickness of text: "light" | "regular" | "medium" | "bold"'
-    )
+    _rename_props: ClassVar[dict[str, str]] = {"colorScheme": "data-accent-color"}
 
-    align: Var[Responsive[LiteralTextAlign]] = field(
-        doc='Alignment of text in element: "left" | "center" | "right"'
-    )
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a heading with Tailwind classes from size/weight/align.
 
-    trim: Var[Responsive[LiteralTextTrim]] = field(
-        doc='Removes the leading trim space: "normal" | "start" | "end" | "both"'
-    )
+        Args:
+            *children: Heading content.
+            **props: Standard heading props.
 
-    color_scheme: Var[LiteralAccentColor] = field(
-        doc="Overrides the accent color inherited from the Theme."
-    )
-
-    high_contrast: Var[bool] = field(
-        doc="Whether to render the text with higher contrast color"
-    )
+        Returns:
+            The heading component.
+        """
+        existing = props.pop("class_name", "")
+        selections: dict[str, str] = {}
+        for key in ("size", "weight", "align"):
+            value = props.pop(key, None)
+            if isinstance(value, str):
+                selections[key] = value
+            elif value is not None:
+                props[key] = value
+        props["class_name"] = cn(heading_classes(**selections), existing)
+        return super().create(*children, **props)
 
 
 heading = Heading.create

@@ -1,16 +1,14 @@
-"""Declarative layout and common spacing props."""
+"""Box — fundamental layout primitive (plain ``<div>``)."""
 
 from __future__ import annotations
 
 from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import RadixThemesComponent
 
+class Box(elements.Div):
+    """A fundamental layout building block, based on the ``<div>`` element."""
 
-class Box(elements.Div, RadixThemesComponent):
-    """A fundamental layout building block, based on `div` element."""
-
-    tag = "Box"
+    tag = "div"
 
 
 box = Box.create

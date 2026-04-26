@@ -1,56 +1,104 @@
-"""Declarative layout and common spacing props."""
+"""Flex — declarative flexbox layout, Tailwind-styled."""
 
 from __future__ import annotations
 
-from typing import ClassVar, Literal
+from typing import Any, Literal
 
-from reflex_base.components.component import field
+from reflex_base.components.component import Component, field
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.el import elements
 
+from reflex_components_radix._variants import cn
 from reflex_components_radix.themes.base import (
     LiteralAlign,
     LiteralJustify,
     LiteralSpacing,
-    RadixThemesComponent,
 )
 
 LiteralFlexDirection = Literal["row", "column", "row-reverse", "column-reverse"]
 LiteralFlexWrap = Literal["nowrap", "wrap", "wrap-reverse"]
 
 
-class Flex(elements.Div, RadixThemesComponent):
+_DIRECTION = {
+    "row": "flex-row",
+    "column": "flex-col",
+    "row-reverse": "flex-row-reverse",
+    "column-reverse": "flex-col-reverse",
+}
+_ALIGN = {
+    "start": "items-start",
+    "center": "items-center",
+    "end": "items-end",
+    "baseline": "items-baseline",
+    "stretch": "items-stretch",
+}
+_JUSTIFY = {
+    "start": "justify-start",
+    "center": "justify-center",
+    "end": "justify-end",
+    "between": "justify-between",
+}
+_WRAP = {
+    "nowrap": "flex-nowrap",
+    "wrap": "flex-wrap",
+    "wrap-reverse": "flex-wrap-reverse",
+}
+
+
+def _spacing_class(spacing: str) -> str:
+    return f"gap-[var(--space-{spacing})]"
+
+
+class Flex(elements.Div):
     """Component for creating flex layouts."""
 
-    tag = "Flex"
+    tag = "div"
 
-    as_child: Var[bool] = field(
-        doc="Change the default rendered element for the one passed as a child, merging their props and behavior."
-    )
-
+    as_child: Var[bool] = field(doc="Render as child")
     direction: Var[Responsive[LiteralFlexDirection]] = field(
-        doc='How child items are laid out: "row" | "column" | "row-reverse" | "column-reverse"'
+        doc='Direction: row|column|row-reverse|column-reverse'
     )
-
     align: Var[Responsive[LiteralAlign]] = field(
-        doc='Alignment of children along the main axis: "start" | "center" | "end" | "baseline" | "stretch"'
+        doc='Cross-axis alignment: start|center|end|baseline|stretch'
     )
-
     justify: Var[Responsive[LiteralJustify]] = field(
-        doc='Alignment of children along the cross axis: "start" | "center" | "end" | "between"'
+        doc='Main-axis alignment: start|center|end|between'
     )
+    wrap: Var[Responsive[LiteralFlexWrap]] = field(doc='Wrap: nowrap|wrap|wrap-reverse')
+    spacing: Var[Responsive[LiteralSpacing]] = field(doc='Gap: "0" - "9"')
 
-    wrap: Var[Responsive[LiteralFlexWrap]] = field(
-        doc='Whether children should wrap when they reach the end of their container: "nowrap" | "wrap" | "wrap-reverse"'
-    )
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a flex container.
 
-    spacing: Var[Responsive[LiteralSpacing]] = field(
-        doc='Gap between children: "0" - "9"'
-    )
+        Args:
+            *children: Flex children.
+            **props: direction/align/justify/wrap/spacing + standard div props.
 
-    # Reflex maps the "spacing" prop to "gap" prop.
-    _rename_props: ClassVar[dict[str, str]] = {"spacing": "gap"}
+        Returns:
+            The flex component.
+        """
+        existing = props.pop("class_name", "")
+        parts = ["flex"]
+        for key, mapping in (
+            ("direction", _DIRECTION),
+            ("align", _ALIGN),
+            ("justify", _JUSTIFY),
+            ("wrap", _WRAP),
+        ):
+            value = props.pop(key, None)
+            if isinstance(value, str):
+                parts.append(mapping[value])
+            elif value is not None:
+                props[key] = value
+        spacing = props.pop("spacing", None)
+        if isinstance(spacing, str):
+            parts.append(_spacing_class(spacing))
+        elif spacing is not None:
+            props["spacing"] = spacing
+        props["class_name"] = cn(" ".join(parts), existing)
+        return super().create(*children, **props)
 
 
 flex = Flex.create
