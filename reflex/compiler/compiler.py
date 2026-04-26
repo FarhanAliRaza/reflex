@@ -46,7 +46,7 @@ from reflex.utils import console, frontend_skeleton, path_ops, prerequisites
 from reflex.utils.exec import get_compile_context, is_prod_mode
 from reflex.utils.prerequisites import get_web_dir
 
-RADIX_THEMES_STYLESHEET = "@radix-ui/themes/styles.css"
+RADIX_THEMES_STYLESHEET = "@radix-ui/themes/tokens.css"
 
 
 def _set_progress_total(
