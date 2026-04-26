@@ -1,19 +1,26 @@
 """Tailwind theme preflight for the shadcn-style components.
 
-Returns the minimal CSS string the user inlines into their app stylesheet.
-Defines the CSS variables every shadcn component references
-(``--background``, ``--foreground``, ``--primary``, ``--border``, …) and
-the ``.dark`` overrides. Total uncompressed size: ~3 KB.
+The shadcn semantic tokens (``--primary``, ``--secondary``, ``--muted``,
+``--accent``, ``--destructive``, ``--background``, ``--foreground``,
+``--border``, ``--input``, ``--ring``) are aliased to the same
+``--accent-*`` / ``--gray-*`` scale Radix Themes already emits on
+``[data-accent-color]`` / ``[data-gray-color]``. That means a user's
+``rx.theme(accent_color="violet")`` automatically tints every shadcn
+button, card, etc., with **no extra CSS** beyond the small alias block
+defined here.
 
-Usage with ``TailwindV4Plugin``:
+Total uncompressed size: ~2 KB. Variables are stored as raw colors
+(e.g. ``var(--accent-9)``) rather than HSL channel triplets so the
+``hsl(var(--primary))`` indirection used by stock shadcn templates is
+replaced with direct ``background-color: var(--primary)``. The Tailwind
+theme exported by :func:`shadcn_tailwind_theme` does this mapping.
 
->>> from reflex_components_shadcn import shadcn_global_css
->>> custom_css_path = "assets/shadcn-theme.css"
->>> # Write shadcn_global_css() to that file at build time, then
->>> # include it in stylesheets=[...] on rx.App.
+Usage::
 
-The variables match shadcn/ui's reference theme defaults so any
-documentation example or third-party shadcn block drops in unchanged.
+    from reflex_components_shadcn import shadcn_global_css
+    custom_css_path = "assets/shadcn-theme.css"
+    # Write shadcn_global_css() to that file at build time, then
+    # include it in stylesheets=[...] on rx.App.
 """
 
 from __future__ import annotations
@@ -23,130 +30,115 @@ from functools import cache
 
 @cache
 def shadcn_global_css() -> str:
-    """Return the shadcn theme preflight CSS.
+    """Return the shadcn semantic-token alias CSS.
+
+    Maps the shadcn semantic tokens (``--primary``, ``--secondary``,
+    etc.) onto the Radix accent / gray scales so a single
+    ``rx.theme(accent_color=...)`` call drives both component families.
 
     Returns:
-        The CSS string. Contains:
-        - ``@layer base`` token definitions for the light theme.
-        - ``.dark`` overrides for the dark theme.
-        - A short reset for ``body`` / ``html`` to apply the tokens.
-
-        Tailwind utilities like ``bg-primary`` / ``text-foreground``
-        consume these variables via the Tailwind config exposed by
-        :func:`shadcn_tailwind_theme`.
+        CSS string emitting the alias variables on ``:root``. Pair with
+        the Tailwind theme returned by :func:`shadcn_tailwind_theme`.
     """
     return r""":root {
-  --background: 0 0% 100%;
-  --foreground: 240 10% 3.9%;
-  --card: 0 0% 100%;
-  --card-foreground: 240 10% 3.9%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 240 10% 3.9%;
-  --primary: 240 5.9% 10%;
-  --primary-foreground: 0 0% 98%;
-  --secondary: 240 4.8% 95.9%;
-  --secondary-foreground: 240 5.9% 10%;
-  --muted: 240 4.8% 95.9%;
-  --muted-foreground: 240 3.8% 46.1%;
-  --accent: 240 4.8% 95.9%;
-  --accent-foreground: 240 5.9% 10%;
-  --destructive: 0 84.2% 60.2%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 240 5.9% 90%;
-  --input: 240 5.9% 90%;
-  --ring: 240 5.9% 10%;
-  --radius: 0.5rem;
-}
+  --primary: var(--accent-9);
+  --primary-foreground: var(--accent-contrast);
+  --primary-hover: var(--accent-10);
 
-.dark {
-  --background: 240 10% 3.9%;
-  --foreground: 0 0% 98%;
-  --card: 240 10% 3.9%;
-  --card-foreground: 0 0% 98%;
-  --popover: 240 10% 3.9%;
-  --popover-foreground: 0 0% 98%;
-  --primary: 0 0% 98%;
-  --primary-foreground: 240 5.9% 10%;
-  --secondary: 240 3.7% 15.9%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 240 3.7% 15.9%;
-  --muted-foreground: 240 5% 64.9%;
-  --accent: 240 3.7% 15.9%;
-  --accent-foreground: 0 0% 98%;
-  --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 240 3.7% 15.9%;
-  --input: 240 3.7% 15.9%;
-  --ring: 240 4.9% 83.9%;
-}
+  --secondary: var(--accent-3);
+  --secondary-foreground: var(--accent-11);
+  --secondary-hover: var(--accent-4);
 
-* {
-  border-color: hsl(var(--border));
-}
+  --muted: var(--gray-3);
+  --muted-foreground: var(--gray-11);
 
-body {
-  background-color: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font-feature-settings: "rlig" 1, "calt" 1;
+  --accent: var(--accent-3);
+  --accent-foreground: var(--accent-11);
+  --accent-hover: var(--accent-4);
+
+  --destructive: var(--red-9);
+  --destructive-foreground: white;
+  --destructive-hover: var(--red-10);
+
+  --background: var(--color-background);
+  --foreground: var(--gray-12);
+
+  --card: var(--color-panel);
+  --card-foreground: var(--gray-12);
+
+  --popover: var(--color-panel-solid);
+  --popover-foreground: var(--gray-12);
+
+  --border: var(--gray-a6);
+  --input: var(--gray-a6);
+  --ring: var(--accent-8);
+
+  --radius: var(--radius-3);
+  --radius-sm: var(--radius-2);
+  --radius-md: var(--radius-3);
+  --radius-lg: var(--radius-4);
 }
 """
 
 
 @cache
 def shadcn_tailwind_theme() -> dict:
-    """Return the Tailwind theme extension that maps utilities to the variables.
+    """Return the Tailwind ``theme.extend`` mapping utilities to the alias variables.
 
-    Drop-in for ``rx.plugins.TailwindV4Plugin(theme=...)`` or copy into the
-    user's existing ``tailwind.config`` ``extend.colors`` block. Adding
-    these mappings is what makes ``bg-primary``, ``text-foreground``,
-    etc. resolve against the CSS variables defined by
-    :func:`shadcn_global_css`.
+    Drop into ``rx.plugins.TailwindV4Plugin(theme=...)`` (or copy into
+    the user's existing tailwind config). The mappings here make
+    ``bg-primary``, ``text-foreground``, ``border-input`` etc. resolve
+    against the variables defined in :func:`shadcn_global_css`, which
+    in turn alias to Radix's accent / gray scales.
 
     Returns:
-        A Tailwind ``theme.extend`` dict with the shadcn color/border-radius
-        tokens.
+        Tailwind ``theme.extend`` dict.
     """
     return {
         "extend": {
             "colors": {
-                "border": "hsl(var(--border))",
-                "input": "hsl(var(--input))",
-                "ring": "hsl(var(--ring))",
-                "background": "hsl(var(--background))",
-                "foreground": "hsl(var(--foreground))",
+                "border": "var(--border)",
+                "input": "var(--input)",
+                "ring": "var(--ring)",
+                "background": "var(--background)",
+                "foreground": "var(--foreground)",
                 "primary": {
-                    "DEFAULT": "hsl(var(--primary))",
-                    "foreground": "hsl(var(--primary-foreground))",
+                    "DEFAULT": "var(--primary)",
+                    "foreground": "var(--primary-foreground)",
+                    "hover": "var(--primary-hover)",
                 },
                 "secondary": {
-                    "DEFAULT": "hsl(var(--secondary))",
-                    "foreground": "hsl(var(--secondary-foreground))",
+                    "DEFAULT": "var(--secondary)",
+                    "foreground": "var(--secondary-foreground)",
+                    "hover": "var(--secondary-hover)",
                 },
                 "destructive": {
-                    "DEFAULT": "hsl(var(--destructive))",
-                    "foreground": "hsl(var(--destructive-foreground))",
+                    "DEFAULT": "var(--destructive)",
+                    "foreground": "var(--destructive-foreground)",
+                    "hover": "var(--destructive-hover)",
                 },
                 "muted": {
-                    "DEFAULT": "hsl(var(--muted))",
-                    "foreground": "hsl(var(--muted-foreground))",
+                    "DEFAULT": "var(--muted)",
+                    "foreground": "var(--muted-foreground)",
                 },
                 "accent": {
-                    "DEFAULT": "hsl(var(--accent))",
-                    "foreground": "hsl(var(--accent-foreground))",
+                    "DEFAULT": "var(--accent)",
+                    "foreground": "var(--accent-foreground)",
+                    "hover": "var(--accent-hover)",
                 },
                 "popover": {
-                    "DEFAULT": "hsl(var(--popover))",
-                    "foreground": "hsl(var(--popover-foreground))",
+                    "DEFAULT": "var(--popover)",
+                    "foreground": "var(--popover-foreground)",
                 },
                 "card": {
-                    "DEFAULT": "hsl(var(--card))",
-                    "foreground": "hsl(var(--card-foreground))",
+                    "DEFAULT": "var(--card)",
+                    "foreground": "var(--card-foreground)",
                 },
             },
             "borderRadius": {
-                "lg": "var(--radius)",
-                "md": "calc(var(--radius) - 2px)",
-                "sm": "calc(var(--radius) - 4px)",
+                "lg": "var(--radius-lg)",
+                "md": "var(--radius-md)",
+                "sm": "var(--radius-sm)",
             },
         },
     }

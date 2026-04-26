@@ -1,9 +1,17 @@
 """shadcn-style button component.
 
-Compiles to a plain ``<button>`` element with Tailwind utility classes.
-No third-party CSS, no Radix Themes import. Variants and sizes resolve at
-Python compile time so the JSX output is a single class-name string the
-Tailwind JIT can pick up.
+Compiles to a plain ``<button>`` with Tailwind utilities only — no
+``@radix-ui/themes`` precompiled CSS. Variant / size resolve at Python
+compile time so the JSX is a single class-name string the Tailwind JIT
+picks up.
+
+The variants reference Radix's ``--accent-*`` / ``--gray-*`` CSS
+variables via Tailwind v4 arbitrary-value syntax (``bg-[var(--accent-9)]``).
+Those variables are already emitted on the ``[data-accent-color]`` /
+``[data-gray-color]`` selectors that Radix Themes' tokens.css writes
+once at the page root, so the button automatically tints to whatever
+``accent_color`` the user configured on ``rx.theme(...)`` — no extra
+Tailwind config required, no extra CSS shipped.
 """
 
 from __future__ import annotations
@@ -18,38 +26,49 @@ from ._variants import cn, variants
 LiteralVariant = Literal[
     "default", "destructive", "outline", "secondary", "ghost", "link"
 ]
-LiteralSize = Literal["default", "sm", "lg", "icon"]
+LiteralSize = Literal["default", "sm", "lg", "xl", "icon"]
 
 
 _button_classes = variants(
     base=(
         "inline-flex items-center justify-center gap-2 whitespace-nowrap "
-        "rounded-md text-sm font-medium transition-colors "
-        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring "
-        "disabled:pointer-events-none disabled:opacity-50"
+        "rounded-(--radius-3) text-sm font-medium transition-colors "
+        "focus-visible:outline-none focus-visible:ring-2 "
+        "focus-visible:ring-[var(--accent-8)] "
+        "disabled:pointer-events-none disabled:opacity-50 cursor-pointer"
     ),
     defaults={"variant": "default", "size": "default"},
     variant={
-        "default": ("bg-primary text-primary-foreground shadow hover:bg-primary/90"),
+        "default": (
+            "bg-[var(--accent-9)] text-[var(--accent-contrast)] "
+            "shadow-sm hover:bg-[var(--accent-10)]"
+        ),
         "destructive": (
-            "bg-destructive text-destructive-foreground shadow-sm "
-            "hover:bg-destructive/90"
+            "bg-[var(--red-9)] text-white shadow-sm hover:bg-[var(--red-10)]"
         ),
         "outline": (
-            "border border-input bg-background shadow-sm "
-            "hover:bg-accent hover:text-accent-foreground"
+            "border border-[var(--accent-a8)] bg-transparent "
+            "text-[var(--accent-11)] "
+            "hover:bg-[var(--accent-a3)]"
         ),
         "secondary": (
-            "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80"
+            "bg-[var(--accent-3)] text-[var(--accent-11)] "
+            "hover:bg-[var(--accent-4)]"
         ),
-        "ghost": "hover:bg-accent hover:text-accent-foreground",
-        "link": "text-primary underline-offset-4 hover:underline",
+        "ghost": (
+            "bg-transparent text-[var(--accent-11)] hover:bg-[var(--accent-a3)]"
+        ),
+        "link": (
+            "bg-transparent text-[var(--accent-11)] "
+            "underline-offset-4 hover:underline shadow-none"
+        ),
     },
     size={
-        "default": "h-9 px-4 py-2",
-        "sm": "h-8 rounded-md px-3 text-xs",
-        "lg": "h-10 rounded-md px-8",
-        "icon": "h-9 w-9",
+        "default": "h-8 px-3 text-sm",
+        "sm": "h-6 px-2 text-xs",
+        "lg": "h-10 px-5 text-base",
+        "xl": "h-12 px-6 text-base",
+        "icon": "h-8 w-8",
     },
 )
 
