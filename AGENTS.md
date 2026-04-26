@@ -2,6 +2,26 @@
 
 Reflex: Python web **framework** compiling to React. Monorepo using uv workspace — main package in `reflex/`, sub-packages in `packages/`, docs site in `docs/`.
 
+## Frontend Targets And Render Modes (Astro Migration)
+
+Reflex generates a React frontend through one of two **frontend targets**, selected via `rx.Config(frontend_target=...)`:
+
+- `react_router` (default, current production target) — generates the today's React Router output. Public API and behavior are preserved during the migration.
+- `astro` — static-output target that generates one Astro page per Reflex route under `.web/src/pages/`, using Astro client islands for interactivity. No SSR adapters, no on-demand rendering.
+
+Astro pages have three **render modes**, set via `@rx.page(render_mode=...)`:
+
+- `static` — no Reflex runtime, 0 KiB first-party JS. State/event usage is a `CompileError`. For blog posts, docs pages, plain content.
+- `app` (default on the Astro target) — whole page compiles to one hydrated React root. Zero-migration default for existing Reflex apps. For dashboards and mostly-interactive routes.
+- `islands` — most of the page ships as HTML; only component-marked or signal-detected subtrees hydrate as separate islands. Use `rx.island(component, hydrate=..., client_only=...)` only to override the auto-placed boundary.
+
+Constraints to keep in mind when touching codegen:
+
+- `on_load` is only honored in `render_mode="app"`. The page decorator raises `CompileError` if combined with `static`/`islands`.
+- React Router target accepts `render_mode` for source compatibility but only honors `"app"`; `"static"`/`"islands"` warn and fall through.
+- The four React-Router-hardcoded surfaces enumerated in `ASTRO_MIGRATION_TASKS.md` (Master Task 1) are the only places allowed to reference React Router directly. `scripts/check_react_router_isolation.py` enforces this.
+- See `ASTRO_MIGRATION_TASKS.md` for the full migration checklist.
+
 ## Workflow
 
 1. **Plan first.** Ensure the task is well-defined before writing code. If unclear, work with the user to flesh out details. No sloppy/spaghetti code — every feature/fix must be clearly understood first.
@@ -27,7 +47,7 @@ uv run pre-commit run --all-files                                # all pre-commi
 
 ```
 reflex/                 # main framework package (app, state, compiler, components, utils, istate)
-packages/               # workspace sub-packages (reflex-base, reflex-components-*, reflex-docgen, reflex-ui)
+packages/               # workspace sub-packages (reflex-base, reflex-components-*, reflex-docgen, reflex-components-internal)
 tests/units/            # unit tests, mirrors source tree
 tests/integration/      # Selenium integration tests (run in dev+prod modes)
   tests_playwright/     # Playwright integration tests (preferred for new tests)
@@ -62,16 +82,22 @@ Apps as factory functions, run via `AppHarness`:
 ```python
 def SomeApp():
     import reflex as rx
+
     class State(rx.State):
         value: str = ""
+
     def index():
         return rx.box(rx.text(State.value))
+
     app = rx.App()
     app.add_page(index)
 
+
 @pytest.fixture(scope="module")
 def some_app(tmp_path_factory) -> Generator[AppHarness, None, None]:
-    with AppHarness.create(root=tmp_path_factory.mktemp("some_app"), app_source=SomeApp) as harness:
+    with AppHarness.create(
+        root=tmp_path_factory.mktemp("some_app"), app_source=SomeApp
+    ) as harness:
         yield harness
 ```
 
@@ -88,6 +114,7 @@ Reflex has downstream users — don't break them. Provide a fallback path during
 **Runtime warning** via `console.deprecate()`:
 ```python
 from reflex_base.utils import console
+
 console.deprecate(
     feature_name="OldFeature",
     reason="Use NewFeature instead.",
@@ -101,8 +128,10 @@ Set `deprecation_version` to the next dot version of the latest tag (`git fetch 
 ```python
 from __future__ import annotations
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from typing_extensions import deprecated
+
     @deprecated("Use new_method() instead")
     def old_method(self) -> str: ...
 ```

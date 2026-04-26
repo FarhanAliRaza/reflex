@@ -1,0 +1,14 @@
+{
+  "static": {
+    "js_gzip_bytes": 0,
+    "css_gzip_bytes": 32768
+  },
+  "app": {
+    "js_gzip_bytes": 204800,
+    "css_gzip_bytes": 81920
+  },
+  "islands": {
+    "js_gzip_bytes": 102400,
+    "css_gzip_bytes": 81920
+  }
+}

@@ -20,8 +20,8 @@
   "packages/reflex-components-core/src/reflex_components_core/core/helmet.pyi": "7fd81a99bde5b0ff94bb52523597fd5c",
   "packages/reflex-components-core/src/reflex_components_core/core/html.pyi": "753d6ae315369530dad450ed643f5be6",
   "packages/reflex-components-core/src/reflex_components_core/core/sticky.pyi": "ba60a7d9cba75b27a1133bd63a9fbd59",
-  "packages/reflex-components-core/src/reflex_components_core/core/upload.pyi": "17775edb94cc804686ae4cd873584810",
-  "packages/reflex-components-core/src/reflex_components_core/core/window_events.pyi": "cab827931770be082cd1598a9908abbc",
+  "packages/reflex-components-core/src/reflex_components_core/core/upload.pyi": "ac589d6237fe51414d536b9d70de5dec",
+  "packages/reflex-components-core/src/reflex_components_core/core/window_events.pyi": "5e1dcb1130bc8af282783fae329ae6a6",
   "packages/reflex-components-core/src/reflex_components_core/datadisplay/__init__.pyi": "c96fed4da42a13576d64f84e3c7cb25c",
   "packages/reflex-components-core/src/reflex_components_core/el/__init__.pyi": "f09129ddefb57ab4c7769c86dc9a3153",
   "packages/reflex-components-core/src/reflex_components_core/el/element.pyi": "ff68d843c5987d3f0d773a6367eb9c63",
@@ -61,7 +61,7 @@
   "packages/reflex-components-radix/src/reflex_components_radix/themes/components/avatar.pyi": "1671e796449b236386d8f53d33e42b2f",
   "packages/reflex-components-radix/src/reflex_components_radix/themes/components/badge.pyi": "9fde9929ca5197e0e1880bce9a08e926",
   "packages/reflex-components-radix/src/reflex_components_radix/themes/components/button.pyi": "e5d6387a93c74dafaa0d6f1719e08bac",
-  "packages/reflex-components-radix/src/reflex_components_radix/themes/components/callout.pyi": "09487ef45cf26edb0b7c1d6da5f097f0",
+  "packages/reflex-components-radix/src/reflex_components_radix/themes/components/callout.pyi": "31da62c4d8c1d459089aab32cd232feb",
   "packages/reflex-components-radix/src/reflex_components_radix/themes/components/card.pyi": "76afb58340c6be1f26b7b110473efa55",
   "packages/reflex-components-radix/src/reflex_components_radix/themes/components/checkbox.pyi": "6cbf013e21d7280118dfd7383998b3bf",
   "packages/reflex-components-radix/src/reflex_components_radix/themes/components/checkbox_cards.pyi": "63b4134246f68f9f556896d6ce194462",
@@ -118,7 +118,7 @@
   "packages/reflex-components-recharts/src/reflex_components_recharts/polar.pyi": "1979bb6c22bb7a0d3342b2d63fb19d74",
   "packages/reflex-components-recharts/src/reflex_components_recharts/recharts.pyi": "234407dbd466bf9c87d75ce979ab0e2d",
   "packages/reflex-components-sonner/src/reflex_components_sonner/toast.pyi": "2c5fadcc014056f041cd4d916137d9e7",
-  "reflex/__init__.pyi": "3a9bb8544cbc338ffaf0a5927d9156df",
+  "reflex/__init__.pyi": "62e558132ba43d6d9243c7caf1d48450",
   "reflex/components/__init__.pyi": "f39a2af77f438fa243c58c965f19d42e",
-  "reflex/experimental/memo.pyi": "2c119a0dfea362dcd8193786363cbc02"
+  "reflex/experimental/memo.pyi": "9946d9b757f7cef5f53d599194d6e50e"
 }
