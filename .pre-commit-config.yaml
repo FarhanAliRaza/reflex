@@ -30,6 +30,13 @@ repos:
     language: system
     name: update-pyi-files
     require_serial: true
+  - always_run: true
+    description: Verify react-router stays inside target-specific surfaces (Astro migration Master Task 1)
+    entry: python3 scripts/check_react_router_isolation.py
+    id: react-router-isolation
+    language: system
+    name: react-router-isolation
+    pass_filenames: false
   repo: local
 - hooks:
   - args:

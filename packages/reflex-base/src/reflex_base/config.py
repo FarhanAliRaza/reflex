@@ -181,6 +181,7 @@ class BaseConfig:
         plugins: List of plugins to use in the app.
         disable_plugins: List of plugin types to disable in the app.
         transport: The transport method for client-server communication.
+        frontend_target: The generated frontend target. "react_router" (default, current) or "astro" (static-output target with Astro client islands). Selects the codegen path for the .web/ output and the dev/build commands.
     """
 
     app_name: str
@@ -254,6 +255,8 @@ class BaseConfig:
     disable_plugins: list[type[Plugin]] = dataclasses.field(default_factory=list)
 
     transport: Literal["websocket", "polling"] = "websocket"
+
+    frontend_target: Literal["react_router", "astro"] = "react_router"
 
     # Whether to skip plugin checks.
     _skip_plugins_checks: bool = dataclasses.field(default=False, repr=False)

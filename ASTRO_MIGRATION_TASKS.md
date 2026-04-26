@@ -1,5 +1,52 @@
 # Astro Migration Master Tasks
 
+## Progress Log
+
+This file tracks the multi-phase Astro migration. Items marked `[x]` are
+landed; items marked `[ ]` are outstanding. Dated entries below capture
+foundational scaffolding shipped on the `astro-support-codex` branch.
+
+### 2026-04-26 — Foundational scaffolding (Phase A/Phase C cross-cutting)
+
+Implemented:
+
+- `rx.Config(frontend_target=...)` ([packages/reflex-base/src/reflex_base/config.py](packages/reflex-base/src/reflex_base/config.py)) — accepts `"react_router"` (default) and `"astro"`. Round-trips through env var (`REFLEX_FRONTEND_TARGET`).
+- `@rx.page(render_mode=...)` ([reflex/page.py](reflex/page.py)) — accepts `"static"`, `"app"`, `"islands"`. Validates the value at decorator time.
+- `CompileError` ([packages/reflex-base/src/reflex_base/utils/exceptions.py](packages/reflex-base/src/reflex_base/utils/exceptions.py)) — new exception type for Astro compile-time invariants.
+- `on_load` + non-`app` `render_mode` raises `CompileError` at decorator time.
+- `rx.island(component, hydrate=..., client_only=...)` ([packages/reflex-base/src/reflex_base/components/island.py](packages/reflex-base/src/reflex_base/components/island.py)) — explicit override API. Validates `hydrate` strategies/media mappings, rejects nested `rx.island(...)`. Page-mode-specific rejection still TODO (depends on the page emitter).
+- `Component` base class ([packages/reflex-base/src/reflex_base/components/component.py](packages/reflex-base/src/reflex_base/components/component.py)) gained four `ClassVar` hydration metadata fields: `requires_hydration`, `provides_hydrated_context`, `client_only`, `heavy_bundle_group`.
+- `HydratedComponent(Component)` convenience subclass for wrapper authors.
+- Target-aware `PackageJson.commands_for(target)`, `PackageJson.dependencies_for(target)`, `PackageJson.dev_dependencies_for(target)` ([packages/reflex-base/src/reflex_base/constants/installer.py](packages/reflex-base/src/reflex_base/constants/installer.py)). Astro target adds `astro`, `@astrojs/react`; both targets share `react`, `react-dom`, `socket.io-client`, `zustand`.
+- `Astro` constants namespace and `LITERAL_FRONTEND_TARGET` / `FRONTEND_TARGETS` exported from `reflex_base.constants` ([packages/reflex-base/src/reflex_base/constants/base.py](packages/reflex-base/src/reflex_base/constants/base.py)).
+- `ReactRouter.FRONTEND_LISTENING_REGEX` widened to also match Astro's "Local    http://..." dev-server line so `AppHarness` works against either target without changes.
+- `scripts/check_react_router_isolation.py` — CI grep check that enforces the four target-specific surfaces enumerated in Master Task 1; wired into `.pre-commit-config.yaml`.
+- `CLAUDE.md` / `AGENTS.md` top-level section explaining the two-target / three-mode model for coding-agent context.
+- Unit tests:
+  - `tests/units/test_page.py` — `render_mode` round-trip, validation, `on_load` interaction.
+  - `tests/units/test_config.py` — `frontend_target` default, round-trip, env-var override.
+  - `tests/units/reflex_base/components/test_island.py` — `rx.island(...)` validation matrix.
+  - `tests/units/reflex_base/components/test_hydration_metadata.py` — `Component` ClassVar defaults and `HydratedComponent`.
+  - `tests/units/reflex_base/constants/test_installer.py` — target-aware `PackageJson` accessors.
+  - `tests/units/reflex_base/constants/test_base.py` — `Astro` constants and dev-listening regex coverage.
+
+Verified:
+
+- 4022 unit tests pass (2 IPv6-environment-dependent failures in `tests/units/utils/test_processes.py` unrelated to this change).
+- `uv run python scripts/check_react_router_isolation.py` exits 0.
+- `uv run pyright reflex tests` clean for changed files (only pre-existing failure in `tests/units/docgen/test_class_and_component.py` remains).
+- `uv run ruff check reflex tests packages/reflex-base` clean for changed files.
+- `pyi_hashes.json` regenerated.
+
+True blockers / not started in this pass (require multi-day codegen work):
+
+- Phase A: Zustand runtime port of the React Router target's `state.js`/`context.js`/`useEventLoop`. Adds `zustand` to `dependencies` already; the actual rewrite of `context_template()` and `state.js` is the next significant chunk.
+- Phase B: Astro page emitter (`AstroPageEmitter` plugin), `astro.config.mjs` template, `.web/src/pages/<route>.astro` generation, layout, runtime bootstrap module, and the `MemoizeStatefulPlugin` extension that places island boundaries (Path A / Path B).
+- React Router target codegen still emits `routes.js` / `entry.client.js` and the Vite Safari plugin.
+- Per-page bundle budgets (Master Task 11), visual regression tooling (Master Task 11), CSS-per-island splitting (Master Task 9), inline head theme script (Master Task 9), `_redirects`/`vercel.json` host artifacts (Master Task 10), and migration guide / changelog (Master Task 12) all depend on the emitter landing first.
+
+These are not gap-fillable inside the current session — they require landing the Phase A Zustand port and the Phase B Astro emitter, both of which are large enough to need their own design rounds and adversarial review per `CLAUDE.md` workflow rule 1. The scaffolding above is the prerequisite that unblocks them.
+
 ## Context
 
 Client islands are the second lever on top of per-page entries. Once each page has its own entry, `render_mode="static"` removes page-wide React hydration from SEO/content pages, `render_mode="app"` keeps today's whole-page React behavior for interactive app routes, and `render_mode="islands"` carves individual hydrated components out of an otherwise static page.
@@ -50,16 +97,18 @@ Chosen direction:
 
 ## Master Task 1: Generated Frontend Targets
 
-- [ ] Add a frontend target abstraction:
+- [x] Add a frontend target abstraction:
   - `react_router`: current generated target, kept compatible.
   - `astro`: new static-output target.
   - target selection is explicit in config/CLI during migration.
-- [ ] Generate target-specific `package.json` commands and dependencies:
+  - **Done 2026-04-26:** `rx.Config(frontend_target=...)` accepts both values, defaults to `"react_router"`, env-var override `REFLEX_FRONTEND_TARGET`. Constants `LITERAL_FRONTEND_TARGET` and `FRONTEND_TARGETS` exported from `reflex_base.constants`.
+- [x] Generate target-specific `package.json` commands and dependencies:
   - React Router target keeps current `react-router dev --host` and `react-router build` commands.
   - Astro target uses `astro dev --host` and `astro build`.
   - React Router dependencies remain scoped to the React Router target.
   - Shared generated runtime adds `zustand` for both targets after Phase A.
   - Astro target adds `astro` and `@astrojs/react`.
+  - **Done 2026-04-26:** `PackageJson.commands_for(target)`, `dependencies_for(target)`, `dev_dependencies_for(target)`. Generator wiring still TODO in the compile loop.
 - [ ] Generate `astro.config.mjs` for the Astro target while preserving `react-router.config.js` for the React Router target.
   - Set Astro output to static.
   - Do not install or configure SSR adapters.
@@ -77,18 +126,21 @@ Chosen direction:
   - Generate one Astro entry per route so unrelated routes do not share first-load JS by default.
   - Preserve `public/`, assets copying, `env.json`, and `reflex.json`.
 - [ ] Update `reflex run`, `reflex export`, deploy, and frontend build helpers to branch by frontend target.
-  - AppHarness scope is narrow: the `<js_runtime> run dev` spawn at [reflex/testing.py:376-382](reflex/testing.py#L376-L382) is already target-agnostic. Only the startup regex at [packages/reflex-base/src/reflex_base/constants/base.py:170-178](packages/reflex-base/src/reflex_base/constants/base.py#L170-L178) needs to match Astro's dev-server output (`➜  Local    http://...`) in addition to the React Router form.
+  - **Partially done 2026-04-26:** AppHarness regex now matches Astro's `Local    http://...` form (combined regex in `reflex_base/constants/base.py`). `reflex run` / `reflex export` codegen branching still TODO.
   - Document dev-vs-prod differences in Astro island hydration and HMR boundaries.
-- [ ] Enumerate the four React-Router-hardcoded surfaces that must become target-aware. No other location in `reflex/` or `packages/reflex-base/` should reference React Router directly.
+- [x] Enumerate the four React-Router-hardcoded surfaces that must become target-aware. No other location in `reflex/` or `packages/reflex-base/` should reference React Router directly.
+  - **Done 2026-04-26:** allow-list lives in `scripts/check_react_router_isolation.py`; CI grep check below enforces it.
   - [packages/reflex-base/src/reflex_base/.templates/web/utils/state.js:9-13](packages/reflex-base/src/reflex_base/.templates/web/utils/state.js#L9-L13): `useLocation`, `useNavigate`, `useParams`, `useSearchParams` imported from `"react-router"`. Replace with a router adapter interface (see Master Task 5).
   - [packages/reflex-base/src/reflex_base/compiler/templates.py:206](packages/reflex-base/src/reflex_base/compiler/templates.py#L206): root template imports `Outlet` from `'react-router'`. Astro target emits a different root template with no `Outlet`.
   - [packages/reflex-base/src/reflex_base/constants/installer.py:107-108](packages/reflex-base/src/reflex_base/constants/installer.py#L107-L108): `PackageJson.Commands.DEV = "react-router dev --host"` and `EXPORT = "react-router build"`. These become target-aware (Astro uses `astro dev --host` / `astro build`).
   - [packages/reflex-base/src/reflex_base/constants/installer.py:126](packages/reflex-base/src/reflex_base/constants/installer.py#L126): `PackageJson.DEPENDENCIES` hardcodes `react-router`. Astro target replaces it with `astro` + `@astrojs/react`.
-- [ ] Add a CI grep check that fails if any non-target-specific module references `react-router` or `@react-router/*` after the refactor.
+- [x] Add a CI grep check that fails if any non-target-specific module references `react-router` or `@react-router/*` after the refactor.
+  - **Done 2026-04-26:** `scripts/check_react_router_isolation.py`, wired into `.pre-commit-config.yaml` as the `react-router-isolation` hook.
 
 ## Master Task 2: Astro Page Modes
 
-- [ ] Add `render_mode: Literal["static", "app", "islands"] = "app"` to the `rx.page` decorator in [reflex/page.py](reflex/page.py). Thread it through to the compilation context used by `compile_page` ([packages/reflex-base/src/reflex_base/plugins/compiler.py:276](packages/reflex-base/src/reflex_base/plugins/compiler.py#L276)).
+- [x] Add `render_mode: Literal["static", "app", "islands"] = "app"` to the `rx.page` decorator in [reflex/page.py](reflex/page.py). Thread it through to the compilation context used by `compile_page` ([packages/reflex-base/src/reflex_base/plugins/compiler.py:276](packages/reflex-base/src/reflex_base/plugins/compiler.py#L276)).
+  - **Done 2026-04-26 (decorator surface only):** `render_mode` accepted by `@rx.page` and stored in `DECORATED_PAGES`. Threading into `compile_page` waits on the Astro emitter; the React Router target ignores the value beyond storing it (see Master Task 12 fall-through behavior).
 - [ ] Per-mode output shape (Astro target):
   - `static`: emit `.web/src/pages/<route>.astro` with raw HTML for the rendered tree + `<script>` for the inline head theme setter. No React module import. No runtime.
   - `app` (default): emit `.web/src/pages/<route>.astro` containing one React component import rendered with `client:load`. That component is the page-root island and holds the full rendered tree, the Zustand runtime bootstrap, and `initialEvents` with `HYDRATE` + `onLoadInternalEvent()`.
@@ -102,6 +154,7 @@ Chosen direction:
   - `static`: raise `CompileError` with message pointing at the offending call site.
   - `app`: raise `CompileError` or warn-and-strip the wrapper (pick one; current plan leaves the choice open).
   - `islands`: allowed; merges with compiler-auto-placed islands. Options: `hydrate` ∈ `{"load", "idle", "visible"}` or `{"media": str}`; `client_only: bool`.
+  - **Partially done 2026-04-26:** `rx.island(...)` API and option validation landed in `packages/reflex-base/src/reflex_base/components/island.py` with full unit-test coverage (`hydrate` strategies, media mappings, `client_only`, nested-rejection). Per-mode rejection (`static`/`app`/`islands`) waits on the Astro page emitter so the compiler walk knows the page's `render_mode`.
 - [ ] `static`-mode rejection in the compiler walk: on a `render_mode="static"` page, any node whose tree signals match Path A is a `CompileError`. Error includes file, line, component class, and the offending var/trigger name. Implement as a plugin that runs before `MemoizeStatefulPlugin` on `static` pages.
 - [ ] React Router target behavior: `render_mode` is accepted but only `"app"` is honored. `"static"` and `"islands"` emit a `console.deprecate`-style warning ("Astro-only; compiling as 'app'") and fall through to the existing codegen path.
 - [ ] Navigation model (applies to `app` and `islands`):
@@ -247,7 +300,7 @@ Chosen direction:
 
 ## Master Task 7: Component Compatibility
 
-- [ ] Audit every component package for Astro/runtime assumptions:
+- [ ] Audit every component package for Astro/runtime assumptions: **(Not started in this pass; depends on the metadata declarations below.)**
   - core components
   - Radix
   - Lucide
@@ -265,12 +318,13 @@ Chosen direction:
   - hydrated interactive
   - browser-only `client:only="react"`
   - page-root-island only
-- [ ] Design compiler metadata so components can declare hydration/runtime requirements.
+- [x] Design compiler metadata so components can declare hydration/runtime requirements.
   - Add `ClassVar` attributes on the `Component` base class, alongside the existing class-level metadata fields `tag`, `library`, and `lib_dependencies` in [packages/reflex-base/src/reflex_base/components/component.py](packages/reflex-base/src/reflex_base/components/component.py). Note: `tag` and `library` are dataclass-style fields today, not `ClassVar` declarations — the new hydration metadata is the first case of class-level `ClassVar` state on `Component` beyond the existing `_is_tag_in_global_scope`.
   - Minimum fields: `requires_hydration: ClassVar[bool]`, `provides_hydrated_context: ClassVar[bool]`, `client_only: ClassVar[bool]`, and a `heavy_bundle_group: ClassVar[str | None]` for CSS/JS chunking.
   - Framework-audited first-party components (core, Radix, Lucide, Recharts, Plotly, DataEditor, Markdown/Shiki, Moment, ReactPlayer, GridJS, Sonner, internal/base) declare these values explicitly on each class as part of the audit above.
   - Keep end users writing Reflex apps out of this — a user composing existing components should never need to set these flags.
   - Provide a `HydratedComponent(Component)` convenience base class for wrapper authors, parallel to the existing `NoSSRComponent` pattern in [packages/reflex-base/src/reflex_base/components/component.py:2373](packages/reflex-base/src/reflex_base/components/component.py#L2373). A custom component wrapping a third-party React library that needs the runtime subclasses `HydratedComponent` (or sets `requires_hydration = True` directly). This is the same "wrapper authors opt in" ergonomics Reflex already uses for SSR safety.
+  - **Done 2026-04-26 (base-class surface):** all four `ClassVar` flags landed on `Component`; `HydratedComponent` convenience base added next to `NoSSRComponent`; covered by `tests/units/reflex_base/components/test_hydration_metadata.py`. Per-package audit values still TODO (Recharts/Radix/etc. classes still inherit the safe-default `False`).
 - [ ] Surface new ClassVar metadata in docgen and `.pyi` stubs.
   - Verify how `scripts/make_pyi.py` handles `ClassVar` attributes — `tag`/`library` are dataclass fields today, so there is no direct precedent for `ClassVar` defaults appearing in stubs.
   - Expected outcome: each component class's `.pyi` stub includes the declared `requires_hydration` / `provides_hydrated_context` / `client_only` / `heavy_bundle_group` values as class-level defaults.
@@ -317,11 +371,11 @@ Chosen direction:
 
 ## Master Task 8: Client Island API And Runtime Wiring
 
-- [ ] Position `rx.island(...)` as an `islands`-mode override, not a correctness requirement.
+- [ ] Position `rx.island(...)` as an `islands`-mode override, not a correctness requirement. **(API exists 2026-04-26; per-mode rejection waits on the page emitter.)**
   - `render_mode="static"` pages reject `rx.island(...)` at compile time (cannot hydrate in no-JS mode).
   - `render_mode="app"` pages (the zero-migration default) do not need `rx.island(...)`; the whole page is already one React root. `rx.island(...)` here is a compile error or warn-and-ignore — pick one and document.
   - `render_mode="islands"` pages auto-place islands via Path A (tree signals) and Path B (component metadata, Master Task 7). `rx.island(...)` is used only to change hydration strategy (`"idle"`/`"visible"`/media), widen a boundary to include sibling static content, or force `client_only` on a subtree the compiler would otherwise prerender.
-- [ ] Add the explicit client island wrapper API:
+- [x] Add the explicit client island wrapper API:
   - `rx.island(component, hydrate="load")`
   - `hydrate="idle"`
   - `hydrate="visible"`
@@ -329,6 +383,7 @@ Chosen direction:
   - `client_only=True | False` for browser-only components that cannot be rendered during the static build.
   - Default `hydrate` is `"load"` for correctness; users opt into `"idle"`, `"visible"`, or media-based hydration.
   - Default `client_only` is `False`; component metadata can force `client_only=True` for browser-only components (mirroring the existing `NoSSRComponent` pattern).
+  - **Done 2026-04-26:** `packages/reflex-base/src/reflex_base/components/island.py`; exposed as `rx.island`. Tests in `tests/units/reflex_base/components/test_island.py`.
 - [ ] Map Reflex island options to Astro `client:*` directives in static builds.
 - [ ] Map browser-only islands to Astro `client:only="react"` instead of any SSR behavior.
 - [ ] Define runtime boot policy per mode:
@@ -349,9 +404,10 @@ Chosen direction:
   - Children passed to `rx.island(...)` are compiled as part of the island body, not serialized as arbitrary React nodes.
   - Event chains reachable from an island root must be statically resolvable by the compiler; dynamic event composition that cannot be reduced at compile time is a compile error.
   - Reject function props, arbitrary class instances, and unsupported Python objects at compile time with actionable errors.
-- [ ] Define nested island behavior (`islands` mode only).
+- [x] Define nested island behavior (`islands` mode only).
   - Reject nested `rx.island(...)` at compile time for v1.
   - An inner stateful subtree inside the page-root island (`app` mode) or inside an outer `rx.island(...)` (`islands` mode) is already part of that island's React tree; it does not need its own `rx.island(...)` wrapper.
+  - **Done 2026-04-26:** wrapping an `IslandComponent` raises `CompileError("Nested rx.island(...) is rejected in v1.")`. Test `test_island_rejects_nested_island`.
 - [ ] Support nested static content around islands in `islands` mode without pulling full-page React into an island's bundle. Tie this to the tree-shaking invariants in Master Task 6 and the per-page bundle budgets in Master Task 11: fail CI if a static portion of an `islands` page shows up in any island's bundle.
 - [ ] Make `initialEvents` emission mode-aware in the generated runtime module.
   - Today [packages/reflex-base/src/reflex_base/compiler/templates.py:311-315](packages/reflex-base/src/reflex_base/compiler/templates.py#L311-L315) unconditionally emits `initialEvents = () => [ReflexEvent(HYDRATE), ...onLoadInternalEvent()]`, which runs on every websocket (re)connect.
@@ -464,12 +520,14 @@ Chosen direction:
 
 ## Master Task 12: Migration, Docs, And Breaking Change Work
 
-- [ ] Target selection: add `frontend_target: Literal["react_router", "astro"] = "react_router"` to `rx.Config`. Wire it through `reflex run` / `reflex export` / `reflex init` / `AppHarness` so the same Reflex app can be compiled against either target based on config.
+- [x] Target selection: add `frontend_target: Literal["react_router", "astro"] = "react_router"` to `rx.Config`. Wire it through `reflex run` / `reflex export` / `reflex init` / `AppHarness` so the same Reflex app can be compiled against either target based on config.
+  - **Done 2026-04-26 (Config field):** `frontend_target` lands on `BaseConfig`, defaults to `"react_router"`, env-var override `REFLEX_FRONTEND_TARGET`, tests in `tests/units/test_config.py`. CLI/AppHarness wiring still TODO and depends on the Astro emitter.
 - [ ] Compile-time defaults for Astro target (no user code changes required to migrate an existing app):
   - `render_mode` on every existing page defaults to `"app"`.
   - `on_load` + `render_mode` combo: if user picks `static`/`islands` with an `on_load` present, raise `CompileError` at the page-registration site in [reflex/page.py](reflex/page.py) with message `"on_load is only supported in render_mode='app' on the Astro target. Remove the handler or switch the page to app mode."`
   - Custom components with no `requires_hydration` ClassVar used on an `islands` page: emit a single `console.deprecate`-style warning with the class name and suggest `HydratedComponent(Component)` subclassing.
   - `static` pages using state/events: `CompileError` naming offending node (handled by Master Task 7A classifier).
+  - **Partially done 2026-04-26:** `on_load` + non-`app` `render_mode` raises `CompileError` from `@rx.page`; tests in `tests/units/test_page.py`. Default-to-`app` and the deprecation/`static`-rejection passes are tied to the Astro emitter.
 - [ ] Compatibility shim policy (one table, one version per row):
   - `StateProvider`, `EventLoopProvider`, `UploadFilesProvider`, `AppWrap` function: shim until the Zustand refactor ships; emit as thin delegations to the generated Zustand hooks. Deprecate in the next dot version after Phase A lands. Remove in 1.0.
   - `_get_app_wrap_components` method on `Component`: emit `console.deprecate` from any override site at import time. No-op on Astro target from day one. Remove in 1.0.
@@ -488,6 +546,7 @@ Chosen direction:
   - `app`: no effective difference from today's Reflex.
   - `islands`: `rx.island(...)` boundary props must be JSON-serializable or compiler-resolvable Vars; nested `rx.island(...)` is a compile error; unknown dynamic paths require ASGI or host rewrite support; browser-only components require `client_only=True`.
 - [ ] Update release notes, `CHANGELOG`, and troubleshooting docs. Add a top-level section to [CLAUDE.md](CLAUDE.md) pointing at the three-mode model for coding-agent context.
+  - **CLAUDE.md/AGENTS.md section landed 2026-04-26.** Release notes / `CHANGELOG` updates wait until user-visible behavior actually ships (post-emitter).
 
 ## Acceptance Criteria
 

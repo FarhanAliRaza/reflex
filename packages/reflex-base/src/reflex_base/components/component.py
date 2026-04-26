@@ -680,6 +680,16 @@ class Component(BaseComponent, ABC):
     # Whether the component is a global scope tag. True for tags like `html`, `head`, `body`.
     _is_tag_in_global_scope: ClassVar[bool] = False
 
+    # Astro hydration metadata (consulted on render_mode="islands" pages on the
+    # Astro target; ignored on the React Router target and on render_mode="app"
+    # pages where the whole route hydrates as one React root). Audited first-party
+    # component classes set these explicitly. Wrapper authors for third-party
+    # libraries opt in via these flags or the `HydratedComponent` convenience base.
+    requires_hydration: ClassVar[bool] = False
+    provides_hydrated_context: ClassVar[bool] = False
+    client_only: ClassVar[bool] = False
+    heavy_bundle_group: ClassVar[str | None] = None
+
     # Whether the import is default or named.
     is_default: bool | None = field(default=False, is_javascript_property=False)
 
@@ -2426,6 +2436,22 @@ class NoSSRComponent(Component):
             + mod_import
             + ")"
         )
+
+
+class HydratedComponent(Component):
+    """A component that requires the Reflex runtime to hydrate.
+
+    Wrapper authors for third-party React libraries (Radix roots, charting
+    libraries, anything that owns React state or context) should subclass this
+    instead of plain :class:`Component` so the Astro target promotes the wrapper
+    to its own client island in ``render_mode="islands"`` pages.
+
+    Mirrors the existing :class:`NoSSRComponent` pattern — end users composing
+    pre-built Reflex components never need to think about this; only authors
+    wrapping new third-party libraries do.
+    """
+
+    requires_hydration: ClassVar[bool] = True
 
 
 class MemoizationLeaf(Component):
