@@ -277,6 +277,48 @@ def layout_section() -> rx.Component:
     )
 
 
+def form_section() -> rx.Component:
+    return _section(
+        "Form controls",
+        _label(
+            "checkbox",
+            rx.checkbox("Subscribe to newsletter"),
+        ),
+        _label(
+            "switch sm",
+            rx.switch(size="1"),
+        ),
+        _label(
+            "switch md",
+            rx.switch(size="2", default_checked=True),
+        ),
+        _label(
+            "switch lg",
+            rx.switch(size="3"),
+        ),
+        _label(
+            "radio group",
+            rx.radio(["Apple", "Banana", "Cherry"], default_value="Banana"),
+        ),
+        _label(
+            "progress 30%",
+            rx.box(rx.progress(value=30), class_name="w-48"),
+        ),
+        _label(
+            "progress 75%",
+            rx.box(rx.progress(value=75, size="3"), class_name="w-48"),
+        ),
+        _label(
+            "text_field",
+            rx.text_field(placeholder="Type here..."),
+        ),
+        _label(
+            "text_area",
+            rx.text_area(placeholder="Multiline...", rows="3"),
+        ),
+    )
+
+
 def index() -> rx.Component:
     return rx.container(
         rx.heading("Radix → shadcn-style visual showcase", size="7"),
@@ -300,6 +342,7 @@ def index() -> rx.Component:
         skeleton_section(),
         avatar_section(),
         icon_button_section(),
+        form_section(),
         layout_section(),
         size="4",
         class_name="py-8",
