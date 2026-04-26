@@ -180,7 +180,6 @@ _COMPONENT_NAME_TO_PATH: dict[str, str] = {
     "radix": "reflex_components_radix",
     "lucide": "reflex_components_lucide",
     "recharts": "reflex_components_recharts",
-    "shadcn": "reflex_components_shadcn",
 }
 
 _MAPPING: lazy_loader.SubmodAttrsType = {

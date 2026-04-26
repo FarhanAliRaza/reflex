@@ -45,7 +45,6 @@ dependencies = [
   "reflex-components-radix",
   "reflex-components-react-player",
   "reflex-components-recharts",
-  "reflex-components-shadcn",
   "reflex-components-sonner",
 ]
 
@@ -149,7 +148,6 @@ extraPaths = [
   "packages/reflex-react-player/src",
   "packages/reflex-react-router/src",
   "packages/reflex-recharts/src",
-  "packages/reflex-components-shadcn/src",
   "packages/reflex-sonner/src",
   "packages/reflex-components-internal/src",
   "packages/reflex-site-shared/src",
@@ -320,7 +318,6 @@ reflex-components-plotly.workspace = true
 reflex-components-radix.workspace = true
 reflex-components-react-player.workspace = true
 reflex-components-recharts.workspace = true
-reflex-components-shadcn.workspace = true
 reflex-components-sonner.workspace = true
 reflex-docgen.workspace = true
 reflex-components-internal.workspace = true
