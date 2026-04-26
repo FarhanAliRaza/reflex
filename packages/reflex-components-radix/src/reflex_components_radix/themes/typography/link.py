@@ -64,8 +64,13 @@ class Link(RadixThemesComponent, A, MemoizationLeaf, MarkdownComponentMap):
         """Add imports for the Link component.
 
         Returns:
-            The import dict.
+            The import dict. On the Astro target the Link component
+            compiles to a plain ``<a>`` and never imports React Router.
         """
+        from reflex_base.config import get_config
+
+        if get_config().frontend_target == "astro":
+            return {}
         return {
             "react-router": [ImportVar(tag="Link", alias="ReactRouterLink")],
         }
@@ -98,6 +103,22 @@ class Link(RadixThemesComponent, A, MemoizationLeaf, MarkdownComponentMap):
                 raise ValueError(msg)
 
             if "as_child" not in props:
+                from reflex_base.config import get_config
+
+                if (config := get_config()).frontend_target == "astro":
+                    # Astro target: rx.link compiles to a plain <a href>;
+                    # no React Router involvement, no inner A wrapper. The
+                    # Radix Link IS an <a>, so we just keep ``href`` on it.
+                    for unsupported in _KNOWN_REACT_ROUTER_LINK_PROPS - {
+                        "href",
+                        "rel",
+                        "target",
+                    }:
+                        props.pop(unsupported, None)
+                    if isinstance(href_value := props.get("href"), str):
+                        props["href"] = config.resolve_internal_link_href(href_value)
+                    return super().create(*children, **props)
+
                 # Extract props for the ReactRouterLink, the rest go to the Link/A element.
                 react_router_link_props = {}
                 for prop in props.copy():

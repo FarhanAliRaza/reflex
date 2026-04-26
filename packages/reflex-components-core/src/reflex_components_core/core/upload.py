@@ -48,11 +48,11 @@ DEFAULT_UPLOAD_ID: str = "default"
 
 upload_files_context_var_data: VarData = VarData(
     imports={
-        "react": "useContext",
-        f"$/{Dirs.CONTEXTS_PATH}": "UploadFilesContext",
+        f"$/{Dirs.UTILS}/store": "useReflexStore",
     },
     hooks={
-        "const [filesById, setFilesById] = useContext(UploadFilesContext);": None,
+        "const filesById = useReflexStore((s) => s.uploads);": None,
+        "const setFilesById = useReflexStore((s) => s.setUploadsByUpdater);": None,
     },
 )
 

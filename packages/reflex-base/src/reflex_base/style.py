@@ -22,10 +22,9 @@ LIGHT_COLOR_MODE: str = "light"
 DARK_COLOR_MODE: str = "dark"
 LiteralColorMode = Literal["system", "light", "dark"]
 
-# Reference the global ColorModeContext
+# Reference the global color mode store.
 color_mode_imports = {
-    f"$/{constants.Dirs.CONTEXTS_PATH}": [ImportVar(tag="ColorModeContext")],
-    "react": [ImportVar(tag="useContext")],
+    f"$/{constants.Dirs.UTILS}/store": [ImportVar(tag="useReflexColorMode")],
 }
 
 
@@ -44,7 +43,7 @@ def _color_mode_var(_js_expr: str, _var_type: type = str) -> Var:
         _var_type=_var_type,
         _var_data=VarData(
             imports=color_mode_imports,
-            hooks={f"const {{ {_js_expr} }} = useContext(ColorModeContext)": None},
+            hooks={f"const {{ {_js_expr} }} = useReflexColorMode()": None},
         ),
     ).guess_type()
 

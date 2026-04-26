@@ -303,13 +303,10 @@ class VarData:
             state=state_name,
             field_name=field_name,
             hooks={
-                "const {0} = useContext(StateContexts.{0})".format(
-                    format.format_state_name(state_name)
-                ): None
+                f'const {format.format_state_name(state_name)} = useReflexState("{state_name}")': None
             },
             imports={
-                f"$/{constants.Dirs.CONTEXTS_PATH}": [ImportVar(tag="StateContexts")],
-                "react": [ImportVar(tag="useContext")],
+                f"$/{constants.Dirs.UTILS}/store": [ImportVar(tag="useReflexState")],
             },
         )
 

@@ -107,7 +107,23 @@ def _compile_app(app_root: Component) -> str:
     Returns:
         The compiled app.
     """
+    from reflex_base import constants
     from reflex_base.components.dynamic import bundled_libraries
+
+    dynamic_imports = app_root._get_all_dynamic_imports()
+    # The components barrel (``$/utils/components``) is only needed in the
+    # ``window.__reflex`` registry to support ``rx.dynamic`` runtime eval.
+    # When the app does not produce any dynamic components, importing it
+    # as ``import * as utils_components`` defeats Vite/Rollup
+    # tree-shaking — namespace imports must be assumed to access every
+    # export — and pulls every co-located component (and their transitive
+    # deps, e.g. Shiki + every bundled language definition) into the page
+    # chunk. Drop it from ``window_libraries`` when it's unused.
+    components_barrel = f"$/{constants.Dirs.COMPONENTS_PATH}"
+    if not dynamic_imports:
+        bundled_libraries = [
+            name for name in bundled_libraries if name != components_barrel
+        ]
 
     window_libraries = [
         (_normalize_library_name(name), name) for name in bundled_libraries
@@ -124,7 +140,8 @@ def _compile_app(app_root: Component) -> str:
         hooks=app_root._get_all_hooks(),
         window_libraries=window_libraries_deduped,
         render=app_root.render(),
-        dynamic_imports=app_root._get_all_dynamic_imports(),
+        dynamic_imports=dynamic_imports,
+        frontend_target=get_config().frontend_target,
     )
 
 
@@ -957,6 +974,234 @@ def _resolve_radix_themes_plugin(
     return plugin_chain, radix_plugin
 
 
+def _compile_zustand_runtime() -> list[tuple[str, str]]:
+    """Emit the shared Zustand store + event-loop + router-adapter modules.
+
+    Both targets get these files. The legacy ``context.js`` re-exports the
+    Zustand-backed hooks so existing call sites that import from
+    ``$/utils/context`` continue to work; new code (Astro target, future
+    React Router refactors) imports directly from ``$/utils/store`` and
+    ``$/utils/event_loop``.
+
+    The router adapter module is per-target: the React Router target wraps
+    React Router hooks, the Astro target uses native browser APIs. ``state.js``
+    imports the adapter so the shared runtime never imports ``react-router``
+    directly.
+
+    Returns:
+        A list of ``(path, contents)`` pairs ready to extend
+        ``compile_results``.
+    """
+    from reflex_base.compiler.router_adapter_template import router_adapter_template_for
+    from reflex_base.compiler.zustand_template import (
+        event_loop_runtime_template,
+        zustand_store_template,
+    )
+
+    target = get_config().frontend_target
+    return [
+        (utils.get_store_path(), zustand_store_template()),
+        (utils.get_event_loop_runtime_path(), event_loop_runtime_template()),
+        (utils.get_router_adapter_path(), router_adapter_template_for(target)),
+    ]
+
+
+def _compile_astro_artifacts(
+    app: App,
+    config: Any,
+    compile_ctx: CompileContext,
+) -> list[tuple[str, str]]:
+    """Generate Astro target artifacts to write under ``.web/``.
+
+    Runs at the tail of :func:`compile_app` when ``config.frontend_target ==
+    "astro"``. Output paths are returned relative to the web dir; the existing
+    output writer resolves them against ``.web/``.
+
+    The set is intentionally additive on top of the React Router target's
+    output during the migration window: the Astro pages reference back to the
+    existing Reflex page modules so feature parity is verified end-to-end
+    before the React Router output is removed.
+
+    Args:
+        app: The Reflex App instance being compiled.
+        config: The active ``rx.Config`` (used for ``frontend_path`` /
+            ``deploy_url``).
+        compile_ctx: The compiler run context that owns the per-page contexts.
+
+    Returns:
+        A list of ``(path, contents)`` tuples — one per Astro artifact.
+    """
+    from reflex_base.compiler.astro import (
+        AstroEmitterInput,
+        AstroPageArtifact,
+        astro_island_module_path,
+        emit_astro_artifacts,
+        emit_astro_page_root_island,
+    )
+    from reflex_base.compiler.astro_hosting import emit_astro_hosting_artifacts
+    from reflex_base.compiler.astro_islands_render import render_islands_page
+    from reflex_base.compiler.static_mode import reject_static_mode_violations
+
+    page_specs: list[AstroEmitterInput] = []
+    astro_islands_extras: list[AstroPageArtifact] = []
+    for route, page_ctx in compile_ctx.compiled_pages.items():
+        unevaluated = app._unevaluated_pages.get(route)
+        render_mode = (
+            unevaluated.render_mode
+            if unevaluated is not None and unevaluated.render_mode is not None
+            else "app"
+        )
+        if render_mode == "static":
+            reject_static_mode_violations(route=route, root=page_ctx.root_component)
+        title_value = (
+            unevaluated.title
+            if unevaluated is not None and isinstance(unevaluated.title, str)
+            else route
+        )
+        # Reflex stores routes as `format_route` output (no leading slash;
+        # the index route is the literal string ``"index"``). The Astro
+        # emitter expects ``/``-prefixed routes, so normalize here.
+        route = _normalize_astro_route(route)
+        # Astro page imports the per-route PageRoot island, which itself
+        # re-exports the existing Reflex page module. Compute a relative
+        # path from the .astro page back to the island module:
+        # e.g. src/pages/foo/bar.astro -> ../../reflex/islands/foo/bar/PageRoot.tsx
+        # The depth equals the number of directory levels between the page
+        # file and ``src/``: ``/`` and ``/foo`` both live in ``src/pages/``
+        # (depth 1), ``/foo/bar`` lives in ``src/pages/foo/`` (depth 2).
+        island_path = astro_island_module_path(route, "PageRoot")
+        astro_page_depth = max(1, len(_astro_route_segments(route)))
+        rel_to_src = "../" * astro_page_depth
+        page_module_import = (
+            rel_to_src + island_path[len("src/") :]
+            if island_path.startswith("src/")
+            else island_path
+        )
+
+        # Islands mode: render the static portion of the page tree to inline
+        # Astro HTML and emit one per-route React module for each detected
+        # island. Critically, the .astro file does NOT mount any ``client:*``
+        # directive at the page root — only the islands hydrate.
+        islands_static_body = ""
+        islands_extra_imports: tuple[str, ...] = ()
+        islands_extra_modules: list[AstroPageArtifact] = []
+        if render_mode == "islands":
+            islands_render = render_islands_page(
+                route=route, root=page_ctx.root_component
+            )
+            islands_static_body = islands_render.body
+            islands_extra_imports = islands_render.imports
+            islands_extra_modules.extend(islands_render.island_modules)
+
+        # ``app`` and ``static`` mount the per-page React module via
+        # ``page_module_import``. ``islands`` mode does not — it inlines
+        # rendered HTML + per-island JSX tags into the .astro body and emits
+        # the islands as separate React modules above.
+        attach_page_module = render_mode in ("app", "static")
+
+        page_specs.append(
+            AstroEmitterInput(
+                route=route,
+                title=title_value,
+                render_mode=render_mode,
+                page_module_import=page_module_import if attach_page_module else None,
+                islands=(),
+                static_html=islands_static_body,
+                extra_frontmatter_imports=islands_extra_imports,
+            )
+        )
+        astro_islands_extras.extend(islands_extra_modules)
+
+    artifacts = emit_astro_artifacts(
+        page_specs,
+        site=config.deploy_url or None,
+        base=config.frontend_path or "",
+        host=config.backend_host or "0.0.0.0",
+        port=config.frontend_port,
+    )
+
+    # Per-route island modules generated for islands-mode pages.
+    artifacts.extend(astro_islands_extras)
+
+    # Emit the per-page PageRoot island module for app + static pages. The
+    # island's import path back to the existing Reflex React Router page
+    # module is computed separately (different start point than the .astro
+    # file -> island path stored on AstroEmitterInput).
+    for spec in page_specs:
+        if spec.render_mode not in ("app", "static"):
+            continue
+        # Reflex stores the page JS at ``app/routes/<file_stem>.jsx``.
+        # Compute the relative path from the island module's location
+        # (``src/reflex/islands/<route>/PageRoot.tsx``) back to it.
+        page_jsx_relative = (
+            utils._path_to_file_stem(
+                spec.route.lstrip("/") if spec.route != "/" else PageNames.INDEX_ROUTE
+            )
+            + constants.Ext.JSX
+        )
+        # Island lives at src/reflex/islands/<dirs>/PageRoot.tsx — depth
+        # back to the .web/ root is 3 + max(1, len(segments)).
+        island_depth_to_web = 3 + max(1, len(_astro_route_segments(spec.route)))
+        page_module_for_island = (
+            "../" * island_depth_to_web + f"app/routes/{page_jsx_relative}"
+        )
+        app_layout_for_island = (
+            "../" * island_depth_to_web + f"app/{PageNames.APP_ROOT}"
+        )
+        # App and static pages both render during Astro's SSR pass. App mode
+        # then hydrates the prerendered HTML with ``client:load``; static
+        # mode ships the HTML without first-party runtime JS.
+        artifacts.append(
+            emit_astro_page_root_island(
+                route=spec.route,
+                page_module_import=page_module_for_island,
+                app_layout_import=app_layout_for_island,
+            )
+        )
+
+    artifacts.extend(
+        emit_astro_hosting_artifacts(
+            [spec.route for spec in page_specs],
+        )
+    )
+
+    return [(a.path, a.contents) for a in artifacts]
+
+
+def _astro_route_segments(route: str) -> list[str]:
+    """Return the non-empty path segments of a Reflex route.
+
+    Args:
+        route: A Reflex route starting with "/".
+
+    Returns:
+        A list of segments (e.g. ``"/foo/bar"`` -> ``["foo", "bar"]``).
+        ``"/"`` returns ``[]``.
+    """
+    return [seg for seg in route.split("/") if seg]
+
+
+def _normalize_astro_route(route: str) -> str:
+    """Translate a Reflex-stored route to the ``/``-prefixed form Astro expects.
+
+    Reflex calls :func:`reflex_base.utils.format.format_route` on every route
+    before storing it, which strips slashes and replaces an empty route with
+    the literal ``"index"``. The Astro emitter wants ``"/"`` for the home
+    route and ``"/foo/bar"`` for nested routes.
+
+    Args:
+        route: The stored route name (e.g. ``"index"`` or ``"foo/bar"``).
+
+    Returns:
+        The corresponding ``/``-prefixed Astro route string.
+    """
+    if not route or route == PageNames.INDEX_ROUTE:
+        return "/"
+    if route.startswith("/"):
+        return route
+    return "/" + route
+
+
 def compile_app(
     app: App,
     *,
@@ -1070,11 +1315,14 @@ def compile_app(
         if page_ctx.output_path is not None and page_ctx.output_code is not None
     ]
 
-    # Reinitialize vite config in case runtime options have changed.
-    compile_results.append((
-        constants.ReactRouter.VITE_CONFIG_FILE,
-        frontend_skeleton._compile_vite_config(config),
-    ))
+    # Reinitialize the React Router target's vite config in case runtime
+    # options have changed. The Astro target ships its own astro.config.mjs
+    # generated by ``_compile_astro_artifacts`` instead.
+    if config.frontend_target == "react_router":
+        compile_results.append((
+            constants.ReactRouter.VITE_CONFIG_FILE,
+            frontend_skeleton._compile_vite_config(config),
+        ))
 
     all_imports = compile_ctx.all_imports
 
@@ -1184,10 +1432,14 @@ def compile_app(
     compile_results.append(
         compile_contexts(app._state, radix_themes_plugin.get_theme())
     )
+    compile_results.extend(_compile_zustand_runtime())
     progress.advance(task)
 
     compile_results.append(compile_app_root(app_root))
     progress.advance(task)
+
+    if config.frontend_target == "astro":
+        compile_results.extend(_compile_astro_artifacts(app, config, compile_ctx))
 
     progress.stop()
 
@@ -1197,9 +1449,10 @@ def compile_app(
     with console.timing("Install Frontend Packages"):
         app._get_frontend_packages(all_imports)
 
-    frontend_skeleton.update_react_router_config(
-        prerender_routes=prerender_routes,
-    )
+    if config.frontend_target == "react_router":
+        frontend_skeleton.update_react_router_config(
+            prerender_routes=prerender_routes,
+        )
 
     if is_prod_mode():
         purge_web_pages_dir()

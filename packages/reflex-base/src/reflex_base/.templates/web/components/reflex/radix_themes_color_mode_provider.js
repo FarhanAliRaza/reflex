@@ -1,6 +1,7 @@
 import { useTheme } from "$/utils/react-theme";
 import { createElement, useEffect } from "react";
 import { ColorModeContext, defaultColorMode } from "$/utils/context";
+import { setReflexColorMode } from "$/utils/store";
 
 export default function RadixThemesColorModeProvider({ children }) {
   const { theme, resolvedTheme, setTheme } = useTheme();
@@ -30,16 +31,21 @@ export default function RadixThemesColorModeProvider({ children }) {
     }
   }, [resolvedTheme]);
 
+  const value = {
+    rawColorMode: theme,
+    colorMode: theme,
+    resolvedColorMode: resolvedTheme,
+    toggleColorMode,
+    setColorMode,
+  };
+
+  useEffect(() => {
+    setReflexColorMode(value);
+  }, [theme, resolvedTheme]);
+
   return createElement(
     ColorModeContext.Provider,
-    {
-      value: {
-        rawColorMode: theme,
-        resolvedColorMode: resolvedTheme,
-        toggleColorMode,
-        setColorMode,
-      },
-    },
+    { value },
     children,
   );
 }

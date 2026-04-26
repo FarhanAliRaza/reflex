@@ -169,6 +169,7 @@ def app_root_template(
     window_libraries: list[tuple[str, str]],
     render: dict[str, Any],
     dynamic_imports: set[str],
+    frontend_target: Literal["react_router", "astro"] = "react_router",
 ):
     """Template for the App root.
 
@@ -179,12 +180,19 @@ def app_root_template(
         window_libraries: The list of window libraries.
         render: The dictionary of render functions.
         dynamic_imports: The set of dynamic imports.
+        frontend_target: The frontend target this app root is generated for.
 
     Returns:
         Rendered App root component as string.
     """
     imports_str = "\n".join([_RenderUtils.get_import(mod) for mod in imports])
     dynamic_imports_str = "\n".join(dynamic_imports)
+    if frontend_target not in ("react_router", "astro"):
+        msg = (
+            f"Invalid frontend_target={frontend_target!r}. "
+            "Expected 'react_router' or 'astro'."
+        )
+        raise ValueError(msg)
 
     custom_code_str = "\n".join(custom_codes)
 
@@ -197,13 +205,50 @@ def app_root_template(
         f'    "{lib_path}": {lib_alias},' for lib_alias, lib_path in window_libraries
     ])
 
+    router_import = (
+        'import { Outlet } from "react-router";'
+        if frontend_target == "react_router"
+        else ""
+    )
+    document_import = (
+        "import { Layout as AppLayout } from './_document';"
+        if frontend_target == "react_router"
+        else ""
+    )
+    layout_return = (
+        "return jsx(AppLayout, {},\n"
+        '    jsx(ThemeProvider, {defaultTheme: defaultColorMode, attribute: "class"},\n'
+        "      jsx(StateProvider, {},\n"
+        "        jsx(EventLoopProvider, {},\n"
+        "          jsx(AppWrap, {}, children)\n"
+        "        )\n"
+        "      )\n"
+        "    )\n"
+        "  );"
+        if frontend_target == "react_router"
+        else 'return jsx(ThemeProvider, {defaultTheme: defaultColorMode, attribute: "class"},\n'
+        "    jsx(StateProvider, {},\n"
+        "      jsx(EventLoopProvider, {},\n"
+        "        jsx(AppWrap, {}, children)\n"
+        "      )\n"
+        "    )\n"
+        "  );"
+    )
+    app_export = (
+        "export default function App() {\n  return jsx(Outlet, {});\n}"
+        if frontend_target == "react_router"
+        else "export default function App({children}) {\n"
+        "  return jsx(Layout, {}, children);\n"
+        "}"
+    )
+
     return f"""
 {imports_str}
 {dynamic_imports_str}
 import {{ EventLoopProvider, StateProvider, defaultColorMode }} from "$/utils/context";
 import {{ ThemeProvider }} from '$/utils/react-theme';
-import {{ Layout as AppLayout }} from './_document';
-import {{ Outlet }} from 'react-router';
+{document_import}
+{router_import}
 {import_window_libraries}
 
 {custom_code_str}
@@ -223,20 +268,10 @@ export function Layout({{children}}) {{
     window["__reflex"] = windowImports;
   }}, []);
 
-  return jsx(AppLayout, {{}},
-    jsx(ThemeProvider, {{defaultTheme: defaultColorMode, attribute: "class"}},
-      jsx(StateProvider, {{}},
-        jsx(EventLoopProvider, {{}},
-          jsx(AppWrap, {{}}, children)
-        )
-      )
-    )
-  );
+  {layout_return}
 }}
 
-export default function App() {{
-  return jsx(Outlet, {{}});
-}}
+{app_export}
 
 """
 
@@ -260,6 +295,7 @@ def context_template(
     initial_state: dict[str, Any] | None = None,
     state_name: str | None = None,
     client_storage: dict[str, dict[str, dict[str, Any]]] | None = None,
+    omit_on_load_internal: bool = False,
 ):
     """Template for the context file.
 
@@ -269,15 +305,35 @@ def context_template(
         client_storage: The client storage for the context.
         is_dev_mode: Whether the app is in development mode.
         default_color_mode: The default color mode for the context.
+        omit_on_load_internal: When True, ``initialEvents`` only fires
+            ``HYDRATE`` and skips ``onLoadInternalEvent()``. The Astro target
+            uses this for `render_mode="islands"` pages where ``on_load`` is
+            not honored. The React Router target leaves the default ``False``
+            so existing behavior is unchanged.
 
     Returns:
         Rendered context file content as string.
     """
     initial_state = initial_state or {}
+    # SSR-safe state contexts: each slice defaults to ``{}`` instead of
+    # ``null`` so auto-memo wrappers that read e.g.
+    # ``useContext(StateContexts.app_mod_state).counter_rx_state_`` don't
+    # crash with "TypeError: Cannot read properties of null" during the
+    # Astro server-render pass. The actual hydrated values are pushed in
+    # by ``StateProvider`` once the runtime mounts.
     state_contexts_str = "".join([
-        f"{format_state_name(state_name)}: createContext(null),"
+        f"{format_state_name(state_name)}: createContext({{}}),"
         for state_name in initial_state
     ])
+
+    initial_events_body = (
+        f"ReflexEvent('{state_name}.{constants.CompileVars.HYDRATE}'),"
+        if omit_on_load_internal
+        else (
+            f"ReflexEvent('{state_name}.{constants.CompileVars.HYDRATE}'),\n"
+            "    ...onLoadInternalEvent()"
+        )
+    )
 
     state_str = (
         rf"""
@@ -310,8 +366,7 @@ export const onLoadInternalEvent = () => {{
 
 // The following events are sent when the websocket connects or reconnects.
 export const initialEvents = () => [
-    ReflexEvent('{state_name}.{constants.CompileVars.HYDRATE}'),
-    ...onLoadInternalEvent()
+    {initial_events_body}
 ]
     """
         if state_name
@@ -326,51 +381,119 @@ export const initialEvents = () => []
 """
     )
 
-    state_reducer_str = "\n".join(
-        rf'const [{format_state_name(state_name)}, dispatch_{format_state_name(state_name)}] = useReducer(applyDelta, initialState["{state_name}"])'
+    state_hooks_str = "\n".join(
+        rf'  const {format_state_name(state_name)} = useReflexState("{state_name}") ?? initialState["{state_name}"];'
         for state_name in initial_state
     )
 
     create_state_contexts_str = "\n".join(
-        rf"createElement(StateContexts.{format_state_name(state_name)},{{value: {format_state_name(state_name)}}},"
+        rf"    createElement(StateContexts.{format_state_name(state_name)}.Provider, {{ value: {format_state_name(state_name)} }},"
         for state_name in initial_state
     )
 
     dispatchers_str = "\n".join(
-        f'"{state_name}": dispatch_{format_state_name(state_name)},'
+        f'  "{state_name}": (delta) => _zustandApplyDelta({{{json.dumps(state_name)}: delta}}),'
         for state_name in initial_state
     )
+    state_context_close = "    " + ")" * len(initial_state) if initial_state else ""
 
-    return rf"""import {{ createContext, useContext, useMemo, useReducer, useState, createElement, useEffect }} from "react"
-import {{ applyDelta, ReflexEvent, hydrateClientStorage, useEventLoop, refs }} from "$/utils/state"
+    return rf"""import {{ createContext, useMemo, useState, createElement, useEffect }} from "react"
+import {{ ReflexEvent, hydrateClientStorage, useEventLoop, refs }} from "$/utils/state"
+import {{
+  applyReflexDelta as _zustandApplyDelta,
+  registerReflexDispatch as _zustandRegisterDispatch,
+  setReflexEventLoop as _zustandSetEventLoop,
+  useReflexColorMode,
+  useReflexDispatch,
+  useReflexEventLoop,
+  useReflexState,
+  useReflexStore,
+  useReflexUploads,
+}} from "$/utils/store"
 import {{ jsx }} from "@emotion/react";
 
 export const initialState = {"{}" if not initial_state else json_dumps(initial_state)}
 
+// Eagerly mirror initialState into the Zustand store so non-React call sites
+// (Astro islands, the event-loop runtime singleton) can read the snapshot
+// before any component mounts.
+for (const [stateName, slice] of Object.entries(initialState)) {{
+  useReflexStore.getState().setStateSlice(stateName, slice);
+}}
+
 export const defaultColorMode = {default_color_mode}
-export const ColorModeContext = createContext({{
+// Resolve the initial color mode from <html>: the inline color-mode script in
+// the layout has already read cookie/localStorage/system preference and
+// applied it as a class and ``data-color-mode`` attribute synchronously
+// before any JS module loads. Reading from the DOM keeps the Zustand store
+// in lockstep with Tailwind's ``dark:`` classes — without this, state-driven
+// content (e.g. ``rx.color_mode_cond('light', 'dark')``) is stuck on
+// ``"light"`` even when the page renders in dark mode.
+const _resolveInitialColorMode = () => {{
+  if (typeof document !== "undefined") {{
+    const fromAttr = document.documentElement.getAttribute("data-color-mode");
+    if (fromAttr === "light" || fromAttr === "dark") return fromAttr;
+    if (document.documentElement.classList.contains("dark")) return "dark";
+    if (document.documentElement.classList.contains("light")) return "light";
+  }}
+  return defaultColorMode === "dark" ? "dark" : "light";
+}};
+const _initialColorMode = {{
+  rawColorMode: defaultColorMode,
   colorMode: defaultColorMode,
-  resolvedColorMode: defaultColorMode === "dark" ? "dark" : "light",
+  resolvedColorMode: _resolveInitialColorMode(),
   toggleColorMode: () => {{}},
   setColorMode: () => {{}},
+}};
+useReflexStore.getState().setColorMode(_initialColorMode);
+
+export const ColorModeContext = createContext({{
+  ..._initialColorMode,
 }});
-export const UploadFilesContext = createContext(null);
-export const DispatchContext = createContext(null);
+// SSR-safe defaults: each Context returns a sensible empty value so
+// components rendered without a Provider (e.g. during ``astro build``'s
+// server-render pass) don't crash on destructuring or property access.
+// The actual hydrated values are installed once the runtime providers
+// mount in the browser.
+const _ssrUploadDefault = [{{}}, () => {{}}];
+const _ssrDispatchDefault = {{}};
+const _ssrEventLoopDefault = [() => {{}}, []];
+export const UploadFilesContext = createContext(_ssrUploadDefault);
+export const DispatchContext = createContext(_ssrDispatchDefault);
 export const StateContexts = {{{state_contexts_str}}};
-export const EventLoopContext = createContext(null);
+export const EventLoopContext = createContext(_ssrEventLoopDefault);
 export const clientStorage = {"{}" if client_storage is None else json.dumps(client_storage)}
+
+const _dispatchers = {{
+{dispatchers_str}
+}};
+
+for (const [name, fn] of Object.entries(_dispatchers)) {{
+  _zustandRegisterDispatch(name, fn);
+}}
+
+// Re-export the Zustand-backed hooks so call sites can migrate at their own
+// pace. New code should prefer these over the React Context surface above.
+export {{
+  useReflexColorMode,
+  useReflexDispatch,
+  useReflexEventLoop,
+  useReflexState,
+  useReflexStore,
+  useReflexUploads,
+}};
 
 {state_str}
 
 export const isDevMode = {json.dumps(is_dev_mode)};
 
 export function UploadFilesProvider({{ children }}) {{
-  const [filesById, setFilesById] = useState({{}})
-  refs["__clear_selected_files"] = (id) => setFilesById(filesById => {{
-    const newFilesById = {{...filesById}}
-    delete newFilesById[id]
-    return newFilesById
-  }})
+  const filesById = useReflexStore((s) => s.uploads);
+  const setFilesById = useReflexStore((s) => s.setUploadsByUpdater);
+  const clearUploads = useReflexStore((s) => s.clearUploads);
+  useEffect(() => {{
+    refs["__clear_selected_files"] = clearUploads;
+  }}, [clearUploads]);
   return createElement(
     UploadFilesContext.Provider,
     {{ value: [filesById, setFilesById] }},
@@ -393,12 +516,22 @@ export function ClientSide(component) {{
 }}
 
 export function EventLoopProvider({{ children }}) {{
-  const dispatch = useContext(DispatchContext)
+  const dispatch = useReflexStore((s) => s.dispatch)
   const [addEvents, connectErrors] = useEventLoop(
     dispatch,
     initialEvents,
     clientStorage,
   )
+  // Mirror the event-loop slice into the Zustand store so non-React
+  // subscribers (Astro islands, the event-loop runtime singleton) stay
+  // in sync. The React Context surface above remains the legacy entry.
+  useEffect(() => {{
+    _zustandSetEventLoop({{
+      addEvents,
+      connectErrors,
+      isHydrated: true,
+    }});
+  }}, [addEvents, connectErrors]);
   return createElement(
     EventLoopContext.Provider,
     {{ value: [addEvents, connectErrors] }},
@@ -407,17 +540,13 @@ export function EventLoopProvider({{ children }}) {{
 }}
 
 export function StateProvider({{ children }}) {{
-  {state_reducer_str}
-  const dispatchers = useMemo(() => {{
-    return {{
-      {dispatchers_str}
-    }}
-  }}, [])
+{state_hooks_str}
+  const dispatchers = useMemo(() => _dispatchers, []);
 
   return (
-    {create_state_contexts_str}
-    createElement(DispatchContext, {{value: dispatchers}}, children)
-    {")" * len(initial_state)}
+{create_state_contexts_str}
+    createElement(DispatchContext.Provider, {{ value: dispatchers }}, children)
+{state_context_close}
   )
 }}"""
 

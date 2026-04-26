@@ -9,6 +9,7 @@ from reflex_base.constants.compiler import Ext, PageNames
 from reflex_base.plugins.shared_tailwind import (
     TailwindConfig,
     TailwindPlugin,
+    resolve_default_content,
     tailwind_config_js_template,
 )
 
@@ -48,7 +49,7 @@ def compile_config(config: TailwindConfig):
     """
     return Constants.CONFIG, tailwind_config_js_template(
         **config,
-        default_content=Constants.CONTENT,
+        default_content=resolve_default_content(Constants.CONTENT),
     )
 
 

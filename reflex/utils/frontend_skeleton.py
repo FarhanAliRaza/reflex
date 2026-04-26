@@ -221,13 +221,13 @@ def _update_react_router_config(config: Config, prerender_routes: bool = False):
 
 
 def _compile_package_json():
+    from reflex_base.config import get_config
+
+    target = get_config().frontend_target
     return templates.package_json_template(
-        scripts={
-            "dev": constants.PackageJson.Commands.DEV,
-            "export": constants.PackageJson.Commands.EXPORT,
-        },
-        dependencies=constants.PackageJson.DEPENDENCIES,
-        dev_dependencies=constants.PackageJson.DEV_DEPENDENCIES,
+        scripts=constants.PackageJson.commands_for(target),
+        dependencies=constants.PackageJson.dependencies_for(target),
+        dev_dependencies=constants.PackageJson.dev_dependencies_for(target),
         overrides=constants.PackageJson.OVERRIDES,
     )
 

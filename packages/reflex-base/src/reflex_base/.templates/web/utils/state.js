@@ -5,12 +5,10 @@ import env from "$/env.json";
 import reflexEnvironment from "$/reflex.json";
 import Cookies from "universal-cookie";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  useLocation,
-  useNavigate,
-  useSearchParams,
-  useParams,
-} from "react-router";
+// Router hooks live behind a target-agnostic adapter. ``router_adapter.js``
+// is generated per ``frontend_target`` so this shared runtime never imports
+// ``react-router`` directly (Master Task 5 / Astro migration).
+import { useRouterAdapter } from "$/utils/router_adapter";
 import {
   initialEvents,
   initialState,
@@ -860,11 +858,13 @@ export const useEventLoop = (
   client_storage = {},
 ) => {
   const socket = useRef(null);
-  const location = useLocation();
-  const navigate = useNavigate();
-  const paramsR = useParams();
+  const {
+    location,
+    navigate,
+    params: paramsR,
+    searchParams,
+  } = useRouterAdapter();
   const prevLocationRef = useRef(location);
-  const [searchParams] = useSearchParams();
   const [connectErrors, setConnectErrors] = useState([]);
   const params = useRef(paramsR);
   const mounted = useRef(false);

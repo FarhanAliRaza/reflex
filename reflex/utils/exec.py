@@ -278,15 +278,18 @@ def get_frontend_mount():
     from reflex.utils import prerequisites
 
     config = get_config()
+    web_dir = prerequisites.get_web_dir()
+    if config.frontend_target == "astro":
+        # Astro emits one file per route under .web/dist/. ``base: "/docs"``
+        # in astro.config.mjs only rewrites URL references inside the
+        # emitted HTML; it does not nest the files under a docs/ subdir.
+        directory = web_dir / constants.Astro.BUILD_DIR
+    else:
+        directory = web_dir / constants.Dirs.STATIC / config.frontend_path.strip("/")
 
     return Mount(
         config.prepend_frontend_path("/"),
-        app=StaticFiles(
-            directory=prerequisites.get_web_dir()
-            / constants.Dirs.STATIC
-            / config.frontend_path.strip("/"),
-            html=True,
-        ),
+        app=StaticFiles(directory=directory, html=True),
         name="frontend",
     )
 

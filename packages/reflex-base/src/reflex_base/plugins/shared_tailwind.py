@@ -79,6 +79,36 @@ class TailwindConfig(TypedDict):
     plugins: NotRequired[list[TailwindPluginConfig]]
 
 
+def resolve_default_content(base_content: list[str]) -> list[str]:
+    """Extend Tailwind content paths with target-specific globs.
+
+    When ``frontend_target="astro"`` the build emits static HTML inline in
+    ``src/pages/<route>.astro`` (islands mode) and re-exports the auto-memo
+    wrappers and user-authored React components from ``src/reflex/`` and
+    ``public/components/``. Tailwind needs to scan those paths or the
+    classes used there end up missing from the generated CSS bundle.
+
+    Args:
+        base_content: The default content globs (``app/`` and ``utils/``)
+            shared by every target.
+
+    Returns:
+        ``base_content`` plus astro-target paths when applicable. The
+        original list is not mutated.
+    """
+    from reflex_base.config import get_config
+
+    if get_config().frontend_target != "astro":
+        return list(base_content)
+
+    return [
+        *base_content,
+        "./src/pages/**/*.astro",
+        "./src/reflex/**/*.{js,ts,jsx,tsx}",
+        "./public/components/**/*.{js,ts,jsx,tsx}",
+    ]
+
+
 def tailwind_config_js_template(
     *, default_content: list[str], **kwargs: Unpack[TailwindConfig]
 ):

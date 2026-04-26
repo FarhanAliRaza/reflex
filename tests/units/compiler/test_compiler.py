@@ -399,7 +399,29 @@ def test_compile_contexts_has_default_color_mode_context():
     _, code = compiler.compile_contexts(None, None)
 
     assert "createContext({" in code
-    assert 'resolvedColorMode: defaultColorMode === "dark" ? "dark" : "light"' in code
+    # Static SSR fallback when document is unavailable. The runtime path
+    # below reads the actual color mode from <html>.
+    assert 'return defaultColorMode === "dark" ? "dark" : "light"' in code
+
+
+def test_compile_contexts_resolves_color_mode_from_dom():
+    """The Zustand store must seed ``resolvedColorMode`` from <html>.
+
+    The inline color-mode script in the layout sets ``html.dark`` /
+    ``data-color-mode`` synchronously before any module loads, but the
+    Zustand store is initialized when ``context.js`` runs. Without
+    reading the DOM at init time, ``useReflexColorMode()`` returns
+    ``"light"`` for every island regardless of the user's actual color
+    mode — so ``rx.color_mode_cond('light', 'dark')`` (and any other
+    state-driven branch) is stuck on the light branch even on a dark
+    page. Reading from ``data-color-mode`` keeps the store in lockstep
+    with Tailwind's ``dark:`` classes.
+    """
+    _, code = compiler.compile_contexts(None, None)
+
+    assert 'document.documentElement.getAttribute("data-color-mode")' in code
+    assert 'document.documentElement.classList.contains("dark")' in code
+    assert "resolvedColorMode: _resolveInitialColorMode()" in code
 
 
 def test_compile_nonexistent_stylesheet(tmp_path, mocker: MockerFixture):

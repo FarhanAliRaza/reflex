@@ -680,6 +680,16 @@ class Component(BaseComponent, ABC):
     # Whether the component is a global scope tag. True for tags like `html`, `head`, `body`.
     _is_tag_in_global_scope: ClassVar[bool] = False
 
+    # Astro hydration metadata (consulted on render_mode="islands" pages on the
+    # Astro target; ignored on the React Router target and on render_mode="app"
+    # pages where the whole route hydrates as one React root). Audited first-party
+    # component classes set these explicitly. Wrapper authors for third-party
+    # libraries opt in via these flags or the `HydratedComponent` convenience base.
+    requires_hydration: ClassVar[bool] = False
+    provides_hydrated_context: ClassVar[bool] = False
+    client_only: ClassVar[bool] = False
+    heavy_bundle_group: ClassVar[str | None] = None
+
     # Whether the import is default or named.
     is_default: bool | None = field(default=False, is_javascript_property=False)
 
@@ -2064,7 +2074,10 @@ class Component(BaseComponent, ABC):
 class CustomComponent(Component):
     """A custom user-defined component."""
 
-    # Use the components library.
+    # Per-instance ``library`` is set in ``_post_init`` to the per-file path
+    # ``$/utils/components/<tag>`` (matching the on-disk emission). This
+    # class-level default is the directory; only used in transient cases
+    # before ``_post_init`` resolves the tag.
     library = f"$/{Dirs.COMPONENTS_PATH}"
 
     component_fn: Callable[..., Component] = field(
@@ -2138,6 +2151,12 @@ class CustomComponent(Component):
 
         # Set the tag to the name of the function.
         self.tag = format.to_title_case(self.component_fn.__name__)
+        # Pin ``library`` to the per-file path so callers `import { Tag }
+        # from "$/utils/components/Tag"` instead of the barrel — barrel
+        # imports defeat Vite/Rollup tree-shaking and pull every other
+        # CustomComponent (and their transitive deps, e.g. Shiki + every
+        # bundled language) into the page chunk.
+        self.library = f"$/{Dirs.COMPONENTS_PATH}/{self.tag}"
 
         for key, value in props.items():
             # Skip kwargs that are not props.
@@ -2426,6 +2445,22 @@ class NoSSRComponent(Component):
             + mod_import
             + ")"
         )
+
+
+class HydratedComponent(Component):
+    """A component that requires the Reflex runtime to hydrate.
+
+    Wrapper authors for third-party React libraries (Radix roots, charting
+    libraries, anything that owns React state or context) should subclass this
+    instead of plain :class:`Component` so the Astro target promotes the wrapper
+    to its own client island in ``render_mode="islands"`` pages.
+
+    Mirrors the existing :class:`NoSSRComponent` pattern — end users composing
+    pre-built Reflex components never need to think about this; only authors
+    wrapping new third-party libraries do.
+    """
+
+    requires_hydration: ClassVar[bool] = True
 
 
 class MemoizationLeaf(Component):

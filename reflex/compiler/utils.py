@@ -773,6 +773,37 @@ def get_context_path() -> str:
     return str(get_web_dir() / (constants.Dirs.CONTEXTS_PATH + constants.Ext.JS))
 
 
+def get_store_path() -> str:
+    """Get the path of the Zustand store module shared by both targets.
+
+    Returns:
+        The absolute path of ``$/utils/store.js``.
+    """
+    return str(get_web_dir() / constants.Dirs.UTILS / ("store" + constants.Ext.JS))
+
+
+def get_event_loop_runtime_path() -> str:
+    """Get the path of the target-agnostic event loop runtime module.
+
+    Returns:
+        The absolute path of ``$/utils/event_loop.js``.
+    """
+    return str(get_web_dir() / constants.Dirs.UTILS / ("event_loop" + constants.Ext.JS))
+
+
+def get_router_adapter_path() -> str:
+    """Get the path of the per-target router adapter module.
+
+    Returns:
+        The absolute path of ``$/utils/router_adapter.js``. The body is
+        target-specific (React Router target wraps React Router hooks; Astro
+        target uses native browser APIs) but the public contract is shared.
+    """
+    return str(
+        get_web_dir() / constants.Dirs.UTILS / ("router_adapter" + constants.Ext.JS)
+    )
+
+
 def get_components_path() -> str:
     """Get the path of the compiled components.
 
