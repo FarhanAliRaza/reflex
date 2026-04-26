@@ -2,6 +2,68 @@
 
 ## Progress Log
 
+### 2026-04-26 — `reflex-components-shadcn` package (CSS bloat killer)
+
+The Astro target's per-page CSS split exposed a large hidden cost on
+`render_mode="islands"` pages: Radix Themes ships ~600 KB of monolithic
+CSS through the shared layout, dragging mobile Lighthouse to ~60 even
+when only static content is on the page.
+
+This commit ships a parallel component package (`reflex-components-shadcn`)
+that takes the shadcn/ui architectural approach: each component compiles
+to plain HTML / Radix Primitives styled with **Tailwind utility class
+names**, no monolithic third-party stylesheet. Same Reflex public API
+shape, drop-in replacement on content pages.
+
+What landed:
+
+- New workspace member at `packages/reflex-components-shadcn/`.
+- `_variants.py` — Python equivalent of cva. Resolves variants/sizes at
+  Python compile time so the generated JSX is a single class string.
+- `button.py` — variants (`default` / `destructive` / `outline` /
+  `secondary` / `ghost` / `link`) × sizes (`default` / `sm` / `lg` /
+  `icon`). Compiles to `<button class="...tw...">`.
+- `card.py` — `card`, `card_header`, `card_title`, `card_description`,
+  `card_content`, `card_footer`.
+- `heading.py` — `h1` … `h6` with shadcn typography defaults.
+- `text.py` — `paragraph` / `text` with size / weight / tone variants.
+- `link.py` — plain `<a href>`, honors `Config.resolve_internal_link_href`.
+- `code.py` — inline `<code>` and block `<pre><code>`.
+- `layout.py` — `container`, `section`, `vstack`, `hstack`, `separator`.
+- `badge.py` — pill component with the four shadcn variants.
+- `theme.py` — emits the ~1.4 KB `:root` + `.dark` token preflight CSS
+  and a Tailwind `theme.extend` dict mapping `bg-primary`/`text-foreground`
+  /etc. to the CSS variables.
+- `rx.shadcn.*` namespace wiring — apps import `rx.shadcn.button` etc.
+- 25 unit tests in `tests/units/reflex_components_shadcn/` covering the
+  variants helper, every component class string, and the theme size
+  ceiling.
+
+End-to-end verified by building a sample docs-introduction-shaped page
+on the Astro target and running real Lighthouse mobile:
+
+  | target                              | Perf | A11y | FCP   | LCP   |  CSS    |   JS   |
+  |-------------------------------------|-----:|-----:|------:|------:|--------:|-------:|
+  | React Router app  (Radix Themes)    |   80 |   95 | 3.7 s | 3.8 s |  785 KB | 4.6 MB |
+  | Astro app         (Radix Themes)    |   97 |  100 | 1.4 s | 2.4 s |   29 KB | 4.2 MB |
+  | Astro static      (Radix Themes)    |  100 |  100 | 0.6 s | 0.8 s |   29 KB |   0 KB |
+  | **Astro app      (shadcn)**         | **99** |   93 | 1.4 s | 2.0 s | **16 KB** | **372 KB** |
+  | **Astro static  (shadcn)**          | **100** |   94 | 0.9 s | 0.9 s | **16 KB** |  **0 KB** |
+
+The headline: **CSS dropped from 785 KB → 16 KB** (a 49× reduction) on
+the same content. JS payload also dropped from 4.2 MB → 372 KB on app
+mode because the Reflex compiled output stops dragging in Radix Themes /
+Reflex ColorMode provider modules. Lighthouse perf reaches 99-100 with
+the shadcn component flavor.
+
+A11y dropped slightly (100 → 93/94) compared to Radix Themes because
+the shadcn theme preflight is intentionally minimal — adding a few
+focus-visible / color-contrast tweaks to `shadcn_global_css()` would
+restore parity. Tracked as a v2 polish item.
+
+Sample app: `/tmp/intro_shadcn/` — exercises every shadcn component on
+both `app` and `static` render modes.
+
 This file tracks the multi-phase Astro migration. Items marked `[x]` are
 landed; items marked `[ ]` are outstanding. Dated entries below capture
 foundational scaffolding shipped on the `astro-support-codex` branch.

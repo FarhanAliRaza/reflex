@@ -1,0 +1,31 @@
+[project]
+name = "reflex-components-shadcn"
+dynamic = ["version"]
+description = "shadcn-style Reflex components: Radix Primitives + Tailwind utilities, no monolithic CSS bundle. Drop-in alternative to reflex-components-radix for content-heavy pages."
+readme = "README.md"
+authors = [{ name = "Reflex", email = "contact@reflex.dev" }]
+maintainers = [{ name = "Reflex", email = "contact@reflex.dev" }]
+requires-python = ">=3.10"
+dependencies = [
+    "reflex-base",
+    "reflex-components-core",
+    "reflex-components-lucide",
+]
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+pattern-prefix = "reflex-components-shadcn-"
+fallback-version = "0.0.0dev0"
+
+[tool.hatch.build]
+targets.sdist.artifacts = ["*.pyi"]
+targets.wheel.artifacts = ["*.pyi"]
+
+[tool.hatch.build.hooks.reflex-pyi]
+dependencies = ["ruff", "reflex-base"]
+
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning", "hatch-reflex-pyi"]
+build-backend = "hatchling.build"
