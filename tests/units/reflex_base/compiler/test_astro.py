@@ -5,6 +5,7 @@ Covers ``packages/reflex-base/src/reflex_base/compiler/astro.py``:
 - Astro page / layout / config templates
 - per-mode emission rules
 - the high-level ``emit_astro_artifacts`` aggregator
+- inline color-mode head script
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from reflex_base.compiler.astro import (
     AstroEmitterInput,
     AstroIsland,
     AstroPageArtifact,
+    astro_color_mode_inline_script,
     astro_config_template,
     astro_island_module_path,
     astro_layout_template,
@@ -349,3 +351,45 @@ def test_emit_astro_artifacts_islands_page_no_page_root_island():
     artifacts = emit_astro_artifacts(pages)
     paths = [a.path for a in artifacts]
     assert "src/reflex/islands/landing/PageRoot.tsx" not in paths
+
+
+def test_astro_color_mode_inline_script_default_is_system():
+    """Default fallback is 'system' (uses prefers-color-scheme)."""
+    src = astro_color_mode_inline_script()
+    assert "prefers-color-scheme: dark" in src
+    assert "data-color-mode" in src
+    assert "reflex-color-mode" in src
+    assert "color_mode" in src
+
+
+def test_astro_color_mode_inline_script_explicit_default():
+    src = astro_color_mode_inline_script(default_color_mode="light")
+    assert '"light"' in src
+
+
+def test_astro_color_mode_inline_script_custom_keys():
+    src = astro_color_mode_inline_script(cookie_name="rx-color", storage_key="rx_color")
+    assert "rx-color" in src
+    assert "rx_color" in src
+
+
+def test_astro_layout_template_includes_color_mode_script_when_provided():
+    layout = astro_layout_template(color_mode_script=astro_color_mode_inline_script())
+    assert "<script is:inline>" in layout
+    assert "data-color-mode" in layout
+
+
+def test_astro_layout_template_no_color_mode_script_by_default():
+    layout = astro_layout_template()
+    assert "<script is:inline>" not in layout
+
+
+def test_emit_astro_layout_inline_color_mode_default_on():
+    artifact = emit_astro_layout()
+    assert "<script is:inline>" in artifact.contents
+    assert "data-color-mode" in artifact.contents
+
+
+def test_emit_astro_layout_inline_color_mode_off():
+    artifact = emit_astro_layout(inline_color_mode_script=False)
+    assert "<script is:inline>" not in artifact.contents

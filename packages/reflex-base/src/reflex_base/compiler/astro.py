@@ -233,12 +233,86 @@ def astro_page_template(
     return f"---\n{frontmatter}\n---\n{layout_open}\n{body}\n</Layout>\n"
 
 
-def astro_layout_template(*, base_path: str = "") -> str:
+def astro_color_mode_inline_script(
+    *,
+    cookie_name: str = "reflex-color-mode",
+    storage_key: str = "color_mode",
+    default_color_mode: Literal["light", "dark", "system"] = "system",
+) -> str:
+    """Render the inline head script that prevents flash-of-wrong-theme.
+
+    Runs synchronously before first paint, reads the persisted color mode
+    in this fallback order: cookie -> localStorage -> system preference ->
+    ``default_color_mode``, and applies the resolved value to ``<html>`` as
+    both a class (``light``/``dark``) and a ``data-color-mode`` attribute.
+
+    The script intentionally does not import the Reflex runtime; it only
+    needs to run on every page including ``render_mode="static"`` pages
+    that ship 0 KiB of first-party JS.
+
+    Args:
+        cookie_name: Cookie name used by the Reflex color-mode persistence.
+        storage_key: localStorage key used by the Reflex color-mode persistence.
+        default_color_mode: Fallback when neither cookie, storage, nor the
+            system preference is conclusive. ``"system"`` resolves to
+            ``prefers-color-scheme: dark`` at runtime.
+
+    Returns:
+        The ``<script>`` body as an HTML-injectable string (no surrounding
+        ``<script>`` tags so callers can decide attributes like ``is:inline``).
+    """
+    cookie = json.dumps(cookie_name)
+    storage = json.dumps(storage_key)
+    default_mode = json.dumps(default_color_mode)
+    return (
+        "(function () {\n"
+        "  try {\n"
+        "    var resolved = null;\n"
+        f"    var match = document.cookie.match(new RegExp('(^|;\\\\s*)' + {cookie} + '=([^;]+)'));\n"
+        "    if (match) { resolved = decodeURIComponent(match[2]); }\n"
+        "    if (!resolved) {\n"
+        "      try {\n"
+        f"        var stored = window.localStorage.getItem({storage});\n"
+        "        if (stored) { resolved = stored; }\n"
+        "      } catch (e) { /* private mode / disabled storage */ }\n"
+        "    }\n"
+        "    if (!resolved || resolved === 'system') {\n"
+        f"      var fallback = {default_mode};\n"
+        "      if (fallback === 'system') {\n"
+        "        resolved = window.matchMedia('(prefers-color-scheme: dark)').matches\n"
+        "          ? 'dark'\n"
+        "          : 'light';\n"
+        "      } else {\n"
+        "        resolved = fallback;\n"
+        "      }\n"
+        "    }\n"
+        "    var root = document.documentElement;\n"
+        "    if (resolved === 'dark') {\n"
+        "      root.classList.add('dark');\n"
+        "      root.classList.remove('light');\n"
+        "    } else {\n"
+        "      root.classList.add('light');\n"
+        "      root.classList.remove('dark');\n"
+        "    }\n"
+        "    root.setAttribute('data-color-mode', resolved);\n"
+        "  } catch (e) { /* defensive: never block first paint */ }\n"
+        "})();"
+    )
+
+
+def astro_layout_template(
+    *,
+    base_path: str = "",
+    color_mode_script: str | None = None,
+) -> str:
     """Render the baseline ``Layout.astro`` shared by every Astro page.
 
     Args:
         base_path: The configured ``frontend_path``. Currently informational —
             Astro derives the public base path from ``astro.config.mjs``.
+        color_mode_script: When provided, an inline ``<script is:inline>``
+            block is injected into ``<head>`` to set the color mode before
+            first paint. Pass the result of :func:`astro_color_mode_inline_script`.
 
     Returns:
         The full ``Layout.astro`` source.
@@ -247,6 +321,11 @@ def astro_layout_template(*, base_path: str = "") -> str:
     # the layout can later inject a <base href> tag once frontend_path is
     # threaded through the build.
     _ = base_path
+    color_mode_block = (
+        f"    <script is:inline>{color_mode_script}</script>\n"
+        if color_mode_script
+        else ""
+    )
     return (
         "---\n"
         "const { title } = Astro.props;\n"
@@ -257,6 +336,7 @@ def astro_layout_template(*, base_path: str = "") -> str:
         '    <meta charset="UTF-8" />\n'
         '    <meta name="viewport" content="width=device-width, initial-scale=1" />\n'
         "    <title>{title}</title>\n"
+        f"{color_mode_block}"
         "  </head>\n"
         "  <body>\n"
         "    <slot />\n"
@@ -426,18 +506,37 @@ def emit_astro_page(spec: AstroEmitterInput) -> AstroPageArtifact:
     return AstroPageArtifact(path=file_path, contents=contents)
 
 
-def emit_astro_layout(*, base_path: str = "") -> AstroPageArtifact:
+def emit_astro_layout(
+    *,
+    base_path: str = "",
+    inline_color_mode_script: bool = True,
+    default_color_mode: Literal["light", "dark", "system"] = "system",
+) -> AstroPageArtifact:
     """Emit the shared ``Layout.astro`` artifact.
 
     Args:
         base_path: Optional ``frontend_path`` for future <base> tag use.
+        inline_color_mode_script: When True (default), the layout includes
+            the inline head script that resolves the color mode before
+            first paint. Disable only for tests that want a minimal layout.
+        default_color_mode: Fallback color mode used when no cookie /
+            localStorage value is set (and the system preference is
+            inconclusive on platforms that do not support
+            ``prefers-color-scheme``).
 
     Returns:
         The :class:`AstroPageArtifact` at ``src/layouts/Layout.astro``.
     """
+    color_mode_script = (
+        astro_color_mode_inline_script(default_color_mode=default_color_mode)
+        if inline_color_mode_script
+        else None
+    )
     return AstroPageArtifact(
         path="src/layouts/Layout.astro",
-        contents=astro_layout_template(base_path=base_path),
+        contents=astro_layout_template(
+            base_path=base_path, color_mode_script=color_mode_script
+        ),
     )
 
 

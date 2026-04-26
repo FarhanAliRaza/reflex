@@ -37,6 +37,13 @@ repos:
     language: system
     name: react-router-isolation
     pass_filenames: false
+  - always_run: true
+    description: Enforce per-page Astro bundle budgets (Astro migration Master Task 11). Skips when .web/dist is absent.
+    entry: python3 scripts/check_astro_bundle_budgets.py
+    id: astro-bundle-budgets
+    language: system
+    name: astro-bundle-budgets
+    pass_filenames: false
   repo: local
 - hooks:
   - args:

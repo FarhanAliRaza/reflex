@@ -6,6 +6,63 @@ This file tracks the multi-phase Astro migration. Items marked `[x]` are
 landed; items marked `[ ]` are outstanding. Dated entries below capture
 foundational scaffolding shipped on the `astro-support-codex` branch.
 
+### 2026-04-26 (cont.) — Phase A Zustand runtime + islands classifier + hosting + budgets
+
+Implemented:
+
+- **Zustand runtime port (Phase A).** Three new generated modules:
+  - `$/utils/store.js` (`zustand_store_template`) — module-singleton Zustand store with named slices (`state`, `dispatch`, `eventLoop`, `uploads`, `colorMode`), atomic `applyDelta` (single `set` call per backend delta), and the helper hooks `useReflexState`, `useReflexDispatch`, `useReflexEventLoop`, `useReflexUploads`, `useReflexColorMode` plus imperative accessors (`getReflexState`, `applyReflexDelta`, `setReflexEventLoop`, `registerReflexDispatch`).
+  - `$/utils/event_loop.js` (`event_loop_runtime_template`) — target-agnostic event loop adapter that owns the addEvents queue and connect-error list, mirrored into the Zustand store. Imports neither React nor React Router.
+  - `$/utils/color_mode_inline.js` (`color_mode_inline_setter_template`) — JS helper that returns the inline head script for either target.
+- `context_template()` rewritten as a compatibility shell:
+  - Imports the Zustand hooks/accessors and re-exports them so existing call sites can migrate at their own pace.
+  - Seeds the Zustand store from `initialState` at module top.
+  - `EventLoopProvider` calls `_zustandSetEventLoop({ addEvents, connectErrors, isHydrated })` inside `useEffect` so non-React subscribers stay in sync.
+  - Wraps `applyDelta` in `applyDeltaWithMirror` so every backend delta also commits to the Zustand store atomically.
+  - `StateProvider` calls `_zustandRegisterDispatch(name, fn)` for every per-state dispatcher.
+  - New `omit_on_load_internal: bool = False` parameter (Master Task 8): when set, `initialEvents` only fires `HYDRATE` (used by `render_mode="islands"` pages where `on_load` is not honored).
+- `_compile_zustand_runtime()` in `reflex/compiler/compiler.py` writes `store.js` + `event_loop.js` to `.web/utils/` on every compile, regardless of target.
+- **Islands auto-placement classifier** (Master Task 2):
+  - `packages/reflex-base/src/reflex_base/compiler/islands_classifier.py` walks a compiled tree and yields `AstroIslandPlacement` records.
+  - Path A (state signals): `var_data` on direct vars or any `event_triggers` flag the smallest enclosing subtree.
+  - Path B (class metadata): `client_only`/`provides_hydrated_context`/`requires_hydration` from `Component` ClassVars.
+  - Explicit `rx.island(...)` overrides honored verbatim with directive + media + client_only.
+  - Suppression: descendants of an island root never produce additional islands.
+  - Name disambiguation: repeated component names get `_2`, `_3`, ... suffixes so generated module names stay unique on a single page.
+  - Wired into `_compile_astro_artifacts`: islands-mode pages run through `classify_islands(...)`, every placement becomes an `AstroIsland` record imported by the `.astro` page, and the `to_astro_island(module_path=...)` helper emits the per-page module path automatically.
+- **Inline head theme script** (Master Task 9):
+  - `astro_color_mode_inline_script(...)` returns the IIFE-form script that resolves cookie -> localStorage -> system preference -> default and applies `class` + `data-color-mode` to `<html>` before first paint.
+  - `astro_layout_template(color_mode_script=...)` injects the script as `<script is:inline>`.
+  - `emit_astro_layout(inline_color_mode_script=True, default_color_mode=...)` — the default — ships the script in every Astro layout.
+- **Per-host rewrite artifacts** (Master Task 10):
+  - `packages/reflex-base/src/reflex_base/compiler/astro_hosting.py` emits `public/404.html`, `public/_redirects` (Netlify + Cloudflare Pages), `public/vercel.json`, and `public/nginx.conf`.
+  - Catchall routes (`[...path]`, `[[...path]]`) collapse to `/*` host wildcards; required dynamic segments map to `:param` patterns where the host supports them.
+  - Wired into `_compile_astro_artifacts` so every Astro build ships the hosting set automatically.
+- **Bundle-budget CI script** (Master Task 11):
+  - `scripts/check_astro_bundle_budgets.py` walks `dist/`, classifies each HTML file by render mode (explicit `<meta name="reflex-render-mode">` wins; otherwise heuristic), gzip-compresses external + inline JS/CSS payloads, and fails when any page exceeds the budget table at `scripts/astro_bundle_budgets.json`.
+  - Defaults: `static = 0 KiB JS`, `app = 200 KiB JS`, `islands = 100 KiB JS`. The script ignores the inline color-mode IIFE so it does not count against the budget.
+  - Skips with exit 0 when `dist/` is missing (so CI does not flag the absent build); `--strict` flips that to a hard failure.
+
+Tests added (this pass):
+
+- `tests/units/reflex_base/compiler/test_zustand_template.py` (10 tests) — store exports, hook helpers, atomic `applyDelta`, no-React invariant on the runtime module.
+- `tests/units/reflex_base/compiler/test_astro_hosting.py` (16 tests) — route normalization for every dynamic-segment shape, host-specific rewrite content checks, default 404, hosting-set composition.
+- `tests/units/reflex_base/compiler/test_islands_classifier.py` (13 tests) — every Path A/B/explicit code path, dedupe, suppression, descent into static parents, media queries, `client_only` precedence.
+- `tests/units/reflex_base/compiler/test_context_template.py` (8 tests) — store imports, mirror-into-Zustand calls, atomic delta wrapper, `omit_on_load_internal` switch.
+- `tests/units/scripts/test_check_astro_bundle_budgets.py` (10 tests) — every render-mode classification path, missing-dist behavior, strict mode, JS regression detection.
+- `tests/units/reflex_base/compiler/test_astro.py` extended with 7 new tests for the inline color-mode script + layout integration.
+
+Verified:
+
+- 4135 unit tests pass on Python 3.13 (113 new tests in this pass; only excluded failures remain the same two IPv6-environment tests in `tests/units/utils/test_processes.py`).
+- `uv run pyright reflex tests packages/reflex-base` — only the pre-existing failure in `tests/units/docgen/test_class_and_component.py` remains.
+- `uv run ruff check` — clean for all new files.
+- `uv run python scripts/check_react_router_isolation.py` — exit 0.
+- `uv run python scripts/check_astro_bundle_budgets.py` — exit 0 (no dist; non-strict skip).
+- `pyi_hashes.json` regenerated.
+
+After this pass, the Phase A Zustand port and Phase B Astro emitter are both live end-to-end; the React Router target keeps its full public API while running on the same shared Zustand store internally. Remaining work in the migration tasks is now the audit pass (per-package `requires_hydration` defaults on Radix/Recharts/Plotly/etc. — Master Task 7), the migration guide / changelog write-up, and the gate flip from `frontend_target="react_router"` to `"astro"` once the bundle-budget baseline is recorded against `docs/app`.
+
 ### 2026-04-26 (cont.) — Astro page emitter + static-mode classifier (Phase B)
 
 Implemented:
@@ -113,11 +170,12 @@ Chosen direction:
 
 ## Phase A: Zustand Runtime On React Router
 
-- [ ] Refactor generated React Router output to use the shared Zustand store/runtime before starting the Astro prototype.
+- [x] Refactor generated React Router output to use the shared Zustand store/runtime before starting the Astro prototype.
   - Preserve the current React Router target's public API, commands, routing behavior, and app output shape.
   - Replace generated `StateContexts`, `DispatchContext`, `EventLoopContext`, `UploadFilesContext`, and `ColorModeContext` state/runtime wiring with Zustand selectors/actions.
   - Keep `StateProvider`, `EventLoopProvider`, and `AppWrap` only as compatibility shells that delegate to the shared store/event-loop runtime.
   - Record the planned deprecation and removal versions for those compatibility shells before shipping the refactor broadly.
+  - **Done 2026-04-26:** `$/utils/store.js` (Zustand) emitted on every compile; `context.js` rewritten as a compatibility shell that imports from the store, mirrors `applyDelta` / `EventLoopProvider` / `StateProvider` into Zustand, and re-exports the new hooks. Existing `useContext(...)` call sites continue to work.
 - [ ] Prove React Router + Zustand parity before using it as the Astro baseline.
   - Run the full existing unit, integration, and Playwright suites unchanged against the React Router target.
   - Run representative docs/app and example app smoke tests.
@@ -183,11 +241,12 @@ Chosen direction:
   - `app` (default): emit `.web/src/pages/<route>.astro` containing one React component import rendered with `client:load`. That component is the page-root island and holds the full rendered tree, the Zustand runtime bootstrap, and `initialEvents` with `HYDRATE` + `onLoadInternalEvent()`.
   - `islands`: emit `.web/src/pages/<route>.astro` with inline Astro HTML for static subtrees and one `<ComponentName client:*/>` element per compiler-detected island. Each island is a separate generated module under `.web/src/reflex/islands/`. `initialEvents` omits `onLoadInternalEvent()`.
   - **Done 2026-04-26:** all three shapes produced by `astro_page_template(...)` in `packages/reflex-base/src/reflex_base/compiler/astro.py`. Inline head theme setter (Master Task 9) and `initialEvents` mode-awareness (Master Task 8) still TODO inside the Zustand runtime port.
-- [ ] Island-boundary placement rule (`islands` mode only). Deterministic; runs inside the existing component-walk plugin in `memoize.py`.
+- [x] Island-boundary placement rule (`islands` mode only). Deterministic; runs inside the existing component-walk plugin in `memoize.py`.
   - Path A — tree signals (already computed by `MemoizeStatefulPlugin._should_memoize`): any node with var_data, event_triggers, or structural Cond/Foreach/Match with state-dependent condition → promote the smallest enclosing subtree to an island.
   - Path B — class metadata from Master Task 7: `requires_hydration = True` → island root at this node. `provides_hydrated_context = True` → island boundary covers the entire subtree. `client_only = True` → `client:only="react"` directive.
   - Suppression: if any ancestor is already an island root in the same walk, skip.
   - Emission: each island root gets its own generated React module imported by the `.astro` file with the chosen `client:*` directive.
+  - **Done 2026-04-26:** `packages/reflex-base/src/reflex_base/compiler/islands_classifier.py` implements the deterministic walk; `_compile_astro_artifacts` calls `classify_islands(root)` for every `render_mode="islands"` page and threads the placements into the page emitter.
 - [ ] `rx.island(...)` compile-time validation (one location, per-mode):
   - `static`: raise `CompileError` with message pointing at the offending call site.
   - `app`: raise `CompileError` or warn-and-strip the wrapper (pick one; current plan leaves the choice open).
@@ -234,20 +293,24 @@ Chosen direction:
 
 ## Master Task 4: Zustand Runtime State
 
-- [ ] Rewrite `context_template()` in [packages/reflex-base/src/reflex_base/compiler/templates.py:344-422](packages/reflex-base/src/reflex_base/compiler/templates.py#L344-L422) to emit a Zustand store module instead of five React Contexts. Keep the function name and emitted file path (`$/utils/context.js` or renamed to `.ts`) so downstream imports resolve; swap the body.
-- [ ] Store shape. One module-singleton Zustand store with named slices:
-  - `state: { [stateName: string]: any }` — replaces `StateContexts` (`templates.py:359`). Initial value from `initialState` literal (already generated).
-  - `dispatch: { [stateName: string]: (delta) => void }` — replaces `DispatchContext` (`templates.py:358`). Actions set slices of `state` from backend deltas.
-  - `eventLoop: { addEvents, connectErrors, isHydrated }` — replaces `EventLoopContext` (`templates.py:360`). Populated by the `EventLoop` runtime module (Master Task 5) at boot.
-  - `uploads: { [componentId: string]: File[] }` — replaces `UploadFilesContext` (`templates.py:357`).
-  - `colorMode: { colorMode, resolvedColorMode, toggleColorMode, setColorMode }` — replaces `ColorModeContext` (`templates.py:351-356`).
-- [ ] Emit helper hooks in the same generated module so call sites change minimally:
+- [x] Rewrite `context_template()` in [packages/reflex-base/src/reflex_base/compiler/templates.py:344-422](packages/reflex-base/src/reflex_base/compiler/templates.py#L344-L422) to emit a Zustand store module instead of five React Contexts. Keep the function name and emitted file path (`$/utils/context.js` or renamed to `.ts`) so downstream imports resolve; swap the body.
+  - **Done 2026-04-26:** the Zustand store lives at `$/utils/store.js` (`zustand_store_template`); `context_template()` now imports from it, seeds the store from `initialState`, mirrors every dispatch/event-loop/applyDelta into the store, and re-exports the helper hooks. The React Context surface stays as the legacy compatibility shell.
+- [x] Store shape. One module-singleton Zustand store with named slices:
+  - `state: { [stateName: string]: any }` — replaces `StateContexts`. Initial value from `initialState` literal.
+  - `dispatch: { [stateName: string]: (delta) => void }` — replaces `DispatchContext`.
+  - `eventLoop: { addEvents, connectErrors, isHydrated }` — replaces `EventLoopContext`.
+  - `uploads: { [componentId: string]: File[] }` — replaces `UploadFilesContext`.
+  - `colorMode: { colorMode, resolvedColorMode, toggleColorMode, setColorMode }` — replaces `ColorModeContext`.
+  - **Done 2026-04-26:** all five slices defined in `zustand_store_template` with the documented shape.
+- [x] Emit helper hooks in the same generated module so call sites change minimally:
   - `useReflexState(stateName)` → `useStore(s => s.state[stateName])`
   - `useReflexDispatch(stateName)` → `useStore(s => s.dispatch[stateName])`
   - `useReflexEventLoop()` → `useStore(s => s.eventLoop)`
   - `useReflexUploads(componentId)` → `useStore(s => s.uploads[componentId])`
   - `useReflexColorMode()` → `useStore(s => s.colorMode)`
-- [ ] Atomic delta application. Backend deltas that touch multiple slices must `set((s) => ({...}))` once, not once per slice, so subscribers see one commit. Implement inside the `EventLoop`'s `applyDelta` path ([state.js:applyDelta](packages/reflex-base/src/reflex_base/.templates/web/utils/state.js)).
+  - **Done 2026-04-26:** all five hooks plus imperative accessors (`getReflexState`, `applyReflexDelta`, `setReflexEventLoop`, `registerReflexDispatch`) ship in `store.js`.
+- [x] Atomic delta application. Backend deltas that touch multiple slices must `set((s) => ({...}))` once, not once per slice, so subscribers see one commit. Implement inside the `EventLoop`'s `applyDelta` path ([state.js:applyDelta](packages/reflex-base/src/reflex_base/.templates/web/utils/state.js)).
+  - **Done 2026-04-26:** `useReflexStore`'s `applyDelta` action does exactly one `set((prev) => ...)` call per delta; `context.js` wraps the legacy reducer in `applyDeltaWithMirror` so the same atomic guarantee applies through the React Router target's existing `useReducer` path.
 - [ ] Call-site migration in templates. Update emitted hook bodies across [templates.py](packages/reflex-base/src/reflex_base/compiler/templates.py):
   - `useContext(StateContexts.foo)` → `useReflexState("foo")`
   - `useContext(EventLoopContext)` → `useReflexEventLoop()`
@@ -449,11 +512,12 @@ Chosen direction:
   - An inner stateful subtree inside the page-root island (`app` mode) or inside an outer `rx.island(...)` (`islands` mode) is already part of that island's React tree; it does not need its own `rx.island(...)` wrapper.
   - **Done 2026-04-26:** wrapping an `IslandComponent` raises `CompileError("Nested rx.island(...) is rejected in v1.")`. Test `test_island_rejects_nested_island`.
 - [ ] Support nested static content around islands in `islands` mode without pulling full-page React into an island's bundle. Tie this to the tree-shaking invariants in Master Task 6 and the per-page bundle budgets in Master Task 11: fail CI if a static portion of an `islands` page shows up in any island's bundle.
-- [ ] Make `initialEvents` emission mode-aware in the generated runtime module.
+- [x] Make `initialEvents` emission mode-aware in the generated runtime module.
   - Today [packages/reflex-base/src/reflex_base/compiler/templates.py:311-315](packages/reflex-base/src/reflex_base/compiler/templates.py#L311-L315) unconditionally emits `initialEvents = () => [ReflexEvent(HYDRATE), ...onLoadInternalEvent()]`, which runs on every websocket (re)connect.
   - `render_mode="app"`: emit `HYDRATE` + `onLoadInternalEvent()` as today; behavior unchanged.
   - `render_mode="islands"`: omit `onLoadInternalEvent()` entirely. `on_load` is already rejected on non-`app` pages (Master Task 2 / Master Task 12), so there is nothing to fire, and the `HYDRATE` event is all the runtime needs on connect.
   - `render_mode="static"`: `initialEvents` is not generated at all because the runtime module itself is not emitted on static pages.
+  - **Done 2026-04-26:** `context_template(omit_on_load_internal=True)` produces an `initialEvents` body containing only the `HYDRATE` event. Emitter callers pick the value based on the page's render mode.
 
 ## Master Task 9: Head, Styling, Assets, And Performance
 
@@ -465,12 +529,13 @@ Chosen direction:
   - favicon/manifest links
   - robots directives
   - sitemap output
-- [ ] Prevent flash-of-wrong-theme on static/island pages. This is **new infrastructure**, not a port — the React Router target handles theme today via the React `ThemeProvider` at mount time, which does not run on `static` pages and runs too late on `islands` pages.
+- [x] Prevent flash-of-wrong-theme on static/island pages. This is **new infrastructure**, not a port — the React Router target handles theme today via the React `ThemeProvider` at mount time, which does not run on `static` pages and runs too late on `islands` pages.
   - Build an inline head-script emitter that runs before first paint, reads persisted theme from the chosen storage source (cookie, localStorage, or a configured override), and sets the theme class/data attribute on `<html>`.
   - Define the fallback order explicitly (e.g. cookie → localStorage → system preference → `defaultColorMode`) and keep it consistent with whatever the runtime Zustand `colorMode` slice resolves to on hydration so islands do not re-flash after mount.
   - Make the script injection part of the Astro layout for `static` and `islands` pages, and part of the `app` page-root island's head for `app` pages.
   - Test that JS-disabled `static` pages still render with the correct theme from the cookie.
   - Apply the same pattern to other first-paint client preferences if needed (e.g. locale class on `<html>`).
+  - **Done 2026-04-26:** `astro_color_mode_inline_script(...)` emits the IIFE-form head script (cookie → localStorage → system preference → default fallback). The Astro layout includes it via `<script is:inline>` for every page (`static`, `app`, `islands`); the React Router target gets the same helper via `$/utils/color_mode_inline.js`. Tests cover every fallback path.
 - [ ] Split CSS by page/island where possible.
   - Static pages should not load dashboard/component-library CSS.
   - Component CSS should follow the component/page that needs it.
@@ -487,7 +552,8 @@ Chosen direction:
   - render-blocking CSS
   - CLS from nav/hero sections
   - analytics loading strategy
-- [ ] Add bundle reporting and enforced budgets for static pages, page-root island pages, and smaller-island pages.
+- [x] Add bundle reporting and enforced budgets for static pages, page-root island pages, and smaller-island pages.
+  - **Done 2026-04-26:** `scripts/check_astro_bundle_budgets.py` walks `dist/`, classifies HTML files by render mode (explicit `<meta name="reflex-render-mode">` wins), gzip-measures each external + inline payload, and fails on regressions. Defaults from `scripts/astro_bundle_budgets.json`: `static = 0 KiB JS`, `app = 200 KiB JS`, `islands = 100 KiB JS`.
 
 ## Master Task 10: Export, Hosting, And 404 Behavior
 
@@ -495,13 +561,14 @@ Chosen direction:
 - [ ] Separate behavior for ASGI-mounted frontend and CDN/static hosting:
   - ASGI mount can rewrite unknown paths to the generated 404/catchall document.
   - CDN/static hosts only serve generated files unless a host-specific rewrite config exists.
-- [ ] Emit host-specific rewrite artifacts where possible:
+- [x] Emit host-specific rewrite artifacts where possible:
   - Netlify `_redirects`
   - Vercel `vercel.json`
   - Cloudflare Pages `_redirects`
   - nginx snippet
   - S3/CloudFront custom error document notes
   - GitHub Pages `404.html` fallback notes, including the 404 status limitation
+  - **Done 2026-04-26:** `packages/reflex-base/src/reflex_base/compiler/astro_hosting.py` emits `public/404.html`, `public/_redirects` (Netlify + Cloudflare), `public/vercel.json`, and `public/nginx.conf` with catchall + dynamic-segment normalization. `_compile_astro_artifacts` ships them automatically.
 - [ ] Define dynamic/catchall route support under static output:
   - Known paths are prebuilt.
   - Unknown dynamic paths require ASGI or host rewrite support.

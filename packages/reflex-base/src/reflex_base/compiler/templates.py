@@ -260,6 +260,7 @@ def context_template(
     initial_state: dict[str, Any] | None = None,
     state_name: str | None = None,
     client_storage: dict[str, dict[str, dict[str, Any]]] | None = None,
+    omit_on_load_internal: bool = False,
 ):
     """Template for the context file.
 
@@ -269,6 +270,11 @@ def context_template(
         client_storage: The client storage for the context.
         is_dev_mode: Whether the app is in development mode.
         default_color_mode: The default color mode for the context.
+        omit_on_load_internal: When True, ``initialEvents`` only fires
+            ``HYDRATE`` and skips ``onLoadInternalEvent()``. The Astro target
+            uses this for `render_mode="islands"` pages where ``on_load`` is
+            not honored (Master Task 8). The React Router target leaves the
+            default ``False`` so existing behavior is unchanged.
 
     Returns:
         Rendered context file content as string.
@@ -278,6 +284,15 @@ def context_template(
         f"{format_state_name(state_name)}: createContext(null),"
         for state_name in initial_state
     ])
+
+    initial_events_body = (
+        f"ReflexEvent('{state_name}.{constants.CompileVars.HYDRATE}'),"
+        if omit_on_load_internal
+        else (
+            f"ReflexEvent('{state_name}.{constants.CompileVars.HYDRATE}'),\n"
+            "    ...onLoadInternalEvent()"
+        )
+    )
 
     state_str = (
         rf"""
@@ -310,8 +325,7 @@ export const onLoadInternalEvent = () => {{
 
 // The following events are sent when the websocket connects or reconnects.
 export const initialEvents = () => [
-    ReflexEvent('{state_name}.{constants.CompileVars.HYDRATE}'),
-    ...onLoadInternalEvent()
+    {initial_events_body}
 ]
     """
         if state_name
@@ -343,9 +357,27 @@ export const initialEvents = () => []
 
     return rf"""import {{ createContext, useContext, useMemo, useReducer, useState, createElement, useEffect }} from "react"
 import {{ applyDelta, ReflexEvent, hydrateClientStorage, useEventLoop, refs }} from "$/utils/state"
+import {{
+  applyReflexDelta as _zustandApplyDelta,
+  registerReflexDispatch as _zustandRegisterDispatch,
+  setReflexEventLoop as _zustandSetEventLoop,
+  useReflexColorMode,
+  useReflexDispatch,
+  useReflexEventLoop,
+  useReflexState,
+  useReflexStore,
+  useReflexUploads,
+}} from "$/utils/store"
 import {{ jsx }} from "@emotion/react";
 
 export const initialState = {"{}" if not initial_state else json_dumps(initial_state)}
+
+// Eagerly mirror initialState into the Zustand store so non-React call sites
+// (Astro islands, the event-loop runtime singleton) can read the snapshot
+// before any component mounts.
+for (const [stateName, slice] of Object.entries(initialState)) {{
+  useReflexStore.getState().setStateSlice(stateName, slice);
+}}
 
 export const defaultColorMode = {default_color_mode}
 export const ColorModeContext = createContext({{
@@ -359,6 +391,17 @@ export const DispatchContext = createContext(null);
 export const StateContexts = {{{state_contexts_str}}};
 export const EventLoopContext = createContext(null);
 export const clientStorage = {"{}" if client_storage is None else json.dumps(client_storage)}
+
+// Re-export the Zustand-backed hooks so call sites can migrate at their own
+// pace. New code should prefer these over the React Context surface above.
+export {{
+  useReflexColorMode,
+  useReflexDispatch,
+  useReflexEventLoop,
+  useReflexState,
+  useReflexStore,
+  useReflexUploads,
+}};
 
 {state_str}
 
@@ -399,6 +442,16 @@ export function EventLoopProvider({{ children }}) {{
     initialEvents,
     clientStorage,
   )
+  // Mirror the event-loop slice into the Zustand store so non-React
+  // subscribers (Astro islands, the event-loop runtime singleton) stay
+  // in sync. The React Context surface above remains the legacy entry.
+  useEffect(() => {{
+    _zustandSetEventLoop({{
+      addEvents,
+      connectErrors,
+      isHydrated: true,
+    }});
+  }}, [addEvents, connectErrors]);
   return createElement(
     EventLoopContext.Provider,
     {{ value: [addEvents, connectErrors] }},
@@ -406,13 +459,31 @@ export function EventLoopProvider({{ children }}) {{
   );
 }}
 
+// Wrap the legacy applyDelta reducer so every backend delta also commits to
+// the Zustand store atomically. One set() per delta means subscribers see a
+// single coherent snapshot even when multiple slices change.
+const applyDeltaWithMirror = (state, delta) => {{
+  const next = applyDelta(state, delta);
+  _zustandApplyDelta(delta);
+  return next;
+}};
+
 export function StateProvider({{ children }}) {{
-  {state_reducer_str}
+  {state_reducer_str.replace("applyDelta", "applyDeltaWithMirror")}
   const dispatchers = useMemo(() => {{
     return {{
       {dispatchers_str}
     }}
   }}, [])
+
+  // Register every per-state dispatcher with the Zustand store as well, so
+  // call sites that subscribe via useReflexDispatch(name) pick up the same
+  // function the legacy DispatchContext provides.
+  useEffect(() => {{
+    for (const [name, fn] of Object.entries(dispatchers)) {{
+      _zustandRegisterDispatch(name, fn);
+    }}
+  }}, [dispatchers]);
 
   return (
     {create_state_contexts_str}

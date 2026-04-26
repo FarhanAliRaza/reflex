@@ -773,6 +773,24 @@ def get_context_path() -> str:
     return str(get_web_dir() / (constants.Dirs.CONTEXTS_PATH + constants.Ext.JS))
 
 
+def get_store_path() -> str:
+    """Get the path of the Zustand store module shared by both targets.
+
+    Returns:
+        The absolute path of ``$/utils/store.js``.
+    """
+    return str(get_web_dir() / constants.Dirs.UTILS / ("store" + constants.Ext.JS))
+
+
+def get_event_loop_runtime_path() -> str:
+    """Get the path of the target-agnostic event loop runtime module.
+
+    Returns:
+        The absolute path of ``$/utils/event_loop.js``.
+    """
+    return str(get_web_dir() / constants.Dirs.UTILS / ("event_loop" + constants.Ext.JS))
+
+
 def get_components_path() -> str:
     """Get the path of the compiled components.
 

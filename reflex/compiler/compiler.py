@@ -957,6 +957,30 @@ def _resolve_radix_themes_plugin(
     return plugin_chain, radix_plugin
 
 
+def _compile_zustand_runtime() -> list[tuple[str, str]]:
+    """Emit the shared Zustand store + event-loop runtime modules.
+
+    Both targets get these files. The legacy ``context.js`` re-exports the
+    Zustand-backed hooks so existing call sites that import from
+    ``$/utils/context`` continue to work; new code (Astro target, future
+    React Router refactors) imports directly from ``$/utils/store`` and
+    ``$/utils/event_loop``.
+
+    Returns:
+        A list of ``(path, contents)`` pairs ready to extend
+        ``compile_results``.
+    """
+    from reflex_base.compiler.zustand_template import (
+        event_loop_runtime_template,
+        zustand_store_template,
+    )
+
+    return [
+        (utils.get_store_path(), zustand_store_template()),
+        (utils.get_event_loop_runtime_path(), event_loop_runtime_template()),
+    ]
+
+
 def _compile_astro_artifacts(
     app: App,
     config: Any,
@@ -984,9 +1008,12 @@ def _compile_astro_artifacts(
     """
     from reflex_base.compiler.astro import (
         AstroEmitterInput,
+        AstroIsland,
         astro_island_module_path,
         emit_astro_artifacts,
     )
+    from reflex_base.compiler.astro_hosting import emit_astro_hosting_artifacts
+    from reflex_base.compiler.islands_classifier import classify_islands
     from reflex_base.compiler.static_mode import reject_static_mode_violations
 
     page_specs: list[AstroEmitterInput] = []
@@ -1016,12 +1043,31 @@ def _compile_astro_artifacts(
             if island_path.startswith("src/")
             else island_path
         )
+
+        # Auto-place client islands for islands-mode pages (Path A + Path B
+        # from Master Task 2). Each placement gets its own per-page module.
+        astro_islands: tuple[AstroIsland, ...] = ()
+        if render_mode == "islands":
+            placements = classify_islands(page_ctx.root_component)
+            astro_islands = tuple(
+                p.to_astro_island(
+                    module_path=(
+                        rel_to_src
+                        + astro_island_module_path(route, p.component_name)[
+                            len("src/") :
+                        ]
+                    )
+                )
+                for p in placements
+            )
+
         page_specs.append(
             AstroEmitterInput(
                 route=route,
                 title=title_value,
                 render_mode=render_mode,
                 page_module_import=page_module_import if render_mode == "app" else None,
+                islands=astro_islands,
             )
         )
 
@@ -1031,6 +1077,12 @@ def _compile_astro_artifacts(
         base=config.frontend_path or "",
         host=config.backend_host or "0.0.0.0",
         port=config.frontend_port,
+    )
+
+    artifacts.extend(
+        emit_astro_hosting_artifacts(
+            [spec.route for spec in page_specs],
+        )
     )
 
     # For each app-mode page, also emit the page-root island module that
@@ -1278,6 +1330,7 @@ def compile_app(
     compile_results.append(
         compile_contexts(app._state, radix_themes_plugin.get_theme())
     )
+    compile_results.extend(_compile_zustand_runtime())
     progress.advance(task)
 
     compile_results.append(compile_app_root(app_root))
