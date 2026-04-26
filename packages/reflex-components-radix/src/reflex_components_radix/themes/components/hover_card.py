@@ -1,96 +1,97 @@
-"""Interactive components provided by @radix-ui/themes."""
+"""HoverCard — wraps ``@radix-ui/react-hover-card`` with Tailwind styling."""
 
-from typing import Literal
+from __future__ import annotations
 
-from reflex_base.components.component import ComponentNamespace, field
+from typing import Any, Literal
+
+from reflex_base.components.component import Component, ComponentNamespace, field
 from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.event import EventHandler, passthrough_event_spec
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import (
-    RadixThemesComponent,
-    RadixThemesTriggerComponent,
+from reflex_components_radix._radix_classes import popover_content_classes
+from reflex_components_radix._variants import cn
+from reflex_components_radix.primitives.base import (
+    RadixPrimitiveComponent,
+    RadixPrimitiveTriggerComponent,
 )
 
 
-class HoverCardRoot(RadixThemesComponent):
-    """For sighted users to preview content available behind a link."""
+class _HoverCardElement(RadixPrimitiveComponent):
+    """Base for @radix-ui/react-hover-card components."""
 
-    tag = "HoverCard.Root"
-
-    default_open: Var[bool] = field(
-        doc="The open state of the hover card when it is initially rendered. Use when you do not need to control its open state."
-    )
-
-    open: Var[bool] = field(
-        doc="The controlled open state of the hover card. Must be used in conjunction with onOpenChange."
-    )
-
-    open_delay: Var[int] = field(
-        doc="The duration from when the mouse enters the trigger until the hover card opens."
-    )
-
-    close_delay: Var[int] = field(
-        doc="The duration from when the mouse leaves the trigger until the hover card closes."
-    )
-
-    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(
-        doc="Fired when the open state changes."
-    )
+    library = "@radix-ui/react-hover-card@1.1.15"
 
 
-class HoverCardTrigger(RadixThemesTriggerComponent):
-    """Wraps the link that will open the hover card."""
+class HoverCardRoot(_HoverCardElement):
+    """Root component for HoverCard."""
 
-    tag = "HoverCard.Trigger"
+    tag = "Root"
+    alias = "RadixPrimitiveHoverCardRoot"
+
+    default_open: Var[bool] = field(doc="Initial open state")
+    open: Var[bool] = field(doc="Controlled open state")
+    open_delay: Var[int] = field(doc="Open delay (ms)")
+    close_delay: Var[int] = field(doc="Close delay (ms)")
+    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(doc="Open change.")
+
+
+class HoverCardPortal(_HoverCardElement):
+    """Portal for hover-card content."""
+
+    tag = "Portal"
+    alias = "RadixPrimitiveHoverCardPortal"
+
+    force_mount: Var[bool] = field(doc="Force mount")
+
+
+class HoverCardTrigger(_HoverCardElement, RadixPrimitiveTriggerComponent):
+    """Wraps the link/button that opens the hover card."""
+
+    tag = "Trigger"
+    alias = "RadixPrimitiveHoverCardTrigger"
 
     _memoization_mode = MemoizationMode(recursive=False)
 
 
-class HoverCardContent(elements.Div, RadixThemesComponent):
-    """Contains the content of the open hover card."""
+class HoverCardContent(elements.Div, _HoverCardElement):
+    """Hover-card content panel — auto-wraps in Portal."""
 
-    tag = "HoverCard.Content"
+    tag = "Content"
+    alias = "RadixPrimitiveHoverCardContent"
 
-    side: Var[Responsive[Literal["top", "right", "bottom", "left"]]] = field(
-        doc="The preferred side of the trigger to render against when open. Will be reversed when collisions occur and avoidCollisions is enabled."
-    )
+    side: Var[Responsive[Literal["top", "right", "bottom", "left"]]] = field(doc="Side")
+    side_offset: Var[int] = field(doc="Side offset")
+    align: Var[Literal["start", "center", "end"]] = field(doc="Align")
+    align_offset: Var[int] = field(doc="Align offset")
+    avoid_collisions: Var[bool] = field(doc="Avoid collisions")
+    collision_padding: Var[float | int | dict[str, float | int]] = field(doc="Padding")
+    sticky: Var[Literal["partial", "always"]] = field(doc="Sticky")
+    hide_when_detached: Var[bool] = field(doc="Hide when detached")
+    size: Var[Responsive[Literal["1", "2", "3"]]] = field(doc='Size "1" - "3"')
 
-    side_offset: Var[int] = field(doc="The distance in pixels from the trigger.")
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create hover-card content wrapped in Portal.
 
-    align: Var[Literal["start", "center", "end"]] = field(
-        doc="The preferred alignment against the trigger. May change when collisions occur."
-    )
+        Args:
+            *children: Content body.
+            **props: Standard content props.
 
-    align_offset: Var[int] = field(
-        doc='An offset in pixels from the "start" or "end" alignment options.'
-    )
-
-    avoid_collisions: Var[bool] = field(
-        doc="Whether or not the hover card should avoid collisions with its trigger."
-    )
-
-    collision_padding: Var[float | int | dict[str, float | int]] = field(
-        doc="The distance in pixels from the boundary edges where collision detection should occur. Accepts a number (same for all sides), or a partial padding object, for example: { top: 20, left: 20 }."
-    )
-
-    sticky: Var[Literal["partial", "always"]] = field(
-        doc='The sticky behavior on the align axis. "partial" will keep the content in the boundary as long as the trigger is at least partially in the boundary whilst "always" will keep the content in the boundary regardless'
-    )
-
-    hide_when_detached: Var[bool] = field(
-        doc="Whether to hide the content when the trigger becomes fully occluded."
-    )
-
-    size: Var[Responsive[Literal["1", "2", "3"]]] = field(
-        doc='Hovercard size "1" - "3"'
-    )
+        Returns:
+            The content component (already inside a portal).
+        """
+        existing = props.pop("class_name", "")
+        props.pop("size", None)
+        props["class_name"] = cn(popover_content_classes(), existing)
+        content = super().create(*children, **props)
+        return HoverCardPortal.create(content)
 
 
 class HoverCard(ComponentNamespace):
-    """For sighted users to preview content available behind a link."""
+    """HoverCard components namespace."""
 
     root = __call__ = staticmethod(HoverCardRoot.create)
     trigger = staticmethod(HoverCardTrigger.create)

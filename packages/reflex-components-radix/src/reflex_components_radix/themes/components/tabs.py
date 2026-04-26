@@ -1,4 +1,4 @@
-"""Interactive components provided by @radix-ui/themes."""
+"""Tabs — wraps ``@radix-ui/react-tabs`` with Tailwind styling."""
 
 from __future__ import annotations
 
@@ -9,144 +9,151 @@ from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.event import EventHandler, passthrough_event_spec
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
-from reflex_components_core.core.colors import color
+from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import LiteralAccentColor, RadixThemesComponent
-
-vertical_orientation_css = "&[data-orientation='vertical']"
-
-
-class TabsRoot(RadixThemesComponent):
-    """Set of content sections to be displayed one at a time."""
-
-    tag = "Tabs.Root"
-
-    default_value: Var[str] = field(
-        doc="The value of the tab that should be active when initially rendered. Use when you do not need to control the state of the tabs."
-    )
-
-    value: Var[str] = field(
-        doc="The controlled value of the tab that should be active. Use when you need to control the state of the tabs."
-    )
-
-    orientation: Var[Literal["horizontal", "vertical"]] = field(
-        doc="The orientation of the tabs."
-    )
-
-    dir: Var[Literal["ltr", "rtl"]] = field(doc="Reading direction of the tabs.")
-
-    activation_mode: Var[Literal["automatic", "manual"]] = field(
-        doc='The mode of activation for the tabs. "automatic" will activate the tab when focused. "manual" will activate the tab when clicked.'
-    )
-
-    # Props to rename
-    _rename_props = {"onChange": "onValueChange"}
-
-    on_change: EventHandler[passthrough_event_spec(str)] = field(
-        doc="Fired when the value of the tabs changes."
-    )
-
-    def add_style(self) -> dict[str, Any] | None:
-        """Add style for the component.
-
-        Returns:
-            The style to add.
-        """
-        return {
-            vertical_orientation_css: {
-                "display": "flex",
-            }
-        }
+from reflex_components_radix._radix_classes import (
+    tabs_list_classes,
+    tabs_trigger_classes,
+)
+from reflex_components_radix._variants import cn
+from reflex_components_radix.primitives.base import RadixPrimitiveComponent
+from reflex_components_radix.themes.base import LiteralAccentColor
 
 
-class TabsList(RadixThemesComponent):
-    """Contains the triggers that sit alongside the active content."""
+class _TabsElement(RadixPrimitiveComponent):
+    """Base for @radix-ui/react-tabs components."""
 
-    tag = "Tabs.List"
+    library = "@radix-ui/react-tabs@1.1.13"
 
-    size: Var[Responsive[Literal["1", "2"]]] = field(doc='Tabs size "1" - "2"')
 
-    loop: Var[bool] = field(doc="When true, the tabs will loop when reaching the end.")
+class TabsRoot(elements.Div, _TabsElement):
+    """Root component for Tabs."""
 
-    def add_style(self):
-        """Add style for the component.
+    tag = "Root"
+    alias = "RadixPrimitiveTabsRoot"
+
+    default_value: Var[str] = field(doc="Initial active tab")
+    value: Var[str] = field(doc="Controlled active tab")
+    orientation: Var[Literal["horizontal", "vertical"]] = field(doc="Orientation")
+    dir: Var[Literal["ltr", "rtl"]] = field(doc="Reading direction")
+    activation_mode: Var[Literal["automatic", "manual"]] = field(doc="Activation")
+
+    _rename_props: ClassVar[dict[str, str]] = {"onChange": "onValueChange"}
+
+    on_change: EventHandler[passthrough_event_spec(str)] = field(doc="Active change.")
+
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a tabs root.
+
+        Args:
+            *children: TabsList + TabsContent children.
+            **props: Standard props.
 
         Returns:
-            The style to add.
+            The root component.
         """
-        return {
-            vertical_orientation_css: {
-                "display": "block",
-                "box_shadow": f"inset -1px 0 0 0 {color('gray', 5, alpha=True)}",
-            },
-        }
+        orientation = props.get("orientation", "horizontal")
+        existing = props.pop("class_name", "")
+        cls_str = (
+            "flex flex-col"
+            if (not isinstance(orientation, str) or orientation == "horizontal")
+            else "flex flex-row gap-4"
+        )
+        props["class_name"] = cn(cls_str, existing)
+        return super().create(*children, **props)
 
 
-class TabsTrigger(RadixThemesComponent):
-    """The button that activates its associated content."""
+class TabsList(elements.Div, _TabsElement):
+    """Container for the tab triggers."""
 
-    tag = "Tabs.Trigger"
+    tag = "List"
+    alias = "RadixPrimitiveTabsList"
 
-    value: Var[str] = field(doc="The value of the tab. Must be unique for each tab.")
+    size: Var[Responsive[Literal["1", "2"]]] = field(doc='Size: "1" | "2"')
+    loop: Var[bool] = field(doc="Loop keyboard nav")
 
-    disabled: Var[bool] = field(doc="Whether the tab is disabled")
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a tabs list.
 
-    color_scheme: Var[LiteralAccentColor] = field(
-        doc="The color of the line under the tab when active."
-    )
+        Args:
+            *children: TabsTrigger children.
+            **props: size + standard props.
+
+        Returns:
+            The list component.
+        """
+        size = props.pop("size", None)
+        existing = props.pop("class_name", "")
+        selections: dict[str, str] = {}
+        if isinstance(size, str):
+            selections["size"] = size
+        elif size is not None:
+            props["size"] = size
+        props["class_name"] = cn(tabs_list_classes(**selections), existing)
+        return super().create(*children, **props)
+
+
+class TabsTrigger(elements.Button, _TabsElement):
+    """A single tab trigger."""
+
+    tag = "Trigger"
+    alias = "RadixPrimitiveTabsTrigger"
+
+    value: Var[str] = field(doc="Tab value (must be unique)")
+    disabled: Var[bool] = field(doc="Disable")
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
 
     _valid_parents: ClassVar[list[str]] = ["TabsList"]
-
     _memoization_mode = MemoizationMode(recursive=False)
 
     @classmethod
-    def create(cls, *children, **props) -> Component:
-        """Create a TabsTrigger component.
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a tabs trigger.
 
         Args:
-            *children: The children of the component.
-            **props: The properties of the component.
+            *children: Trigger label.
+            **props: Standard props.
 
         Returns:
-            The TabsTrigger Component.
+            The trigger component.
         """
+        existing = props.pop("class_name", "")
         if "color_scheme" in props:
             custom_attrs = props.setdefault("custom_attrs", {})
-            custom_attrs["data-accent-color"] = props["color_scheme"]
+            custom_attrs["data-accent-color"] = props.pop("color_scheme")
+        props["class_name"] = cn(tabs_trigger_classes(), existing)
         return super().create(*children, **props)
 
-    def _exclude_props(self) -> list[str]:
-        return ["color_scheme"]
 
-    def add_style(self) -> dict[str, Any] | None:
-        """Add style for the component.
+class TabsContent(elements.Div, _TabsElement):
+    """Content panel associated with a trigger."""
 
-        Returns:
-            The style to add.
-        """
-        return {vertical_orientation_css: {"width": "100%"}}
+    tag = "Content"
+    alias = "RadixPrimitiveTabsContent"
 
+    value: Var[str] = field(doc="Tab value to match")
+    force_mount: Var[bool] = field(doc="Force mount when not active")
 
-class TabsContent(RadixThemesComponent):
-    """Contains the content associated with each trigger."""
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a tabs content panel.
 
-    tag = "Tabs.Content"
-
-    value: Var[str] = field(doc="The value of the tab. Must be unique for each tab.")
-
-    force_mount: Var[bool] = field(
-        doc="Used to force mounting when more control is needed. Useful when controlling animation with React animation libraries."
-    )
-
-    def add_style(self) -> dict[str, Any] | None:
-        """Add style for the component.
+        Args:
+            *children: Panel content.
+            **props: ``value`` + standard props.
 
         Returns:
-            The style to add.
+            The content component.
         """
-        return {
-            vertical_orientation_css: {"width": "100%", "margin": None},
-        }
+        existing = props.pop("class_name", "")
+        props["class_name"] = cn(
+            "mt-3 outline-none focus-visible:ring-2 "
+            "focus-visible:ring-[var(--accent-8)]",
+            existing,
+        )
+        return super().create(*children, **props)
 
 
 class Tabs(ComponentNamespace):
