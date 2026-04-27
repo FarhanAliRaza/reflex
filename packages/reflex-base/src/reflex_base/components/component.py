@@ -49,6 +49,7 @@ from reflex_base.event import (
     run_script,
     unwrap_var_annotation,
 )
+from reflex_base.inspector import capture as inspector_capture
 from reflex_base.style import Style, format_as_emotion
 from reflex_base.utils import console, format, imports, types
 from reflex_base.utils.imports import ImportDict, ImportVar, ParsedImportDict
@@ -718,6 +719,9 @@ class Component(BaseComponent, ABC):
         default=None, is_javascript_property=False
     )
 
+    # Inspector id for the dev-only frontend inspector (None when disabled).
+    _inspector_id: int | None = field(default=None, is_javascript_property=False)
+
     def add_imports(self) -> ImportDict | list[ImportDict]:
         """Add imports for the component.
 
@@ -1084,6 +1088,9 @@ class Component(BaseComponent, ABC):
         for prop_to_exclude in self._exclude_props():
             props.pop(prop_to_exclude, None)
 
+        if (cid := self._inspector_id) is not None and name and name != "Fragment":
+            props.setdefault("data-rx", cid)
+
         return tag.add_props(**props)
 
     @classmethod
@@ -1151,6 +1158,8 @@ class Component(BaseComponent, ABC):
         from reflex_components_core.base.bare import Bare
         from reflex_components_core.base.fragment import Fragment
 
+        cid = inspector_capture.capture(cls.__name__)
+
         # Filter out None props
         props = {key: value for key, value in props.items() if value is not None}
 
@@ -1170,7 +1179,10 @@ class Component(BaseComponent, ABC):
             for child in children
         ]
 
-        return cls._create(children_normalized, **props)
+        component = cls._create(children_normalized, **props)
+        if cid is not None:
+            component._inspector_id = cid
+        return component
 
     @classmethod
     def _create(cls: type[T], children: Sequence[BaseComponent], **props: Any) -> T:

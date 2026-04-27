@@ -181,6 +181,9 @@ class BaseConfig:
         plugins: List of plugins to use in the app.
         disable_plugins: List of plugin types to disable in the app.
         transport: The transport method for client-server communication.
+        frontend_inspector: Enable the dev-only frontend inspector. "off" disables it (default), "dev" enables it in dev mode and fails the prod build, "force" enables it in any mode.
+        frontend_inspector_shortcut: Keyboard shortcut for toggling the inspector (default "alt+x"). Modifier aliases like "cmd"/"option" are accepted.
+        frontend_inspector_editor: Editor invocation override forwarded to launch-editor. Empty string falls back to $REFLEX_EDITOR / $VISUAL / $EDITOR / launch-editor's auto-detection.
     """
 
     app_name: str
@@ -254,6 +257,12 @@ class BaseConfig:
     disable_plugins: list[type[Plugin]] = dataclasses.field(default_factory=list)
 
     transport: Literal["websocket", "polling"] = "websocket"
+
+    frontend_inspector: Literal["off", "dev", "force"] = "off"
+
+    frontend_inspector_shortcut: str = "alt+x"
+
+    frontend_inspector_editor: str = ""
 
     # Whether to skip plugin checks.
     _skip_plugins_checks: bool = dataclasses.field(default=False, repr=False)
@@ -348,6 +357,10 @@ class Config(BaseConfig):
         for key, env_value in env_kwargs.items():
             setattr(self, key, env_value)
 
+        # Apply the frontend inspector flag. Done before user code imports so
+        # ``Component.create`` decides per-component whether to walk the stack.
+        self._apply_frontend_inspector()
+
         # Normalize disable_plugins: convert strings and Plugin subclasses to instances.
         self._normalize_disable_plugins()
 
@@ -381,6 +394,44 @@ class Config(BaseConfig):
         ):
             msg = f"{self._prefixes[0]}REDIS_URL is required when using the redis state manager."
             raise ConfigError(msg)
+
+    def _apply_frontend_inspector(self):
+        """Validate and propagate the frontend inspector mode.
+
+        ``"dev"`` fails loudly when the app is being compiled for production
+        so the inspector cannot ship by accident. ``"force"`` is the explicit
+        escape hatch for staging/preview.
+
+        Raises:
+            ConfigError: If ``frontend_inspector="dev"`` is set in prod mode.
+        """
+        from reflex_base.inspector import state as inspector_state
+
+        mode = self.frontend_inspector
+        if mode not in ("off", "dev", "force"):
+            msg = (
+                "frontend_inspector must be one of 'off', 'dev', 'force'; "
+                f"got {mode!r}."
+            )
+            raise ConfigError(msg)
+
+        is_prod = environment.REFLEX_ENV_MODE.get() == constants.Env.PROD
+
+        if mode == "dev" and is_prod:
+            msg = (
+                "frontend_inspector='dev' cannot be used with REFLEX_ENV_MODE=prod. "
+                "Set frontend_inspector='off' for production builds, or use "
+                "frontend_inspector='force' to opt in explicitly."
+            )
+            raise ConfigError(msg)
+
+        if mode == "force" and is_prod:
+            console.warn(
+                "frontend_inspector='force' is enabled in a production build. "
+                "Source paths and a debug script will be served at /__reflex/."
+            )
+
+        inspector_state.set_enabled(mode != "off")
 
     def _normalize_disable_plugins(self):
         """Normalize disable_plugins list entries to Plugin subclasses.

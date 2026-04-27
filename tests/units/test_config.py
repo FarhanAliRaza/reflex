@@ -557,3 +557,46 @@ class TestDisablePlugins:
         """Test that builtin plugins are added when not disabled."""
         config = rx.Config(app_name="test")
         assert any(isinstance(p, SitemapPlugin) for p in config.plugins)
+
+
+class TestFrontendInspector:
+    """Tests for the dev-only frontend inspector config flags."""
+
+    def test_default_is_off(self):
+        """Default is "off" with the documented shortcut and empty editor."""
+        config = rx.Config(app_name="test")
+        assert config.frontend_inspector == "off"
+        assert config.frontend_inspector_shortcut == "alt+x"
+        assert config.frontend_inspector_editor == ""
+
+    def test_invalid_value_raises(self):
+        """Unknown frontend_inspector values fail loudly."""
+        from reflex_base.utils.exceptions import ConfigError
+
+        with pytest.raises(ConfigError):
+            rx.Config(app_name="test", frontend_inspector="bogus")  # pyright: ignore[reportArgumentType]
+
+    def test_dev_in_prod_raises(self, monkeypatch: pytest.MonkeyPatch):
+        """`frontend_inspector="dev"` fails when REFLEX_ENV_MODE=prod."""
+        from reflex_base.utils.exceptions import ConfigError
+
+        monkeypatch.setenv("REFLEX_ENV_MODE", Env.PROD.value)
+        with pytest.raises(ConfigError):
+            rx.Config(app_name="test", frontend_inspector="dev")
+
+    def test_force_in_prod_warns(self, monkeypatch: pytest.MonkeyPatch):
+        """`frontend_inspector="force"` is allowed in prod (with a warning)."""
+        monkeypatch.setenv("REFLEX_ENV_MODE", Env.PROD.value)
+        config = rx.Config(app_name="test", frontend_inspector="force")
+        assert config.frontend_inspector == "force"
+
+    def test_dev_toggles_inspector_state(self, monkeypatch: pytest.MonkeyPatch):
+        """The global enabled flag tracks the configured mode."""
+        from reflex_base.inspector import state as inspector_state
+
+        monkeypatch.setenv("REFLEX_ENV_MODE", Env.DEV.value)
+        rx.Config(app_name="test", frontend_inspector="dev")
+        assert inspector_state.is_enabled() is True
+
+        rx.Config(app_name="test", frontend_inspector="off")
+        assert inspector_state.is_enabled() is False
