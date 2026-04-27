@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from reflex_base.components.component import Component, field
-from reflex_base.vars.base import LiteralVar, Var
+from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.el import elements
 
@@ -22,7 +22,6 @@ class Separator(elements.Div):
     tag = "div"
 
     size: Var[Responsive[LiteralSeparatorSize]] = field(
-        default=LiteralVar.create("4"),
         doc='Separator size: "1" - "4"',
     )
     color_scheme: Var[LiteralAccentColor] = field(doc="Separator color")
@@ -45,7 +44,7 @@ class Separator(elements.Div):
         orientation = props.pop("orientation", None)
         size = props.pop("size", None)
         existing = props.pop("class_name", "")
-        selections: dict[str, str] = {}
+        selections: dict[str, str] = {"size": "4"}
         if isinstance(orientation, str):
             selections["orientation"] = orientation
         elif orientation is not None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from reflex_base.components.component import Component, field
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
@@ -15,12 +17,14 @@ class Stack(Flex):
     """A stack component."""
 
     spacing: Var[Responsive[LiteralSpacing]] = field(
-        default=Var.create("3"), doc="The spacing between each stack item."
+        doc="The spacing between each stack item."
     )
 
     align: Var[Responsive[LiteralAlign]] = field(
-        default=Var.create("start"), doc="The alignment of the stack items."
+        doc="The alignment of the stack items."
     )
+
+    _layout_defaults: ClassVar[dict[str, str]] = {"spacing": "3", "align": "start"}
 
     @classmethod
     def create(
@@ -37,7 +41,9 @@ class Stack(Flex):
         Returns:
             The stack component.
         """
-        # Apply the default classname
+        for key, default in cls._layout_defaults.items():
+            props.setdefault(key, default)
+
         given_class_name = props.pop("class_name", [])
         if not isinstance(given_class_name, list):
             given_class_name = [given_class_name]
@@ -53,16 +59,26 @@ class VStack(Stack):
     """A vertical stack component."""
 
     direction: Var[Responsive[LiteralFlexDirection]] = field(
-        default=Var.create("column"), doc="The direction of the stack."
+        doc="The direction of the stack."
     )
+
+    _layout_defaults: ClassVar[dict[str, str]] = {
+        **Stack._layout_defaults,
+        "direction": "column",
+    }
 
 
 class HStack(Stack):
     """A horizontal stack component."""
 
     direction: Var[Responsive[LiteralFlexDirection]] = field(
-        default=Var.create("row"), doc="The direction of the stack."
+        doc="The direction of the stack."
     )
+
+    _layout_defaults: ClassVar[dict[str, str]] = {
+        **Stack._layout_defaults,
+        "direction": "row",
+    }
 
 
 stack = Stack.create

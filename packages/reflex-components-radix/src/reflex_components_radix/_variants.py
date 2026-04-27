@@ -30,6 +30,105 @@ to plain HTML elements + Tailwind utilities, replacing the
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from typing import Any
+
+# Reflex breakpoint name -> Tailwind v4 prefix. ``base`` / ``initial`` map to
+# the unprefixed (mobile-first) class. Reflex's ``xs`` (30em) doesn't have a
+# default Tailwind v4 equivalent, so it falls through to ``sm`` to keep the
+# class string valid; users who need pixel-perfect ``xs`` should configure a
+# custom Tailwind breakpoint.
+_BREAKPOINT_PREFIX: dict[str, str] = {
+    "base": "",
+    "initial": "",
+    "xs": "sm:",
+    "sm": "sm:",
+    "md": "md:",
+    "lg": "lg:",
+    "xl": "xl:",
+    "2xl": "2xl:",
+}
+
+
+def responsive_classes(
+    value: Any,
+    formatter: Callable[[str], str | None],
+) -> str:
+    """Translate a ``Responsive[T]`` prop value to a Tailwind class string.
+
+    A ``Responsive`` value is either a plain string (mobile-first single
+    value) or a ``{breakpoint: value}`` mapping (Reflex ``Breakpoints``,
+    or any plain dict using the same keys). ``formatter`` resolves one
+    value at a time to the underlying class — e.g. ``lambda v:
+    f"grid-cols-{v}"`` for ``Grid.columns``, or
+    ``_DIRECTION.get`` for ``Flex.direction``. Returning ``None`` skips
+    the entry, which is how mappings reject unknown values.
+
+    Each non-base breakpoint's class is prefixed with the matching
+    Tailwind modifier (``sm:``, ``md:``, ...). Multi-class formatters
+    (``"items-center justify-center"``) get the prefix applied to every
+    class so ``md:items-center md:justify-center`` survives Tailwind's
+    JIT scan.
+
+    Args:
+        value: The prop value (str, dict, ``None``, or anything else).
+        formatter: Maps a single string value to its Tailwind class.
+
+    Returns:
+        A space-separated class string, empty when nothing translates.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return formatter(value) or ""
+    if isinstance(value, Mapping):
+        parts: list[str] = []
+        for breakpoint, raw in value.items():
+            if not isinstance(raw, str):
+                continue
+            cls = formatter(raw)
+            if not cls:
+                continue
+            prefix = _BREAKPOINT_PREFIX.get(breakpoint)
+            if prefix is None:
+                continue
+            if not prefix:
+                parts.append(cls)
+            else:
+                parts.append(" ".join(f"{prefix}{c}" for c in cls.split()))
+        return " ".join(parts)
+    return ""
+
+
+# Radix Themes ``radius`` prop -> Tailwind border-radius utility. ``"none"``
+# explicitly opts out of any rounding; the other named values defer to the
+# theme's ``--radius-N`` CSS variables (so e.g. ``radius="medium"`` uses the
+# slot the user picked in ``rx.theme(radius=...)`` via tokens.css). ``"full"``
+# is a fully circular corner regardless of theme.
+_RADIUS: dict[str, str] = {
+    "none": "rounded-none",
+    "small": "rounded-(--radius-2)",
+    "medium": "rounded-(--radius-3)",
+    "large": "rounded-(--radius-4)",
+    "full": "rounded-full",
+}
+
+
+def radius_class(value: Any) -> str:
+    """Translate a Radix Themes ``radius`` prop to a Tailwind class.
+
+    Mirrors the original Radix Themes API: ``radius`` is a per-component
+    override of the theme's default radius. Returns ``""`` when the value
+    is missing or unrecognised so callers can append the result without
+    extra guards.
+
+    Args:
+        value: ``"none" | "small" | "medium" | "large" | "full"`` or
+            ``None``.
+
+    Returns:
+        The matching ``rounded-*`` class, or ``""``.
+    """
+    return responsive_classes(value, _RADIUS.get)
 
 
 def variants(

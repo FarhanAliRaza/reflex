@@ -37,9 +37,13 @@ class Link(A, MemoizationLeaf, MarkdownComponentMap):
 
     as_child: Var[bool] = field(doc="Render as child")
     size: Var[Responsive[LiteralTextSize]] = field(doc='Text size: "1" - "9"')
-    weight: Var[Responsive[LiteralTextWeight]] = field(doc='Thickness: light|regular|medium|bold')
-    trim: Var[Responsive[LiteralTextTrim]] = field(doc='Trim: normal|start|end|both')
-    underline: Var[LiteralLinkUnderline] = field(doc='Underline: auto|hover|always|none')
+    weight: Var[Responsive[LiteralTextWeight]] = field(
+        doc="Thickness: light|regular|medium|bold"
+    )
+    trim: Var[Responsive[LiteralTextTrim]] = field(doc="Trim: normal|start|end|both")
+    underline: Var[LiteralLinkUnderline] = field(
+        doc="Underline: auto|hover|always|none"
+    )
     color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
     high_contrast: Var[bool] = field(doc="Higher contrast variant")
     is_external: Var[bool] = field(doc="If True, opens in a new tab")
@@ -75,16 +79,13 @@ class Link(A, MemoizationLeaf, MarkdownComponentMap):
         Raises:
             ValueError: If a non-empty href is provided without children.
         """
-        underline = props.pop("underline", None)
         existing = props.pop("class_name", "")
         selections: dict[str, str] = {}
-        if isinstance(underline, str):
-            selections["underline"] = underline
-        elif underline is not None:
-            props["underline"] = underline
-        for key in ("size", "weight"):
+        for key in ("underline", "size", "weight"):
             value = props.pop(key, None)
-            if value is not None:
+            if isinstance(value, str):
+                selections[key] = value
+            elif value is not None:
                 props[key] = value
         props["class_name"] = cn(link_classes(**selections), existing)
 
@@ -103,7 +104,9 @@ class Link(A, MemoizationLeaf, MarkdownComponentMap):
 
                 if (config := get_config()).frontend_target == "astro":
                     for unsupported in _KNOWN_REACT_ROUTER_LINK_PROPS - {
-                        "href", "rel", "target",
+                        "href",
+                        "rel",
+                        "target",
                     }:
                         props.pop(unsupported, None)
                     if isinstance(href_value := props.get("href"), str):
@@ -115,7 +118,9 @@ class Link(A, MemoizationLeaf, MarkdownComponentMap):
                     if prop in _KNOWN_REACT_ROUTER_LINK_PROPS:
                         react_router_link_props[prop] = props.pop(prop)
 
-                react_router_link_props["to"] = react_router_link_props.pop("href", href)
+                react_router_link_props["to"] = react_router_link_props.pop(
+                    "href", href
+                )
 
                 return super().create(
                     ReactRouterLink.create(*children, **react_router_link_props),

@@ -138,6 +138,13 @@ def _render_props_as_attrs(props: Iterable[str]) -> str:
         name, _, value = text.partition(":")
         name = name.strip()
         value = value.strip()
+        # ``format_props`` quotes hyphenated keys (``data-accent-color``,
+        # ``aria-label``) so JSX accepts them. HTML attribute names are
+        # bare identifiers — strip the quoting before emitting.
+        if len(name) >= 2 and (
+            (name[0] == '"' and name[-1] == '"') or (name[0] == "'" and name[-1] == "'")
+        ):
+            name = name[1:-1]
         if not name or name.startswith(("on", "ref")):
             continue
         attr_name = "class" if name == "className" else name

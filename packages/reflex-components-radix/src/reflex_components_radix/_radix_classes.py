@@ -34,8 +34,7 @@ button_classes = variants(
             "hover:bg-[var(--accent-10)] shadow-sm"
         ),
         "soft": (
-            "bg-[var(--accent-3)] text-[var(--accent-11)] "
-            "hover:bg-[var(--accent-4)]"
+            "bg-[var(--accent-3)] text-[var(--accent-11)] hover:bg-[var(--accent-4)]"
         ),
         "surface": (
             "border border-[var(--accent-a7)] bg-[var(--accent-surface)] "
@@ -46,9 +45,7 @@ button_classes = variants(
             "border border-[var(--accent-a8)] bg-transparent "
             "text-[var(--accent-11)] hover:bg-[var(--accent-a3)]"
         ),
-        "ghost": (
-            "bg-transparent text-[var(--accent-11)] hover:bg-[var(--accent-a3)]"
-        ),
+        "ghost": ("bg-transparent text-[var(--accent-11)] hover:bg-[var(--accent-a3)]"),
         "classic": (
             "bg-[var(--accent-9)] text-[var(--accent-contrast)] "
             "hover:bg-[var(--accent-10)] shadow-md"
@@ -89,10 +86,7 @@ badge_classes = variants(
 
 
 callout_classes = variants(
-    base=(
-        "flex gap-2 rounded-(--radius-3) "
-        "[&_svg]:shrink-0 [&_svg]:mt-0.5"
-    ),
+    base=("flex gap-2 rounded-(--radius-3) [&_svg]:shrink-0 [&_svg]:mt-0.5"),
     defaults={"variant": "soft", "size": "2"},
     variant={
         "soft": "bg-[var(--accent-3)] text-[var(--accent-11)]",
@@ -201,6 +195,23 @@ link_classes = variants(
         "hover": "text-[var(--accent-11)] hover:underline underline-offset-2",
         "none": "text-[var(--accent-11)] no-underline",
     },
+    size={
+        "1": "text-xs leading-snug tracking-wide",
+        "2": "text-sm leading-snug",
+        "3": "text-base leading-normal",
+        "4": "text-lg leading-relaxed",
+        "5": "text-xl leading-relaxed tracking-tight",
+        "6": "text-2xl leading-relaxed tracking-tight",
+        "7": "text-3xl leading-snug tracking-tight",
+        "8": "text-4xl leading-tight tracking-tight",
+        "9": "text-6xl leading-none tracking-tighter",
+    },
+    weight={
+        "light": "font-light",
+        "regular": "font-normal",
+        "medium": "font-medium",
+        "bold": "font-bold",
+    },
 )
 
 
@@ -211,12 +222,8 @@ code_classes = variants(
     ),
     defaults={"variant": "soft", "size": "2"},
     variant={
-        "solid": (
-            "bg-[var(--accent-9)] text-[var(--accent-contrast)] px-1 py-0.5"
-        ),
-        "soft": (
-            "bg-[var(--accent-a3)] text-[var(--accent-12)] px-1 py-0.5"
-        ),
+        "solid": ("bg-[var(--accent-9)] text-[var(--accent-contrast)] px-1 py-0.5"),
+        "soft": ("bg-[var(--accent-a3)] text-[var(--accent-12)] px-1 py-0.5"),
         "outline": (
             "border border-[var(--accent-a7)] text-[var(--accent-11)] px-1 py-0.5"
         ),
@@ -270,10 +277,7 @@ separator_classes = variants(
 
 
 blockquote_classes = variants(
-    base=(
-        "border-l-2 border-[var(--accent-a7)] pl-4 "
-        "italic text-[var(--gray-12)]"
-    ),
+    base=("border-l-2 border-[var(--accent-a7)] pl-4 italic text-[var(--gray-12)]"),
     defaults={"size": "3"},
     size={
         "1": "text-xs",
@@ -304,10 +308,7 @@ spinner_classes = variants(
 
 
 skeleton_classes = variants(
-    base=(
-        "animate-pulse bg-[var(--gray-a3)] rounded-(--radius-2) "
-        "[&_*]:invisible"
-    ),
+    base=("animate-pulse bg-[var(--gray-a3)] rounded-(--radius-2) [&_*]:invisible"),
 )
 
 
@@ -351,8 +352,7 @@ icon_button_classes = variants(
             "hover:bg-[var(--accent-10)] shadow-sm"
         ),
         "soft": (
-            "bg-[var(--accent-3)] text-[var(--accent-11)] "
-            "hover:bg-[var(--accent-4)]"
+            "bg-[var(--accent-3)] text-[var(--accent-11)] hover:bg-[var(--accent-4)]"
         ),
         "surface": (
             "border border-[var(--accent-a7)] bg-[var(--accent-surface)] "
@@ -362,9 +362,7 @@ icon_button_classes = variants(
             "border border-[var(--accent-a8)] bg-transparent "
             "text-[var(--accent-11)] hover:bg-[var(--accent-a3)]"
         ),
-        "ghost": (
-            "bg-transparent text-[var(--accent-11)] hover:bg-[var(--accent-a3)]"
-        ),
+        "ghost": ("bg-transparent text-[var(--accent-11)] hover:bg-[var(--accent-a3)]"),
         "classic": (
             "bg-[var(--accent-9)] text-[var(--accent-contrast)] "
             "hover:bg-[var(--accent-10)] shadow-md"
@@ -394,9 +392,7 @@ text_field_classes = variants(
             "border border-[var(--gray-a7)] bg-[var(--color-surface)] "
             "shadow-[inset_0_1px_2px_var(--gray-a3)]"
         ),
-        "surface": (
-            "border border-[var(--gray-a7)] bg-[var(--color-surface)]"
-        ),
+        "surface": ("border border-[var(--gray-a7)] bg-[var(--color-surface)]"),
         "soft": "bg-[var(--accent-a3)] border border-transparent",
     },
     size={
@@ -443,12 +439,12 @@ checkbox_classes = variants(
         "checked:bg-[var(--accent-9)] "
         "checked:bg-no-repeat checked:bg-center "
         "checked:bg-[length:80%_80%] "
-        "checked:bg-[image:url(\"data:image/svg+xml;utf8,"
+        'checked:bg-[image:url("data:image/svg+xml;utf8,'
         "%3Csvg%20viewBox%3D%270%200%2016%2016%27%20fill%3D%27none%27%20"
         "xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%3E"
         "%3Cpath%20d%3D%27M3%208.5L7%2012L13%204%27%20stroke%3D%27white%27%20"
         "stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20"
-        "stroke-linejoin%3D%27round%27%2F%3E%3C%2Fsvg%3E\")]"
+        'stroke-linejoin%3D%27round%27%2F%3E%3C%2Fsvg%3E")]'
     ),
     defaults={"size": "2"},
     size={
@@ -552,13 +548,9 @@ select_classes = variants(
             "text-[var(--gray-12)]"
         ),
         "soft": (
-            "bg-[var(--accent-a3)] text-[var(--accent-11)] "
-            "border border-transparent"
+            "bg-[var(--accent-a3)] text-[var(--accent-11)] border border-transparent"
         ),
-        "ghost": (
-            "bg-transparent text-[var(--gray-12)] "
-            "hover:bg-[var(--gray-a3)]"
-        ),
+        "ghost": ("bg-transparent text-[var(--gray-12)] hover:bg-[var(--gray-a3)]"),
     },
     size={
         "1": "h-6 px-2 text-xs",
@@ -569,9 +561,7 @@ select_classes = variants(
 
 
 tabs_list_classes = variants(
-    base=(
-        "inline-flex items-center gap-1 border-b border-[var(--gray-a6)]"
-    ),
+    base=("inline-flex items-center gap-1 border-b border-[var(--gray-a6)]"),
     defaults={"size": "2"},
     size={
         "1": "text-xs",

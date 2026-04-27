@@ -11,7 +11,7 @@ from reflex_components_core.core.cond import cond
 from reflex_components_core.el import elements
 
 from reflex_components_radix._radix_classes import avatar_classes
-from reflex_components_radix._variants import cn
+from reflex_components_radix._variants import cn, radius_class
 from reflex_components_radix.themes.base import LiteralAccentColor, LiteralRadius
 
 LiteralSize = Literal["1", "2", "3", "4", "5", "6", "7", "8", "9"]
@@ -46,6 +46,7 @@ class Avatar(elements.Span):
         """
         variant = props.pop("variant", None)
         size = props.pop("size", None)
+        radius = props.pop("radius", None)
         src = props.pop("src", None)
         fallback = props.pop("fallback", None)
         existing = props.pop("class_name", "")
@@ -58,7 +59,11 @@ class Avatar(elements.Span):
             selections["size"] = size
         elif size is not None:
             props["size"] = size
-        props["class_name"] = cn(avatar_classes(**selections), existing)
+        # ``radius`` overrides the theme's default rounding (e.g.
+        # ``radius="full"`` -> circular avatar). Append it after the base
+        # class so the override wins over ``rounded-(--radius-3)``.
+        radius_cls = radius_class(radius)
+        props["class_name"] = cn(avatar_classes(**selections), radius_cls, existing)
 
         inner: list[Any] = list(children)
         if not inner:

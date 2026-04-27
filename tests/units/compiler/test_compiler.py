@@ -394,6 +394,44 @@ def test_compile_app_root_includes_radix_window_library_when_bundled():
         reset_bundled_libraries()
 
 
+def test_wrap_with_page_app_wrappers_returns_root_when_no_wrappers():
+    leaf = rx.el.div("hello")
+
+    assert compiler._wrap_with_page_app_wrappers(leaf, {}) is leaf
+
+
+def test_wrap_with_page_app_wrappers_nests_root_inside_each_wrapper():
+    """Islands-mode static rendering must wrap the page tree with visual
+    wrappers like Radix Themes' ``Theme`` so ``data-*`` attributes land in
+    the static HTML and ``tokens.css`` selectors actually match.
+    """
+    leaf = rx.el.div("hello")
+    inner = rx.el.section()
+    outer = rx.el.main()
+
+    wrapped = compiler._wrap_with_page_app_wrappers(
+        leaf, {(20, "Inner"): inner, (50, "Outer"): outer}
+    )
+
+    # Highest priority key is outermost; chain ends at the original leaf.
+    assert isinstance(wrapped, type(outer))
+    assert isinstance(wrapped.children[0], type(inner))
+    assert wrapped.children[0].children[0] is leaf
+
+
+def test_wrap_with_page_app_wrappers_does_not_mutate_input_components():
+    """Deepcopy each wrapper so consecutive page compiles don't accumulate
+    children on the same plugin-owned ``Theme`` instance.
+    """
+    leaf = rx.el.div("hello")
+    wrapper = rx.el.section()
+    pre_children = list(wrapper.children)
+
+    compiler._wrap_with_page_app_wrappers(leaf, {(10, "W"): wrapper})
+
+    assert wrapper.children == pre_children
+
+
 def test_compile_contexts_has_default_color_mode_context():
     """ColorModeContext should have a safe fallback value without Radix."""
     _, code = compiler.compile_contexts(None, None)

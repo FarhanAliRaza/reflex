@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import sys
 from collections.abc import Callable, Iterable, Sequence
@@ -905,6 +906,43 @@ def compile_unevaluated_page(
         return component
 
 
+def _wrap_with_page_app_wrappers(
+    root: Component,
+    page_app_wrap_components: dict[tuple[int, str], Component],
+) -> Component:
+    """Nest ``root`` inside each page-level app-wrap component.
+
+    Used by the islands-mode static renderer: ``app`` and ``static`` modes
+    mount the page through the React tree, where ``_app_root`` already
+    composes the wrappers; ``islands`` builds inline HTML directly from
+    ``page_ctx.root_component`` and otherwise drops visual wrappers like
+    Radix Themes' ``Theme`` (the source of ``data-accent-color`` /
+    ``data-radius`` / ``data-scaling`` attributes that ``tokens.css``
+    keys its CSS variables off).
+
+    Wrappers are applied lowest-priority innermost / highest-priority
+    outermost, mirroring ``App._app_root``'s composition order.
+
+    Args:
+        root: The compiled page root.
+        page_app_wrap_components: Per-page wrappers keyed by
+            ``(priority, name)``.
+
+    Returns:
+        ``root`` itself when the page has no wrappers; otherwise the
+        outermost wrapper with the chain nested inside it.
+    """
+    if not page_app_wrap_components:
+        return root
+
+    wrapped: Component = root
+    for key in sorted(page_app_wrap_components):
+        wrapper = copy.deepcopy(page_app_wrap_components[key])
+        wrapper.children = [wrapped]
+        wrapped = wrapper
+    return wrapped
+
+
 def _resolve_app_wrap_components(
     app: App,
     page_app_wrap_components: dict[tuple[int, str], Component],
@@ -1087,7 +1125,10 @@ def _compile_astro_artifacts(
         islands_extra_modules: list[AstroPageArtifact] = []
         if render_mode == "islands":
             islands_render = render_islands_page(
-                route=route, root=page_ctx.root_component
+                route=route,
+                root=_wrap_with_page_app_wrappers(
+                    page_ctx.root_component, page_ctx.app_wrap_components
+                ),
             )
             islands_static_body = islands_render.body
             islands_extra_imports = islands_render.imports
@@ -1118,6 +1159,7 @@ def _compile_astro_artifacts(
         base=config.frontend_path or "",
         host=config.backend_host or "0.0.0.0",
         port=config.frontend_port,
+        frontend_inspector=config.frontend_inspector,
     )
 
     # Per-route island modules generated for islands-mode pages.

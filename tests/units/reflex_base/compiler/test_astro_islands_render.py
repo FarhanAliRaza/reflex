@@ -59,6 +59,21 @@ def test_render_props_as_attrs_drops_callbacks_and_dynamic_vars():
     assert "value" not in out
 
 
+def test_render_props_as_attrs_unquotes_hyphenated_keys():
+    """``format_props`` quotes ``data-*`` / ``aria-*`` keys for JSX; the HTML
+    renderer must strip those quotes so the attribute name is bare.
+
+    Without this, ``data-accent-color="blue"`` ends up as
+    ``"data-accent-color"="blue"`` in the static HTML and the Radix
+    ``tokens.css`` selectors never match.
+    """
+    props = ['"data-accent-color":"blue"', '"aria-label":"Close"']
+    out = _render_props_as_attrs(props)
+    assert ' data-accent-color="blue"' in out
+    assert ' aria-label="Close"' in out
+    assert '"data-accent-color"' not in out
+
+
 def test_render_node_emits_html_for_static_tree():
     rendered = {
         "name": '"div"',
@@ -137,8 +152,8 @@ def test_render_node_ssr_only_forwards_props():
     rendered = {
         "_island_placeholder": ("IconMemo", None, None),
         "_island_props": [
-            'size:16',
-            'strokeWidth:1.5',
+            "size:16",
+            "strokeWidth:1.5",
             'className:"text-current"',
         ],
         "children": [],
@@ -469,6 +484,7 @@ def test_render_islands_page_ssr_only_memo_emits_no_client_directive():
     """
     from reflex_base.components.component import Component, field
     from reflex_base.vars.base import LiteralVar, Var
+
     from reflex.experimental.memo import create_passthrough_component_memo
 
     class _Plain(Component):

@@ -15,7 +15,7 @@ from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.el import elements
 
 from reflex_components_radix._radix_classes import badge_classes
-from reflex_components_radix._variants import cn
+from reflex_components_radix._variants import cn, radius_class
 from reflex_components_radix.themes.base import LiteralAccentColor, LiteralRadius
 
 
@@ -51,6 +51,7 @@ class Badge(elements.Span):
         """
         variant = props.pop("variant", None)
         size = props.pop("size", None)
+        radius = props.pop("radius", None)
         existing = props.pop("class_name", "")
         selections: dict[str, str] = {}
         if isinstance(variant, str):
@@ -61,7 +62,8 @@ class Badge(elements.Span):
             selections["size"] = size
         elif size is not None:
             props["size"] = size
-        props["class_name"] = cn(badge_classes(**selections), existing)
+        radius_cls = radius_class(radius)
+        props["class_name"] = cn(badge_classes(**selections), radius_cls, existing)
         return super().create(*children, **props)
 
 

@@ -9,7 +9,7 @@ from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.el import elements
 
-from reflex_components_radix._variants import cn
+from reflex_components_radix._variants import cn, responsive_classes
 from reflex_components_radix.themes.base import (
     LiteralAlign,
     LiteralJustify,
@@ -50,10 +50,10 @@ class Grid(elements.Div):
     columns: Var[Responsive[str]] = field(doc="Number of columns")
     rows: Var[Responsive[str]] = field(doc="Number of rows")
     flow: Var[Responsive[LiteralGridFlow]] = field(
-        doc='Flow: row|column|dense|row-dense|column-dense'
+        doc="Flow: row|column|dense|row-dense|column-dense"
     )
-    align: Var[Responsive[LiteralAlign]] = field(doc='Cross-axis alignment')
-    justify: Var[Responsive[LiteralJustify]] = field(doc='Main-axis alignment')
+    align: Var[Responsive[LiteralAlign]] = field(doc="Cross-axis alignment")
+    justify: Var[Responsive[LiteralJustify]] = field(doc="Main-axis alignment")
     spacing: Var[Responsive[LiteralSpacing]] = field(doc='Gap "0" - "9"')
     spacing_x: Var[Responsive[LiteralSpacing]] = field(doc='Column gap "0" - "9"')
     spacing_y: Var[Responsive[LiteralSpacing]] = field(doc='Row gap "0" - "9"')
@@ -64,7 +64,10 @@ class Grid(elements.Div):
 
         Args:
             *children: Grid children.
-            **props: columns/rows/flow/align/justify/spacing props.
+            **props: columns/rows/flow/align/justify/spacing props. Each
+                accepts either a single value (``columns="3"``) or a
+                Reflex ``Breakpoints`` mapping
+                (``columns={"base":"1","sm":"2","lg":"3"}``).
 
         Returns:
             The grid component.
@@ -72,42 +75,22 @@ class Grid(elements.Div):
         existing = props.pop("class_name", "")
         parts = ["grid"]
 
-        columns = props.pop("columns", None)
-        if isinstance(columns, str):
-            parts.append(f"grid-cols-{columns}")
-        elif columns is not None:
-            props["columns"] = columns
-
-        rows = props.pop("rows", None)
-        if isinstance(rows, str):
-            parts.append(f"grid-rows-{rows}")
-        elif rows is not None:
-            props["rows"] = rows
-
-        for key, mapping in (("flow", _FLOW), ("align", _ALIGN), ("justify", _JUSTIFY)):
+        for key, formatter in (
+            ("columns", lambda v: f"grid-cols-{v}"),
+            ("rows", lambda v: f"grid-rows-{v}"),
+            ("flow", _FLOW.get),
+            ("align", _ALIGN.get),
+            ("justify", _JUSTIFY.get),
+            ("spacing", lambda v: f"gap-[var(--space-{v})]"),
+            ("spacing_x", lambda v: f"gap-x-[var(--space-{v})]"),
+            ("spacing_y", lambda v: f"gap-y-[var(--space-{v})]"),
+        ):
             value = props.pop(key, None)
-            if isinstance(value, str):
-                parts.append(mapping[value])
-            elif value is not None:
+            cls_str = responsive_classes(value, formatter)
+            if cls_str:
+                parts.append(cls_str)
+            elif value is not None and not isinstance(value, (str, dict)):
                 props[key] = value
-
-        spacing = props.pop("spacing", None)
-        if isinstance(spacing, str):
-            parts.append(f"gap-[var(--space-{spacing})]")
-        elif spacing is not None:
-            props["spacing"] = spacing
-
-        spacing_x = props.pop("spacing_x", None)
-        if isinstance(spacing_x, str):
-            parts.append(f"gap-x-[var(--space-{spacing_x})]")
-        elif spacing_x is not None:
-            props["spacing_x"] = spacing_x
-
-        spacing_y = props.pop("spacing_y", None)
-        if isinstance(spacing_y, str):
-            parts.append(f"gap-y-[var(--space-{spacing_y})]")
-        elif spacing_y is not None:
-            props["spacing_y"] = spacing_y
 
         props["class_name"] = cn(" ".join(parts), existing)
         return super().create(*children, **props)

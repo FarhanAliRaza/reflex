@@ -9,7 +9,7 @@ from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.el import elements
 
-from reflex_components_radix._variants import cn
+from reflex_components_radix._variants import cn, responsive_classes
 from reflex_components_radix.themes.base import (
     LiteralAlign,
     LiteralJustify,
@@ -44,6 +44,20 @@ _WRAP = {
     "wrap": "flex-wrap",
     "wrap-reverse": "flex-wrap-reverse",
 }
+# CSS ``display`` -> Tailwind utility. ``none`` becomes ``hidden`` (Tailwind's
+# alias). Layered on top of the baseline ``flex`` class so ``display="none"``
+# at base / ``display="flex"`` at md+ still produces a working hidden-then-
+# revealed pattern via the source-order specificity rules.
+_DISPLAY = {
+    "none": "hidden",
+    "inline": "inline",
+    "inline-block": "inline-block",
+    "block": "block",
+    "grid": "grid",
+    "inline-grid": "inline-grid",
+    "flex": "flex",
+    "inline-flex": "inline-flex",
+}
 
 
 def _spacing_class(spacing: str) -> str:
@@ -57,15 +71,15 @@ class Flex(elements.Div):
 
     as_child: Var[bool] = field(doc="Render as child")
     direction: Var[Responsive[LiteralFlexDirection]] = field(
-        doc='Direction: row|column|row-reverse|column-reverse'
+        doc="Direction: row|column|row-reverse|column-reverse"
     )
     align: Var[Responsive[LiteralAlign]] = field(
-        doc='Cross-axis alignment: start|center|end|baseline|stretch'
+        doc="Cross-axis alignment: start|center|end|baseline|stretch"
     )
     justify: Var[Responsive[LiteralJustify]] = field(
-        doc='Main-axis alignment: start|center|end|between'
+        doc="Main-axis alignment: start|center|end|between"
     )
-    wrap: Var[Responsive[LiteralFlexWrap]] = field(doc='Wrap: nowrap|wrap|wrap-reverse')
+    wrap: Var[Responsive[LiteralFlexWrap]] = field(doc="Wrap: nowrap|wrap|wrap-reverse")
     spacing: Var[Responsive[LiteralSpacing]] = field(doc='Gap: "0" - "9"')
 
     @classmethod
@@ -74,29 +88,32 @@ class Flex(elements.Div):
 
         Args:
             *children: Flex children.
-            **props: direction/align/justify/wrap/spacing + standard div props.
+            **props: direction/align/justify/wrap/spacing + standard div
+                props. Each layout prop accepts either a single value
+                (``direction="column"``) or a Reflex ``Breakpoints`` mapping
+                (``direction={"base":"column","md":"row"}``).
 
         Returns:
             The flex component.
         """
         existing = props.pop("class_name", "")
         parts = ["flex"]
-        for key, mapping in (
-            ("direction", _DIRECTION),
-            ("align", _ALIGN),
-            ("justify", _JUSTIFY),
-            ("wrap", _WRAP),
+
+        for key, formatter in (
+            ("direction", _DIRECTION.get),
+            ("align", _ALIGN.get),
+            ("justify", _JUSTIFY.get),
+            ("wrap", _WRAP.get),
+            ("spacing", _spacing_class),
+            ("display", _DISPLAY.get),
         ):
             value = props.pop(key, None)
-            if isinstance(value, str):
-                parts.append(mapping[value])
-            elif value is not None:
+            cls_str = responsive_classes(value, formatter)
+            if cls_str:
+                parts.append(cls_str)
+            elif value is not None and not isinstance(value, (str, dict)):
                 props[key] = value
-        spacing = props.pop("spacing", None)
-        if isinstance(spacing, str):
-            parts.append(_spacing_class(spacing))
-        elif spacing is not None:
-            props["spacing"] = spacing
+
         props["class_name"] = cn(" ".join(parts), existing)
         return super().create(*children, **props)
 

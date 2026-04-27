@@ -17,7 +17,7 @@ from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.el import elements
 
 from reflex_components_radix._radix_classes import button_classes
-from reflex_components_radix._variants import cn
+from reflex_components_radix._variants import cn, radius_class
 from reflex_components_radix.themes.base import (
     LiteralAccentColor,
     LiteralRadius,
@@ -39,7 +39,9 @@ class Button(elements.Button):
 
     size: Var[Responsive[LiteralButtonSize]] = field(doc='Button size "1" - "4"')
 
-    variant: Var[LiteralVariant] = field(doc='Variant: solid|soft|surface|outline|ghost|classic')
+    variant: Var[LiteralVariant] = field(
+        doc="Variant: solid|soft|surface|outline|ghost|classic"
+    )
 
     color_scheme: Var[LiteralAccentColor] = field(doc="Override theme accent color")
 
@@ -65,6 +67,7 @@ class Button(elements.Button):
         """
         variant = props.pop("variant", None)
         size = props.pop("size", None)
+        radius = props.pop("radius", None)
         existing = props.pop("class_name", "")
         selections: dict[str, str] = {}
         if isinstance(variant, str):
@@ -76,7 +79,8 @@ class Button(elements.Button):
         elif size is not None:
             props["size"] = size
         classes = button_classes(**selections)
-        props["class_name"] = cn(classes, existing)
+        radius_cls = radius_class(radius)
+        props["class_name"] = cn(classes, radius_cls, existing)
         return super().create(*children, **props)
 
 
