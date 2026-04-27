@@ -433,15 +433,22 @@ text_area_classes = variants(
 
 checkbox_classes = variants(
     base=(
-        "peer shrink-0 inline-flex items-center justify-center "
-        "rounded-(--radius-2) cursor-pointer transition-colors "
+        "peer shrink-0 appearance-none cursor-pointer transition-colors "
+        "rounded-(--radius-2) align-middle "
         "focus-visible:outline-none focus-visible:ring-2 "
         "focus-visible:ring-[var(--accent-8)] "
         "disabled:cursor-not-allowed disabled:opacity-50 "
         "border border-[var(--gray-a7)] bg-[var(--color-surface)] "
-        "data-[state=checked]:border-[var(--accent-9)] "
-        "data-[state=checked]:bg-[var(--accent-9)] "
-        "data-[state=checked]:text-[var(--accent-contrast)]"
+        "checked:border-[var(--accent-9)] "
+        "checked:bg-[var(--accent-9)] "
+        "checked:bg-no-repeat checked:bg-center "
+        "checked:bg-[length:80%_80%] "
+        "checked:bg-[image:url(\"data:image/svg+xml;utf8,"
+        "%3Csvg%20viewBox%3D%270%200%2016%2016%27%20fill%3D%27none%27%20"
+        "xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%3E"
+        "%3Cpath%20d%3D%27M3%208.5L7%2012L13%204%27%20stroke%3D%27white%27%20"
+        "stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20"
+        "stroke-linejoin%3D%27round%27%2F%3E%3C%2Fsvg%3E\")]"
     ),
     defaults={"size": "2"},
     size={
@@ -476,13 +483,15 @@ switch_classes = variants(
 
 radio_classes = variants(
     base=(
-        "shrink-0 inline-flex items-center justify-center rounded-full "
+        "shrink-0 appearance-none rounded-full align-middle "
         "border border-[var(--gray-a7)] bg-[var(--color-surface)] "
         "cursor-pointer transition-colors "
         "focus-visible:outline-none focus-visible:ring-2 "
         "focus-visible:ring-[var(--accent-8)] "
         "disabled:cursor-not-allowed disabled:opacity-50 "
-        "data-[state=checked]:border-[var(--accent-9)]"
+        "checked:border-[var(--accent-9)] "
+        "checked:bg-no-repeat checked:bg-center "
+        "checked:bg-[radial-gradient(circle,var(--accent-9)_45%,var(--color-surface)_50%)]"
     ),
     defaults={"size": "2"},
     size={

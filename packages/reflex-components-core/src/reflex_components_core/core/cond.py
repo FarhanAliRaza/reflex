@@ -17,7 +17,7 @@ from reflex_base.vars.number import ternary_operation
 from reflex_components_core.base.fragment import Fragment
 
 _IS_TRUE_IMPORT: ImportDict = {
-    f"$/{Dirs.STATE_PATH}": [ImportVar(tag="isTrue")],
+    f"$/{Dirs.COERCE_PATH}": [ImportVar(tag="isTrue")],
 }
 
 

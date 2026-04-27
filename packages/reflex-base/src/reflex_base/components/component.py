@@ -1717,7 +1717,7 @@ class Component(BaseComponent, ABC):
         if self._get_ref_hook() is not None:
             # Handle hooks needed for attaching react refs to DOM nodes.
             imports_.setdefault("react", set()).add(ImportVar(tag="useRef"))
-            imports_.setdefault(f"$/{Dirs.STATE_PATH}", set()).add(
+            imports_.setdefault(f"$/{Dirs.COERCE_PATH}", set()).add(
                 ImportVar(tag="refs")
             )
 
@@ -2405,7 +2405,7 @@ class NoSSRComponent(Component):
         """
         # React lazy import mechanism.
         dynamic_import = {
-            f"$/{constants.Dirs.UTILS}/context": [ImportVar(tag="ClientSide")],
+            f"$/{constants.Dirs.CLIENT_SIDE_PATH}": [ImportVar(tag="ClientSide")],
         }
 
         # The normal imports for this component.

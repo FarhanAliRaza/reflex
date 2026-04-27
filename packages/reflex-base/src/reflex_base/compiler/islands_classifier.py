@@ -38,6 +38,7 @@ PlacementReason = Literal[
     "provides-hydrated-context",  # ClassVar metadata
     "client-only",  # ClassVar metadata
     "tree-signal",  # state var or event trigger
+    "ssr-only",  # auto-memo wrapper with no runtime state — SSR, ship no JS
 ]
 
 _STRATEGY_DIRECTIVE: dict[
@@ -56,7 +57,9 @@ class AstroIslandPlacement:
     Attributes:
         component_name: A stable PascalCase identifier for the island (used
             as the React module export name and the JSX tag in the .astro file).
-        directive: Astro client directive to emit at the boundary.
+        directive: Astro client directive to emit at the boundary, or
+            ``None`` for ``"ssr-only"`` placements (Astro renders the
+            component server-side and ships no JS for it).
         reason: Why this node was promoted to an island.
         media: Optional media query for ``client:visible``-style placement.
         client_only: When True, render with ``client:only="react"``.
@@ -65,7 +68,9 @@ class AstroIslandPlacement:
     """
 
     component_name: str
-    directive: Literal["client:load", "client:idle", "client:visible", "client:only"]
+    directive: (
+        Literal["client:load", "client:idle", "client:visible", "client:only"] | None
+    )
     reason: PlacementReason
     media: str | None = None
     client_only: bool = False
@@ -80,7 +85,19 @@ class AstroIslandPlacement:
 
         Returns:
             An :class:`AstroIsland` ready for the Astro page emitter.
+
+        Raises:
+            ValueError: If the placement is ``"ssr-only"`` — those are not
+                hydrating islands and must not flow through
+                :class:`AstroIsland`, which mandates a client directive.
         """
+        if self.directive is None:
+            msg = (
+                f"AstroIslandPlacement(reason={self.reason!r}) has no client "
+                "directive and cannot be converted to AstroIsland. SSR-only "
+                "placements are emitted directly by the islands renderer."
+            )
+            raise ValueError(msg)
         return AstroIsland(
             component_name=self.component_name,
             module_path=module_path,
@@ -103,32 +120,26 @@ def _component_class_name(node: Any) -> str:
 
 
 def _has_state_signal(node: Any) -> bool:
-    """Return True if ``node`` directly uses Reflex state.
+    """Return True if ``node`` directly carries runtime state.
 
     Detects:
     - explicit event triggers on the component,
-    - own props with state-bound ``VarData``,
-    - ``ExperimentalMemoComponent`` wrappers — those are emitted by the
-      auto-memoize pass and only exist when the underlying subtree is
-      stateful, so they are reliable Path A markers post-walk.
+    - own props with ``VarData.state`` set (i.e. the prop is bound to
+      Reflex state and changes after mount).
+
+    Auto-memo wrappers (``ExperimentalMemoComponent``) deliberately do not
+    auto-qualify here. Auto-memoize fires on any ``VarData`` — including
+    pure build-time signals such as icon imports — so the wrapper alone
+    is not a reliable runtime-state marker. Callers that need to inspect
+    a memo wrapper must consult the wrapper's ``_memoized_source`` via
+    :func:`_memo_subtree_has_runtime_state`.
 
     Args:
         node: The component to inspect.
 
     Returns:
-        Whether the node carries any direct state signal.
+        Whether the node carries any direct runtime-state signal.
     """
-    # Auto-memo wrappers are produced only for stateful subtrees. By the time
-    # the islands classifier runs the original state-bearing leaves have been
-    # replaced by these wrappers, so the wrapper itself is the surviving signal.
-    try:
-        from reflex.experimental.memo import ExperimentalMemoComponent
-
-        if isinstance(node, ExperimentalMemoComponent):
-            return True
-    except ImportError:
-        pass
-
     triggers = getattr(node, "event_triggers", None)
     if triggers:
         return True
@@ -147,8 +158,66 @@ def _has_state_signal(node: Any) -> bool:
         if not callable(get_var_data):
             continue
         var_data = get_var_data()
-        if var_data is not None and getattr(var_data, "state", None):
+        if var_data is None:
+            continue
+        # Only state-bound vars qualify as runtime signals; pure import-only
+        # var_data is a build-time bundling hint with no client behavior.
+        if getattr(var_data, "state", None):
             return True
+    return False
+
+
+def _is_memo_wrapper(node: Any) -> bool:
+    """Return True if ``node`` is an auto-memoize wrapper.
+
+    Args:
+        node: The component to inspect.
+
+    Returns:
+        Whether ``node`` is an :class:`ExperimentalMemoComponent` instance
+        produced by the compile-time auto-memoize plugin.
+    """
+    try:
+        from reflex.experimental.memo import ExperimentalMemoComponent
+    except ImportError:
+        return False
+    return isinstance(node, ExperimentalMemoComponent)
+
+
+def _memo_subtree_has_runtime_state(node: Any) -> bool:
+    """Walk a memoized component subtree checking for actual runtime state.
+
+    Decides whether an auto-memoize wrapper actually needs client-side
+    React hydration. Event triggers and ``VarData.state``-bound props
+    qualify; pure build-time ``var_data`` (icon imports, hook-only
+    declarations attached to inert markup) does not.
+
+    Recurses through nested memo wrappers via their ``_memoized_source``
+    reference so an outer memo containing a stateful inner memo correctly
+    propagates the hydration need.
+
+    Args:
+        node: The root of the subtree to check.
+
+    Returns:
+        True when the subtree contains any runtime-state signal; False when
+        it can safely render server-side as static HTML.
+    """
+    if node is None:
+        return False
+    if _is_memo_wrapper(node):
+        source = getattr(node, "_memoized_source", None)
+        if source is None:
+            # No visibility — be conservative and hydrate.
+            return True
+        return _memo_subtree_has_runtime_state(source)
+    if _has_state_signal(node):
+        return True
+    children = getattr(node, "children", None)
+    if isinstance(children, (list, tuple)):
+        for child in children:
+            if _memo_subtree_has_runtime_state(child):
+                return True
     return False
 
 
@@ -171,20 +240,25 @@ def _has_island_metadata(node: Any) -> bool:
 def _subtree_needs_island(node: Any) -> bool:
     """Return True if ``node`` or any descendant should be promoted to an island.
 
-    Detects: state signals (Path A), Path B metadata, and explicit
-    :class:`IslandComponent` wrappers.
+    Detects: state signals (Path A), Path B metadata, explicit
+    :class:`IslandComponent` wrappers, and auto-memo wrappers (which need
+    a placement either as a hydrating island or as an SSR-only Astro
+    component reference).
 
     Args:
         node: The root to walk.
 
     Returns:
-        Whether the subtree contains at least one island-worthy node.
+        Whether the subtree contains at least one node that requires a
+        dedicated placement.
     """
     from reflex_base.components.island import IslandComponent
 
     if isinstance(node, IslandComponent):
         return True
     if _has_state_signal(node) or _has_island_metadata(node):
+        return True
+    if _is_memo_wrapper(node):
         return True
     children = getattr(node, "children", None)
     if not isinstance(children, (list, tuple)):
@@ -279,9 +353,11 @@ def _iter_islands(
 ) -> Iterator[AstroIslandPlacement]:
     """Walk the tree once and yield one placement per island boundary.
 
-    Suppression rule: when a node becomes an island root, descendants are
-    not independently classified — they ride inside that island's React
-    tree.
+    Suppression rule: when a node becomes a hydrating island root,
+    descendants are not independently classified — they ride inside that
+    island's React tree. ``"ssr-only"`` placements are an exception: they
+    do not hydrate, so descendants still need their own placements when
+    they carry runtime state.
 
     Args:
         node: The root to walk.
@@ -289,7 +365,7 @@ def _iter_islands(
             names unique (e.g. ``"Card"`` -> ``"Card_2"``).
 
     Yields:
-        Each detected island root, in pre-order.
+        Each detected placement, in pre-order.
     """
     if node is None:
         return
@@ -309,6 +385,45 @@ def _iter_islands(
         yield _make_unique(metadata, name_counter)
         return
 
+    # Auto-memo wrappers: split into hydrating islands vs SSR-only based on
+    # whether the underlying component subtree carries runtime state.
+    if _is_memo_wrapper(node):
+        # Use the memo's tag (matches its export name in the generated React
+        # module) so the .astro file's import resolves correctly. The Python
+        # class name carries the dynamic-subclass prefix and would not match.
+        memo_name = getattr(node, "tag", None) or name
+        source = getattr(node, "_memoized_source", None)
+        if source is None or _memo_subtree_has_runtime_state(source):
+            yield _make_unique(
+                AstroIslandPlacement(
+                    component_name=memo_name,
+                    directive="client:idle",
+                    reason="tree-signal",
+                    node_id=nid,
+                ),
+                name_counter,
+            )
+            return
+        # No runtime state — Astro server-renders the component, ships no
+        # JS for it. Descend so children with their own state get their own
+        # placements (the wrapper's ``{children}`` slot is filled by the
+        # page-side subtree, which the walker already handles).
+        yield _make_unique(
+            AstroIslandPlacement(
+                component_name=memo_name,
+                directive=None,
+                reason="ssr-only",
+                node_id=nid,
+            ),
+            name_counter,
+        )
+        children = getattr(node, "children", None)
+        if isinstance(children, (list, tuple)):
+            for child in children:
+                if _subtree_needs_island(child):
+                    yield from _iter_islands(child, name_counter=name_counter)
+        return
+
     # Tree signals: the smallest enclosing subtree wins.
     if _has_state_signal(node):
         yield _make_unique(
@@ -322,9 +437,9 @@ def _iter_islands(
         )
         return
 
-    # If a child needs an island (state signal, Path B metadata, or an
-    # explicit wrapper), descend so the child's smallest enclosing subtree
-    # gets promoted.
+    # If a child needs a placement (state signal, Path B metadata, an
+    # explicit wrapper, or a memo wrapper), descend so the child's
+    # smallest enclosing subtree gets handled.
     children = getattr(node, "children", None)
     if not isinstance(children, (list, tuple)):
         return

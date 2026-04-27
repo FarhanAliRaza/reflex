@@ -38,16 +38,184 @@ import { create } from "zustand";
 
 const noop = () => {};
 
+// Color-mode persistence + DOM wiring lives here so islands work without
+// mounting a React provider. `RadixThemesColorModeProvider` (app mode)
+// can still call `setReflexColorMode(...)` to override these defaults;
+// its values then shadow ours, no behavior change for app mode.
+const COLOR_MODE_COOKIE = "reflex-color-mode";
+const COLOR_MODE_STORAGE_KEY = "color_mode";
+const COLOR_MODE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
+
+const _hasWindow = typeof window !== "undefined";
+const _hasDocument = typeof document !== "undefined";
+
+const _readCookieColorMode = () => {
+  if (!_hasDocument) return null;
+  const match = document.cookie.match(
+    new RegExp("(^|;\\s*)" + COLOR_MODE_COOKIE + "=([^;]+)"),
+  );
+  return match ? decodeURIComponent(match[2]) : null;
+};
+
+const _readStorageColorMode = () => {
+  if (!_hasWindow) return null;
+  try {
+    return window.localStorage.getItem(COLOR_MODE_STORAGE_KEY);
+  } catch (e) {
+    return null;
+  }
+};
+
+const _writeCookieColorMode = (mode) => {
+  if (!_hasDocument) return;
+  document.cookie =
+    COLOR_MODE_COOKIE +
+    "=" +
+    encodeURIComponent(mode) +
+    "; path=/; max-age=" +
+    COLOR_MODE_COOKIE_MAX_AGE +
+    "; SameSite=Lax";
+};
+
+const _writeStorageColorMode = (mode) => {
+  if (!_hasWindow) return;
+  try {
+    window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, mode);
+  } catch (e) {}
+};
+
+const _systemPrefersDark = () =>
+  _hasWindow &&
+  window.matchMedia("(prefers-color-scheme: dark)").matches;
+
+const _resolveColorMode = (mode) =>
+  mode === "system" ? (_systemPrefersDark() ? "dark" : "light") : mode;
+
+const _applyColorModeToDOM = (resolved) => {
+  if (!_hasDocument) return;
+  const root = document.documentElement;
+  root.classList.remove("light", "dark");
+  root.classList.add(resolved);
+  root.setAttribute("data-color-mode", resolved);
+  // Hint the UA so form controls pick the right palette too.
+  root.style.colorScheme = resolved;
+};
+
+const _initialRawColorMode = (() => {
+  const fromCookie = _readCookieColorMode();
+  if (fromCookie) return fromCookie;
+  const fromStorage = _readStorageColorMode();
+  if (fromStorage) return fromStorage;
+  return "system";
+})();
+
+const _commitColorMode = (mode) => {
+  const resolved = _resolveColorMode(mode);
+  _applyColorModeToDOM(resolved);
+  _writeCookieColorMode(mode);
+  _writeStorageColorMode(mode);
+  useReflexStore.getState().setColorMode({
+    rawColorMode: mode,
+    colorMode: mode,
+    resolvedColorMode: resolved,
+    toggleColorMode: () =>
+      _commitColorMode(resolved === "light" ? "dark" : "light"),
+    setColorMode: _commitColorMode,
+  });
+};
+
 const initialColorMode = {
-  rawColorMode: "system",
-  colorMode: "system",
-  resolvedColorMode: "light",
-  toggleColorMode: noop,
-  setColorMode: noop,
+  rawColorMode: _initialRawColorMode,
+  colorMode: _initialRawColorMode,
+  resolvedColorMode: _resolveColorMode(_initialRawColorMode),
+  toggleColorMode: () => {
+    const current = _resolveColorMode(
+      useReflexStore.getState().colorMode.rawColorMode,
+    );
+    _commitColorMode(current === "light" ? "dark" : "light");
+  },
+  setColorMode: (mode) => _commitColorMode(mode),
+};
+
+// Keep `system` mode in sync with OS-level preference changes. Only fires
+// when the user has not pinned a specific mode.
+if (_hasWindow && window.matchMedia) {
+  window
+    .matchMedia("(prefers-color-scheme: dark)")
+    .addEventListener("change", () => {
+      const slice = useReflexStore.getState().colorMode;
+      if (slice.rawColorMode !== "system") return;
+      _commitColorMode("system");
+    });
+}
+
+// Local handler for events that don't need a backend round-trip. Lets
+// islands-mode pages (which never register a real event-loop adapter)
+// still dispatch ``rx.call_script``, ``set_color_mode``, and other
+// front-end-only events. ``state.js`` registers a fuller adapter in app
+// mode; that one shadows this one but still includes the same local
+// handling, so behavior in app mode is unchanged.
+const _runLocalEvent = async (event) => {
+  if (!event || !event.name) return;
+  const payload = event.payload || {};
+  if (event.name === "_call_function") {
+    try {
+      const fn =
+        typeof payload.function === "string"
+          ? eval(payload.function)
+          : payload.function;
+      if (typeof fn !== "function") return;
+      const result = fn();
+      const finalResult =
+        result && typeof result.then === "function" ? await result : result;
+      if (payload.callback) {
+        const cb =
+          typeof payload.callback === "string"
+            ? eval(payload.callback)
+            : payload.callback;
+        if (typeof cb === "function") cb(finalResult);
+      }
+    } catch (e) {
+      // Surface to the console; islands mode has no error-boundary host
+      // to forward to.
+      // eslint-disable-next-line no-console
+      console.error("[reflex] _call_function failed:", e);
+    }
+    return;
+  }
+  if (event.name === "_call_script") {
+    try {
+      const result = eval(payload.javascript_code);
+      const finalResult =
+        result && typeof result.then === "function" ? await result : result;
+      if (payload.callback) {
+        const cb =
+          typeof payload.callback === "string"
+            ? eval(payload.callback)
+            : payload.callback;
+        if (typeof cb === "function") cb(finalResult);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[reflex] _call_script failed:", e);
+    }
+    return;
+  }
+  // Backend / framework events (``_redirect``, state mutations, etc.) need
+  // the full adapter from ``state.js``. Silently drop them in islands mode
+  // — there's no socket to forward them to.
+};
+
+const _localAddEvents = (events, _args, _actions) => {
+  if (!Array.isArray(events)) return;
+  for (const event of events) {
+    // Fire and forget; each event handler is independent.
+    void _runLocalEvent(event);
+  }
 };
 
 const initialEventLoop = {
-  addEvents: noop,
+  addEvents: _localAddEvents,
   connectErrors: [],
   isHydrated: false,
 };

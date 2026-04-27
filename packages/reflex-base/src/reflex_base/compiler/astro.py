@@ -420,6 +420,15 @@ def astro_config_template(
         "        },\n"
         "      ],\n"
         "    },\n"
+        "    build: {\n"
+        # Skip ``__vite__mapDeps`` ``<link rel=\"modulepreload\">`` injection
+        # for code-split chunks. Code-split modules are typically wrapped in
+        # ``ClientSide(() => import(\"...\"))`` because they should load on
+        # interaction (search bar focus, drawer open, etc.) — eager preloading
+        # them defeats the lazy-load and inflates first-paint bytes by 1+ MB
+        # on docs/marketing pages with AI search widgets.
+        '      modulePreload: { polyfill: false, resolveDependencies: () => [] },\n'
+        "    },\n"
         "  },\n"
         "});\n"
     )

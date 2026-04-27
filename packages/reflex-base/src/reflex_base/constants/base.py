@@ -32,6 +32,14 @@ class Dirs(SimpleNamespace):
     UTILS = "utils"
     # The name of the state file.
     STATE_PATH = UTILS + "/state"
+    # The name of the side-effect-free helpers module. Components import
+    # ``isTrue`` / ``refs`` / ``getRefValue`` from here so they don't drag
+    # the socket.io transport in ``state.js``.
+    COERCE_PATH = UTILS + "/coerce"
+    # The name of the ``ClientSide`` SSR-safe lazy-loader module. Lives
+    # outside ``context.js`` so islands that only need lazy hydration
+    # don't transitively pull ``state.js``.
+    CLIENT_SIDE_PATH = UTILS + "/client_side"
     # The name of the components file.
     COMPONENTS_PATH = UTILS + "/components"
     # The name of the contexts file.

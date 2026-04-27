@@ -1077,11 +1077,11 @@ boolean_types = BooleanVar | bool
 
 
 _IS_TRUE_IMPORT: ImportDict = {
-    f"$/{Dirs.STATE_PATH}": [ImportVar(tag="isTrue")],
+    f"$/{Dirs.COERCE_PATH}": [ImportVar(tag="isTrue")],
 }
 
 _IS_NOT_NULL_OR_UNDEFINED_IMPORT: ImportDict = {
-    f"$/{Dirs.STATE_PATH}": [ImportVar(tag="isNotNullOrUndefined")],
+    f"$/{Dirs.COERCE_PATH}": [ImportVar(tag="isNotNullOrUndefined")],
 }
 
 

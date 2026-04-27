@@ -398,7 +398,8 @@ export const initialEvents = () => []
     state_context_close = "    " + ")" * len(initial_state) if initial_state else ""
 
     return rf"""import {{ createContext, useMemo, useState, createElement, useEffect }} from "react"
-import {{ ReflexEvent, hydrateClientStorage, useEventLoop, refs }} from "$/utils/state"
+import {{ ReflexEvent, hydrateClientStorage, useEventLoop }} from "$/utils/state"
+import {{ refs }} from "$/utils/coerce"
 import {{
   applyReflexDelta as _zustandApplyDelta,
   registerReflexDispatch as _zustandRegisterDispatch,
@@ -499,20 +500,6 @@ export function UploadFilesProvider({{ children }}) {{
     {{ value: [filesById, setFilesById] }},
     children
   );
-}}
-
-export function ClientSide(component) {{
-  return ({{ children, ...props }}) => {{
-    const [Component, setComponent] = useState(null);
-    useEffect(() => {{
-      async function load() {{
-        const comp = await component();
-        setComponent(() => comp);
-      }}
-      load();
-    }}, []);
-    return Component ? jsx(Component, props, children) : null;
-  }};
 }}
 
 export function EventLoopProvider({{ children }}) {{
@@ -704,6 +691,11 @@ export default defineConfig((config) => ({{
   ].concat({"[fullReload()]" if force_full_reload else "[]"}),
   build: {{
     sourcemap: {"true" if sourcemap is True else "false" if sourcemap is False else repr(sourcemap)},
+    // Skip ``__vite__mapDeps`` ``<link rel="modulepreload">`` injection so
+    // code-split chunks (the dynamic ``ClientSide(() => import("..."))``
+    // bundles for AI search, mobile drawers, etc.) don't preload on first
+    // paint. They load when the ``import()`` actually executes.
+    modulePreload: {{ polyfill: false, resolveDependencies: () => [] }},
     rollupOptions: {{
       onwarn(warning, warn) {{
         if (warning.code === "EVAL" && warning.id && warning.id.endsWith("state.js")) return;

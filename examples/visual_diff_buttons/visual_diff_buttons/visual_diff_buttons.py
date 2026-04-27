@@ -280,41 +280,413 @@ def layout_section() -> rx.Component:
 def form_section() -> rx.Component:
     return _section(
         "Form controls",
+        _label("checkbox", rx.checkbox("Subscribe to newsletter")),
+        _label("switch sm", rx.switch(size="1")),
+        _label("switch md", rx.switch(size="2", default_checked=True)),
+        _label("switch lg", rx.switch(size="3")),
+        _label("radio group", rx.radio(["Apple", "Banana", "Cherry"], default_value="Banana")),
+        _label("progress 30%", rx.box(rx.progress(value=30), class_name="w-48")),
+        _label("progress 75%", rx.box(rx.progress(value=75, size="3"), class_name="w-48")),
+        _label("text_field", rx.text_field(placeholder="Type here...")),
+        _label("text_area", rx.text_area(placeholder="Multiline...", rows="3")),
+    )
+
+
+def aspect_ratio_section() -> rx.Component:
+    return _section(
+        "AspectRatio",
         _label(
-            "checkbox",
-            rx.checkbox("Subscribe to newsletter"),
+            "ratio=16/9",
+            rx.box(
+                rx.aspect_ratio(
+                    rx.box(class_name="size-full bg-[var(--accent-4)] rounded"),
+                    ratio=16 / 9,
+                ),
+                class_name="w-64",
+            ),
         ),
         _label(
-            "switch sm",
-            rx.switch(size="1"),
+            "ratio=1",
+            rx.box(
+                rx.aspect_ratio(
+                    rx.box(class_name="size-full bg-[var(--accent-4)] rounded"),
+                    ratio=1,
+                ),
+                class_name="w-32",
+            ),
+        ),
+    )
+
+
+def inset_section() -> rx.Component:
+    return _section(
+        "Inset (inside Card)",
+        rx.card(
+            rx.inset(
+                rx.box(class_name="h-24 bg-[var(--accent-5)]"),
+                side="top",
+                pb="current",
+            ),
+            rx.text("Card body sitting under the inset image.", size="2", class_name="pt-3"),
+            class_name="w-72",
+        ),
+    )
+
+
+def scroll_area_section() -> rx.Component:
+    return _section(
+        "ScrollArea (300×120, vertical)",
+        rx.scroll_area(
+            rx.flex(
+                *[
+                    rx.text(f"Line {i + 1}: scrollable content goes here.", size="2")
+                    for i in range(20)
+                ],
+                direction="column",
+                spacing="1",
+                class_name="p-3",
+            ),
+            type="auto",
+            scrollbars="vertical",
+            class_name="h-32 w-72 rounded border border-[var(--gray-a4)]",
+        ),
+    )
+
+
+def select_section() -> rx.Component:
+    return _section(
+        "Select",
+        _label(
+            "default",
+            rx.select(["Apple", "Banana", "Cherry"], default_value="Apple"),
         ),
         _label(
-            "switch md",
-            rx.switch(size="2", default_checked=True),
+            "with placeholder",
+            rx.select(["Red", "Green", "Blue"], placeholder="Pick a color..."),
         ),
         _label(
-            "switch lg",
-            rx.switch(size="3"),
+            "size=3",
+            rx.select(["small", "medium", "large"], default_value="medium", size="3"),
+        ),
+    )
+
+
+def slider_section() -> rx.Component:
+    cells: list[rx.Component] = [_label(f"size={s}", rx.slider(size=s)) for s in ("1", "2", "3")]
+    cells.append(_label("default_value=70", rx.slider(default_value=[70])))
+    cells.append(_label("with min/max", rx.slider(min=0, max=200, step=10, default_value=[80])))
+    return _section("Slider", *cells)
+
+
+def segmented_control_section() -> rx.Component:
+    return _section(
+        "SegmentedControl",
+        _label(
+            "default",
+            rx.segmented_control.root(
+                rx.segmented_control.item("Inbox", value="inbox"),
+                rx.segmented_control.item("Drafts", value="drafts"),
+                rx.segmented_control.item("Sent", value="sent"),
+                default_value="inbox",
+            ),
         ),
         _label(
-            "radio group",
-            rx.radio(["Apple", "Banana", "Cherry"], default_value="Banana"),
+            "size=2",
+            rx.segmented_control.root(
+                rx.segmented_control.item("Day", value="day"),
+                rx.segmented_control.item("Week", value="week"),
+                rx.segmented_control.item("Month", value="month"),
+                default_value="week",
+                size="2",
+            ),
         ),
-        _label(
-            "progress 30%",
-            rx.box(rx.progress(value=30), class_name="w-48"),
+    )
+
+
+def radio_cards_section() -> rx.Component:
+    return _section(
+        "RadioCards",
+        rx.radio_cards.root(
+            rx.radio_cards.item(
+                rx.flex(
+                    rx.text("8 GB / 4 CPU", weight="bold"),
+                    rx.text("$200 / month", size="2"),
+                    direction="column",
+                ),
+                value="1",
+            ),
+            rx.radio_cards.item(
+                rx.flex(
+                    rx.text("16 GB / 8 CPU", weight="bold"),
+                    rx.text("$400 / month", size="2"),
+                    direction="column",
+                ),
+                value="2",
+            ),
+            rx.radio_cards.item(
+                rx.flex(
+                    rx.text("32 GB / 16 CPU", weight="bold"),
+                    rx.text("$800 / month", size="2"),
+                    direction="column",
+                ),
+                value="3",
+            ),
+            default_value="2",
+            columns="3",
+            class_name="max-w-xl",
         ),
-        _label(
-            "progress 75%",
-            rx.box(rx.progress(value=75, size="3"), class_name="w-48"),
+    )
+
+
+def radio_group_section() -> rx.Component:
+    return _section(
+        "RadioGroup (manual)",
+        rx.radio_group.root(
+            rx.flex(
+                rx.text(rx.flex(rx.radio_group.item(value="1"), "Default", spacing="2", class_name="items-center")),
+                rx.text(rx.flex(rx.radio_group.item(value="2"), "Comfortable", spacing="2", class_name="items-center")),
+                rx.text(rx.flex(rx.radio_group.item(value="3"), "Compact", spacing="2", class_name="items-center")),
+                direction="column",
+                spacing="2",
+            ),
+            default_value="1",
         ),
-        _label(
-            "text_field",
-            rx.text_field(placeholder="Type here..."),
+    )
+
+
+def checkbox_cards_section() -> rx.Component:
+    return _section(
+        "CheckboxCards",
+        rx.checkbox_cards.root(
+            rx.checkbox_cards.item("A1 Keyboard", value="kbd"),
+            rx.checkbox_cards.item("Mouse", value="mouse"),
+            rx.checkbox_cards.item("Monitor", value="monitor"),
+            default_value=["mouse"],
+            columns="3",
+            class_name="max-w-xl",
         ),
-        _label(
-            "text_area",
-            rx.text_area(placeholder="Multiline...", rows="3"),
+    )
+
+
+def checkbox_group_section() -> rx.Component:
+    return _section(
+        "CheckboxGroup",
+        rx.checkbox_group.root(
+            rx.flex(
+                rx.text(rx.flex(rx.checkbox_group.item(value="news"), "Newsletter", spacing="2", class_name="items-center")),
+                rx.text(rx.flex(rx.checkbox_group.item(value="prom"), "Promotions", spacing="2", class_name="items-center")),
+                rx.text(rx.flex(rx.checkbox_group.item(value="prod"), "Product updates", spacing="2", class_name="items-center")),
+                direction="column",
+                spacing="2",
+            ),
+            default_value=["prod"],
+        ),
+    )
+
+
+def data_list_section() -> rx.Component:
+    return _section(
+        "DataList",
+        rx.data_list.root(
+            rx.data_list.item(
+                rx.data_list.label("Status"),
+                rx.data_list.value(rx.badge("Authorized", variant="soft")),
+            ),
+            rx.data_list.item(
+                rx.data_list.label("ID"),
+                rx.data_list.value(rx.code("u_2J89JSA4GJ")),
+            ),
+            rx.data_list.item(
+                rx.data_list.label("Name"),
+                rx.data_list.value("Vlad Moroz"),
+            ),
+            rx.data_list.item(
+                rx.data_list.label("Email"),
+                rx.data_list.value(rx.link("vlad@workos.com", href="mailto:vlad@workos.com")),
+            ),
+            class_name="max-w-md",
+        ),
+    )
+
+
+def table_section() -> rx.Component:
+    return _section(
+        "Table",
+        rx.table.root(
+            rx.table.header(
+                rx.table.row(
+                    rx.table.column_header_cell("Full name"),
+                    rx.table.column_header_cell("Email"),
+                    rx.table.column_header_cell("Group"),
+                ),
+            ),
+            rx.table.body(
+                rx.table.row(
+                    rx.table.row_header_cell("Danilo Sousa"),
+                    rx.table.cell("danilo@example.com"),
+                    rx.table.cell("Developer"),
+                ),
+                rx.table.row(
+                    rx.table.row_header_cell("Zahra Ambessa"),
+                    rx.table.cell("zahra@example.com"),
+                    rx.table.cell("Admin"),
+                ),
+                rx.table.row(
+                    rx.table.row_header_cell("Jasper Eriksson"),
+                    rx.table.cell("jasper@example.com"),
+                    rx.table.cell("Developer"),
+                ),
+            ),
+            variant="surface",
+            class_name="max-w-2xl",
+        ),
+    )
+
+
+def tabs_section() -> rx.Component:
+    return _section(
+        "Tabs",
+        rx.tabs.root(
+            rx.tabs.list(
+                rx.tabs.trigger("Account", value="account"),
+                rx.tabs.trigger("Documents", value="documents"),
+                rx.tabs.trigger("Settings", value="settings"),
+            ),
+            rx.tabs.content(rx.text("Make changes to your account."), value="account"),
+            rx.tabs.content(rx.text("Access and update your documents."), value="documents"),
+            rx.tabs.content(rx.text("Edit your project settings."), value="settings"),
+            default_value="account",
+            class_name="max-w-md",
+        ),
+    )
+
+
+def tooltip_section() -> rx.Component:
+    return _section(
+        "Tooltip (hover the buttons)",
+        _label("with content", rx.tooltip(rx.button("Hover me"), content="A helpful tooltip")),
+        _label("delay=600", rx.tooltip(rx.button("Slow"), content="Delayed tooltip", delay_duration=600)),
+    )
+
+
+def hover_card_section() -> rx.Component:
+    return _section(
+        "HoverCard (hover the link)",
+        rx.hover_card.root(
+            rx.hover_card.trigger(rx.link("@reflex_dev", href="#")),
+            rx.hover_card.content(
+                rx.flex(
+                    rx.heading("Reflex", size="3"),
+                    rx.text("The fastest way to build interactive web apps in pure Python.", size="2"),
+                    direction="column",
+                    spacing="1",
+                ),
+                class_name="max-w-xs",
+            ),
+        ),
+    )
+
+
+def popover_section() -> rx.Component:
+    return _section(
+        "Popover (click)",
+        rx.popover.root(
+            rx.popover.trigger(rx.button("Open popover")),
+            rx.popover.content(
+                rx.flex(
+                    rx.text("Comment", weight="bold"),
+                    rx.text_area(placeholder="Write a comment...", rows="3"),
+                    rx.flex(rx.button("Post", size="1"), spacing="2", class_name="justify-end"),
+                    direction="column",
+                    spacing="2",
+                ),
+                class_name="w-72",
+            ),
+        ),
+    )
+
+
+def dialog_section() -> rx.Component:
+    return _section(
+        "Dialog (click to open)",
+        rx.dialog.root(
+            rx.dialog.trigger(rx.button("Edit profile")),
+            rx.dialog.content(
+                rx.dialog.title("Edit profile"),
+                rx.dialog.description("Make changes to your profile."),
+                rx.flex(
+                    rx.text_field(placeholder="Full name", default_value="Freja Johnsen"),
+                    rx.text_field(placeholder="Email", default_value="freja@example.com"),
+                    direction="column",
+                    spacing="3",
+                    class_name="mt-4",
+                ),
+                rx.flex(
+                    rx.dialog.close(rx.button("Cancel", variant="soft")),
+                    rx.dialog.close(rx.button("Save")),
+                    spacing="3",
+                    class_name="mt-4 justify-end",
+                ),
+                size="2",
+            ),
+        ),
+    )
+
+
+def alert_dialog_section() -> rx.Component:
+    return _section(
+        "AlertDialog (click to open)",
+        rx.alert_dialog.root(
+            rx.alert_dialog.trigger(rx.button("Revoke access")),
+            rx.alert_dialog.content(
+                rx.alert_dialog.title("Revoke access"),
+                rx.alert_dialog.description("Are you sure? This application will no longer be accessible."),
+                rx.flex(
+                    rx.alert_dialog.cancel(rx.button("Cancel", variant="soft")),
+                    rx.alert_dialog.action(rx.button("Revoke")),
+                    spacing="3",
+                    class_name="mt-4 justify-end",
+                ),
+                size="2",
+            ),
+        ),
+    )
+
+
+def dropdown_menu_section() -> rx.Component:
+    return _section(
+        "DropdownMenu (click)",
+        rx.dropdown_menu.root(
+            rx.dropdown_menu.trigger(rx.button("Options")),
+            rx.dropdown_menu.content(
+                rx.dropdown_menu.item("Edit"),
+                rx.dropdown_menu.item("Duplicate"),
+                rx.dropdown_menu.separator(),
+                rx.dropdown_menu.item("Archive"),
+                rx.dropdown_menu.separator(),
+                rx.dropdown_menu.item("Delete"),
+            ),
+        ),
+    )
+
+
+def context_menu_section() -> rx.Component:
+    return _section(
+        "ContextMenu (right-click the box)",
+        rx.context_menu.root(
+            rx.context_menu.trigger(
+                rx.box(
+                    rx.text("Right-click anywhere in this box.", size="2"),
+                    class_name="h-24 w-72 grid place-items-center bg-[var(--accent-2)] rounded border border-dashed border-[var(--accent-a6)]",
+                ),
+            ),
+            rx.context_menu.content(
+                rx.context_menu.item("Cut"),
+                rx.context_menu.item("Copy"),
+                rx.context_menu.item("Paste"),
+                rx.context_menu.separator(),
+                rx.context_menu.item("Delete"),
+            ),
         ),
     )
 
@@ -343,6 +715,26 @@ def index() -> rx.Component:
         avatar_section(),
         icon_button_section(),
         form_section(),
+        select_section(),
+        slider_section(),
+        segmented_control_section(),
+        radio_cards_section(),
+        radio_group_section(),
+        checkbox_cards_section(),
+        checkbox_group_section(),
+        data_list_section(),
+        table_section(),
+        tabs_section(),
+        tooltip_section(),
+        hover_card_section(),
+        popover_section(),
+        dialog_section(),
+        alert_dialog_section(),
+        dropdown_menu_section(),
+        context_menu_section(),
+        aspect_ratio_section(),
+        inset_section(),
+        scroll_area_section(),
         layout_section(),
         size="4",
         class_name="py-8",

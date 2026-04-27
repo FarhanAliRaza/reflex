@@ -43,6 +43,42 @@ LiteralAccentColor = Literal[
 ]
 
 
+_PORTAL_THEME_DEFAULTS: dict[str, str] = {
+    "data-accent-color": "indigo",
+    "data-gray-color": "auto",
+    "data-panel-background": "translucent",
+    "data-radius": "medium",
+    "data-scaling": "100%",
+    "data-has-background": "false",
+}
+
+# Populated by Theme.create() so portaled content can mirror the user's
+# accent/radius/scaling selections without needing to thread them through
+# every Content class. Module-level because ``rx.theme(...)`` is constructed
+# at config import time, well before any popover Content runs ``create()``.
+_active_theme_attrs: dict[str, str] = {}
+
+
+def apply_portal_theme(props: dict[str, Any]) -> dict[str, Any]:
+    """Mutate ``props`` so a portaled content element re-establishes ``.radix-themes`` scope.
+
+    Adds ``class="radix-themes light"`` and the ``data-*`` attribute values
+    that ``tokens.css`` keys variables off, so CSS variables like
+    ``--color-panel-solid`` and the user's chosen ``--accent-9`` resolve
+    inside portals (which render into ``document.body`` and otherwise miss
+    the wrapper's variable scope). Mirrors the
+    ``class="radix-themes rt-PopperContent ..."`` pattern the original
+    ``@radix-ui/themes`` JS used on every portaled panel.
+    """
+    custom = dict(props.pop("custom_attrs", {}) or {})
+    for key, default in _PORTAL_THEME_DEFAULTS.items():
+        custom.setdefault(key, _active_theme_attrs.get(key, default))
+    existing = props.pop("class_name", "")
+    props["class_name"] = f"radix-themes light {existing}".strip()
+    props["custom_attrs"] = custom
+    return props
+
+
 class CommonMarginProps(Component):
     """Common shorthand margin props."""
 
@@ -174,17 +210,26 @@ class Theme(elements.Div):
         # renderer emits them as quoted string keys (raw kebab keys
         # would otherwise produce invalid JS object literals).
         custom = dict(props.pop("custom_attrs", {}) or {})
-        for prop_name, attr_name in (
-            ("accent_color", "data-accent-color"),
-            ("gray_color", "data-gray-color"),
-            ("panel_background", "data-panel-background"),
-            ("radius", "data-radius"),
-            ("scaling", "data-scaling"),
-            ("has_background", "data-has-background"),
+        for prop_name, attr_name, default in (
+            ("accent_color", "data-accent-color", "indigo"),
+            ("gray_color", "data-gray-color", "auto"),
+            ("panel_background", "data-panel-background", "translucent"),
+            ("radius", "data-radius", "medium"),
+            ("scaling", "data-scaling", "100%"),
+            ("has_background", "data-has-background", "true"),
         ):
             if prop_name in props:
                 custom[attr_name] = props.pop(prop_name)
+            else:
+                custom.setdefault(attr_name, default)
         custom.setdefault("data-is-root-theme", "true")
+        # Stash the resolved data-* attrs for ``apply_portal_theme`` to mirror
+        # onto each portaled content panel. Captures the most recent
+        # ``rx.theme(...)`` call's attrs.
+        _active_theme_attrs.clear()
+        for k, v in custom.items():
+            if isinstance(v, str):
+                _active_theme_attrs[k] = v
 
         existing = props.pop("class_name", "")
         # Default class so user theme overrides via .radix-themes selector keep working.

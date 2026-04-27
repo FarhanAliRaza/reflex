@@ -23,6 +23,7 @@ from reflex_components_radix._radix_classes import (
     dialog_overlay_classes,
 )
 from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import apply_portal_theme
 from reflex_components_radix.primitives.dialog import (
     DialogClose as _PrimitiveDialogClose,
     DialogContent as _PrimitiveDialogContent,
@@ -95,6 +96,7 @@ class DialogContent(_PrimitiveDialogContent):
         existing = props.pop("class_name", "")
         props.pop("size", None)
         props["class_name"] = cn(dialog_content_classes(), existing)
+        apply_portal_theme(props)
         content = super().create(*children, **props)
         return _PrimitiveDialogPortal.create(
             _PrimitiveDialogOverlay.create(class_name=dialog_overlay_classes()),

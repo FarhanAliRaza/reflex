@@ -13,6 +13,7 @@ from reflex_components_core.el import elements
 
 from reflex_components_radix._radix_classes import popover_content_classes
 from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import apply_portal_theme
 from reflex_components_radix.primitives.base import (
     RadixPrimitiveComponent,
     RadixPrimitiveTriggerComponent,
@@ -123,6 +124,7 @@ class DropdownMenuContent(elements.Div, _DropdownMenuElement):
             "min-w-[8rem] p-1",
             existing,
         )
+        apply_portal_theme(props)
         content = super().create(*children, **props)
         return DropdownMenuPortal.create(content)
 
@@ -206,6 +208,7 @@ class DropdownMenuSubContent(elements.Div, _DropdownMenuElement):
             "min-w-[8rem] p-1",
             existing,
         )
+        apply_portal_theme(props)
         return super().create(*children, **props)
 
 

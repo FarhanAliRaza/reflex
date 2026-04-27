@@ -106,6 +106,79 @@ def test_render_node_emits_island_with_directive():
     assert "<MyIsland client:visible />" in body
 
 
+def test_render_node_emits_ssr_only_without_client_directive():
+    """SSR-only placements emit a bare ``<Component />`` tag, no ``client:*``.
+
+    Astro renders the React component server-side and ships zero JS for
+    it. Auto-memo wrappers around stateless components (e.g. icon-only
+    wrappers) take this path so they don't pay per-island hydration
+    overhead.
+    """
+    rendered = {
+        "name": '"div"',
+        "props": [],
+        "children": [
+            {"_island_placeholder": ("MyMemo", None, None)},
+        ],
+    }
+    out: list[str] = []
+    _render_node(rendered, island_lookup={}, indent="", out=out)
+    body = "\n".join(out)
+    assert "<MyMemo />" in body
+    assert "client:" not in body
+
+
+def test_render_node_ssr_only_forwards_props():
+    """SSR-only tags carry static props through to the SSR pass.
+
+    Without prop forwarding, e.g. an icon memo would render with the
+    component's defaults instead of the per-call icon name / size.
+    """
+    rendered = {
+        "_island_placeholder": ("IconMemo", None, None),
+        "_island_props": [
+            'size:16',
+            'strokeWidth:1.5',
+            'className:"text-current"',
+        ],
+        "children": [],
+    }
+    out: list[str] = []
+    _render_node(rendered, island_lookup={}, indent="", out=out)
+    body = "\n".join(out)
+    assert "<IconMemo" in body
+    assert "client:" not in body
+    assert " size={16}" in body
+    assert " strokeWidth={1.5}" in body
+    assert ' className="text-current"' in body
+    # Self-closes since there are no children.
+    assert " />" in body
+
+
+def test_render_node_ssr_only_with_children_renders_open_close_pair():
+    """SSR-only wrappers with children produce a real open/close tag.
+
+    Auto-memo passthrough wrappers like ``Section_section_<hash>`` accept
+    children via the memo's ``{children}`` slot — self-closing the tag
+    would render an empty shell server-side.
+    """
+    rendered = {
+        "_island_placeholder": ("WrapperMemo", None, None),
+        "_island_props": [],
+        "children": [
+            {"name": '"h1"', "props": [], "children": [{"contents": '"Hi"'}]},
+        ],
+    }
+    out: list[str] = []
+    _render_node(rendered, island_lookup={}, indent="", out=out)
+    body = "\n".join(out)
+    assert "<WrapperMemo>" in body
+    assert "</WrapperMemo>" in body
+    assert "<h1>" in body
+    assert "Hi" in body
+    assert "client:" not in body
+
+
 def test_render_props_as_jsx_attrs_preserves_static_props():
     """Static-string, boolean, and numeric props all survive the JSX transform.
 
@@ -384,3 +457,37 @@ def test_render_islands_page_static_only_returns_inline_html():
     assert result.directives == ()
     # The renderer outputs inline HTML for the static contents.
     assert "hello world" in result.body
+
+
+def test_render_islands_page_ssr_only_memo_emits_no_client_directive():
+    """A stateless auto-memo wrapper compiles to an SSR-only Astro tag.
+
+    End-to-end: ``render_islands_page`` runs the classifier, picks up the
+    SSR-only verdict, generates the per-route island module, and emits
+    the JSX tag without a ``client:*`` attribute. Astro renders the
+    component server-side and ships zero JS for it.
+    """
+    from reflex_base.components.component import Component, field
+    from reflex_base.vars.base import LiteralVar, Var
+    from reflex.experimental.memo import create_passthrough_component_memo
+
+    class _Plain(Component):
+        tag = "Plain"
+        library = "plain-lib"
+        label: Var[str] = field(default=LiteralVar.create(""))
+
+    inner = _Plain.create()
+    wrapper_factory, _ = create_passthrough_component_memo("MyMemo", inner)
+    wrapper = wrapper_factory()
+    object.__setattr__(wrapper, "_memoized_source", inner)
+
+    result = render_islands_page(route="/", root=wrapper)
+    # One per-route island module is still emitted so the .astro can
+    # import the wrapper for SSR.
+    assert len(result.island_modules) == 1
+    assert len(result.imports) == 1
+    # Directive is None because no JS is shipped for the component.
+    assert result.directives == (None,)
+    # The body emits the JSX tag without a client directive.
+    assert "<MyMemo" in result.body
+    assert "client:" not in result.body

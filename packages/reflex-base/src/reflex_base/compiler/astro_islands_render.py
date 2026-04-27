@@ -51,13 +51,15 @@ class IslandsRenderResult:
             re-exports the corresponding ``ExperimentalMemoComponent``
             wrapper so Astro mounts it as a self-contained island.
         directives: Sequence of ``client:*`` directives used (one per
-            island, in placement order).
+            island, in placement order). ``None`` entries indicate
+            SSR-only placements (Astro renders the component server-side
+            and ships no JS for it).
     """
 
     body: str
     imports: tuple[str, ...]
     island_modules: tuple[AstroPageArtifact, ...]
-    directives: tuple[str, ...]
+    directives: tuple[str | None, ...]
 
 
 def _strip_quotes(s: Any) -> str:
@@ -274,12 +276,20 @@ def _render_node(
     # placeholder name we inserted in :func:`render_islands_page`.
     if "_island_placeholder" in rendered:
         component_name, directive, media = rendered["_island_placeholder"]
-        if media:
-            attr_str = f"{directive}={{{media!r}}}".replace("'", '"')
+        # ``directive`` may be None for SSR-only placements (auto-memo
+        # wrappers with no runtime state). Astro renders the React
+        # component server-side and ships zero JS for those — we just emit
+        # the JSX tag without any ``client:*`` attribute. ``attr_str`` is
+        # built with a leading space when non-empty so the surrounding
+        # template can concatenate it directly without double-spacing.
+        if directive is None:
+            attr_str = ""
+        elif media:
+            attr_str = f" {directive}={{{media!r}}}".replace("'", '"')
         elif directive == "client:only":
-            attr_str = 'client:only="react"'
+            attr_str = ' client:only="react"'
         else:
-            attr_str = directive
+            attr_str = f" {directive}"
         # Forward the component's static props (``variant``, ``size``,
         # ``className``, etc.) through the island tag so Astro's SSR pass
         # invokes the React component with the right shape. Without this,
@@ -293,9 +303,9 @@ def _render_node(
         # inside the island instead of an empty shell.
         children = rendered.get("children", []) or []
         if not children:
-            out.append(f"{indent}<{component_name} {attr_str} />")
+            out.append(f"{indent}<{component_name}{attr_str} />")
             return
-        out.append(f"{indent}<{component_name} {attr_str}>")
+        out.append(f"{indent}<{component_name}{attr_str}>")
         child_indent = indent + "  "
         for child in children:
             _render_node(
@@ -483,10 +493,13 @@ def render_islands_page(
         zero-content page and downgrade to ``static`` mode).
     """
     placements = classify_islands(root)
-    placements_by_id: dict[int, tuple[str, str, str | None]] = {}
+    # The classifier's ``node_id`` is ``id()`` of each placed component, so
+    # we can look up a placement record from the component during the walk.
+    placements_by_node_id = {p.node_id: p for p in placements if p.node_id}
+    placements_by_id: dict[int, tuple[str, str | None, str | None]] = {}
     island_modules: list[AstroPageArtifact] = []
     imports: list[str] = []
-    directives: list[str] = []
+    directives: list[str | None] = []
     used_names: set[str] = set()
 
     # Walk the component tree to find island roots and assign each a unique
@@ -506,14 +519,19 @@ def render_islands_page(
                 counter += 1
                 island_name = f"{base}_{counter}"
             used_names.add(island_name)
-            # ``client:visible`` is the default: Astro defers BOTH the
-            # script download AND the hydration until the island scrolls
-            # into the viewport. The per-island module is SSR-safe (router
-            # adapter + React Contexts have sane server-side defaults), so
-            # SSR succeeds without touching Reflex's state context, and
-            # the heavy runtime chunks never enter the network tab unless
-            # the island is actually visible.
-            directive = "client:visible"
+            # Defer to the classifier for this component's directive. For
+            # auto-memo wrappers it returns ``None`` when the memoized
+            # subtree carries no runtime state — Astro then SSRs the
+            # component server-side and ships zero JS for it. The fallback
+            # ``"client:idle"`` covers user-authored React components that
+            # the classifier did not visit (e.g. arbitrary custom
+            # components without state metadata): these still need to
+            # hydrate client-side, but only after FCP/LCP, off the
+            # critical path.
+            placement = placements_by_node_id.get(id(comp))
+            directive: str | None = (
+                placement.directive if placement is not None else "client:idle"
+            )
             placements_by_id[id(comp)] = (island_name, directive, None)
             island_modules.append(
                 _emit_island_module(
@@ -551,7 +569,7 @@ def render_islands_page(
     # placeholder under the layout.)
     if not placements_by_id:
         for placement in placements:
-            placements_by_id[id(placement)] = (
+            placements_by_id[placement.node_id] = (
                 placement.component_name,
                 placement.directive,
                 placement.media,

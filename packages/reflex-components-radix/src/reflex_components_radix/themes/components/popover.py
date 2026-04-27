@@ -17,6 +17,7 @@ from reflex_components_radix.primitives.base import (
     RadixPrimitiveComponent,
     RadixPrimitiveTriggerComponent,
 )
+from reflex_components_radix.themes.base import apply_portal_theme
 
 
 class _PopoverElement(RadixPrimitiveComponent):
@@ -92,6 +93,7 @@ class PopoverContent(elements.Div, _PopoverElement):
         existing = props.pop("class_name", "")
         props.pop("size", None)
         props["class_name"] = cn(popover_content_classes(), existing)
+        apply_portal_theme(props)
         content = super().create(*children, **props)
         return PopoverPortal.create(content)
 

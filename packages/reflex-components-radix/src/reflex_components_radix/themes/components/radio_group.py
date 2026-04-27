@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Sequence
 from typing import Any, ClassVar, Literal
 
@@ -22,6 +23,20 @@ from reflex_components_radix.themes.layout.flex import Flex
 from reflex_components_radix.themes.typography.text import Text
 
 LiteralFlexDirection = Literal["row", "column", "row-reverse", "column-reverse"]
+
+_RADIO_GROUP_UID = itertools.count(1)
+
+
+def _walk_radio_items(node: Any, group_name: str, default_value: str | None) -> None:
+    """Recursively set ``name`` on every RadioGroupItem and pre-check the match."""
+    if isinstance(node, RadioGroupItem):
+        if not getattr(node, "name", None):
+            node.name = LiteralVar.create(group_name)
+        raw = getattr(node, "_radio_raw_value", None)
+        if default_value is not None and raw is not None and raw == default_value:
+            node.default_checked = LiteralVar.create(True)
+    for child in getattr(node, "children", []) or []:
+        _walk_radio_items(child, group_name, default_value)
 
 
 class RadioGroupRoot(elements.Div):
@@ -62,8 +77,20 @@ class RadioGroupRoot(elements.Div):
             The radio-group root component.
         """
         existing = props.pop("class_name", "")
+        default_value = props.get("default_value")
+        # Resolve a literal default_value for child pre-checking.
+        literal_default: str | None = None
+        if isinstance(default_value, str):
+            literal_default = default_value
+        elif isinstance(default_value, LiteralVar):
+            v = getattr(default_value, "_var_value", None)
+            if isinstance(v, str):
+                literal_default = v
+        group_name = props.get("name") or f"_rg{next(_RADIO_GROUP_UID)}"
         props.setdefault("role", "radiogroup")
         props["class_name"] = cn("flex flex-col gap-2", existing)
+        for child in children:
+            _walk_radio_items(child, group_name, literal_default)
         return super().create(*children, **props)
 
 
@@ -88,10 +115,13 @@ class RadioGroupItem(elements.Input):
         Returns:
             The radio component.
         """
+        raw_value = props.get("value") if isinstance(props.get("value"), str) else None
         existing = props.pop("class_name", "")
         props["type"] = "radio"
-        props["class_name"] = cn(radio_classes(), "appearance-none", existing)
-        return super().create(**props)
+        props["class_name"] = cn(radio_classes(), existing)
+        instance = super().create(**props)
+        instance._radio_raw_value = raw_value
+        return instance
 
 
 class HighLevelRadioGroup(RadioGroupRoot):
@@ -153,6 +183,7 @@ class HighLevelRadioGroup(RadioGroupRoot):
                     RadioGroupItem.create(
                         value=item_value,
                         disabled=props.get("disabled", LiteralVar.create(False)),
+                        default_checked=item_value == default_value_var,
                     ),
                     item_value,
                     spacing="2",

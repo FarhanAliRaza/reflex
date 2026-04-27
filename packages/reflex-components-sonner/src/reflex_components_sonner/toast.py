@@ -36,7 +36,7 @@ LiteralPosition = Literal[
 
 toast_ref = Var(
     _js_expr="refs['__toast']",
-    _var_data=VarData(imports={f"$/{Dirs.STATE_PATH}": [ImportVar(tag="refs")]}),
+    _var_data=VarData(imports={f"$/{Dirs.COERCE_PATH}": [ImportVar(tag="refs")]}),
 )
 
 
@@ -242,7 +242,7 @@ class Toaster(NoSSRComponent):
             _js_expr=f"{toast_ref} = toast",
             _var_data=VarData(
                 imports={
-                    "$/utils/state": [ImportVar(tag="refs")],
+                    f"$/{Dirs.COERCE_PATH}": [ImportVar(tag="refs")],
                     self.library: [ImportVar(tag="toast", install=False)],
                 }
             ),

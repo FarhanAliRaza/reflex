@@ -471,7 +471,7 @@ def _compile_single_memo_component(
     imports = utils.merge_imports(
         {
             "react": [ImportVar(tag="memo")],
-            f"$/{constants.Dirs.STATE_PATH}": [ImportVar(tag="isTrue")],
+            f"$/{constants.Dirs.COERCE_PATH}": [ImportVar(tag="isTrue")],
         },
         component_imports,
     )

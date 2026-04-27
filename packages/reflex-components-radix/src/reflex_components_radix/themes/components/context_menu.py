@@ -17,7 +17,7 @@ from reflex_components_radix.primitives.base import (
     RadixPrimitiveComponent,
     RadixPrimitiveTriggerComponent,
 )
-from reflex_components_radix.themes.base import LiteralAccentColor
+from reflex_components_radix.themes.base import LiteralAccentColor, apply_portal_theme
 
 LiteralDirType = Literal["ltr", "rtl"]
 LiteralSizeType = Literal["1", "2"]
@@ -123,6 +123,7 @@ class ContextMenuContent(elements.Div, _ContextMenuElement):
             "min-w-[8rem] p-1",
             existing,
         )
+        apply_portal_theme(props)
         content = super().create(*children, **props)
         return ContextMenuPortal.create(content)
 
@@ -206,6 +207,7 @@ class ContextMenuSubContent(elements.Div, _ContextMenuElement):
             "min-w-[8rem] p-1",
             existing,
         )
+        apply_portal_theme(props)
         return super().create(*children, **props)
 
 

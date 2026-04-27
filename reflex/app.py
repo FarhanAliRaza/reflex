@@ -1097,6 +1097,23 @@ class App(MiddlewareMixin, LifespanMixin):
                 continue
             filtered_frontend_packages.append(package)
         page_imports.update(filtered_frontend_packages)
+        # The implicit ``RadixThemesPlugin`` enables itself during the
+        # compile tree walk, after this install step. By then it is too
+        # late to add ``@radix-ui/themes`` (which the plugin's
+        # ``tokens.css`` ``@import`` resolves against) to ``package.json``.
+        # Pre-detect Radix usage here so the install step pulls the
+        # tokens package whenever any in-place Radix component is on the
+        # page. Skipped when the user has configured the plugin
+        # explicitly — that path already feeds ``get_frontend_dependencies``
+        # into ``install_frontend_packages``.
+        from reflex_components_radix.plugin import (
+            RADIX_THEMES_PACKAGE,
+            RadixThemesPlugin,
+        )
+        if not any(
+            isinstance(p, RadixThemesPlugin) for p in get_config().plugins
+        ) and any(i.startswith("@radix-ui/react-") for i in page_imports):
+            page_imports.add(RADIX_THEMES_PACKAGE)
         js_runtimes.install_frontend_packages(page_imports, get_config())
 
     def _app_root(self, app_wrappers: dict[tuple[int, str], Component]) -> Component:

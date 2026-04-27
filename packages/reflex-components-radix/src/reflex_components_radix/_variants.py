@@ -95,14 +95,27 @@ def cn(*parts: object) -> str | list[object]:
     """
     flat: list[object] = []
     for p in parts:
-        if p is None or p == "" or p == []:
+        if p is None:
             continue
-        if isinstance(p, (list, tuple)):
+        if isinstance(p, str):
+            if p == "":
+                continue
+            flat.append(p)
+        elif isinstance(p, list):
+            if not p:
+                continue
             for inner in p:
-                if inner is None or inner == "":
+                if inner is None or (isinstance(inner, str) and inner == ""):
+                    continue
+                flat.append(inner)
+        elif isinstance(p, tuple):
+            for inner in p:
+                if inner is None or (isinstance(inner, str) and inner == ""):
                     continue
                 flat.append(inner)
         else:
+            # Non-string, non-list (e.g. a Var or rx.cond): pass through
+            # without truthiness checks — those raise on Vars.
             flat.append(p)
     if all(isinstance(p, str) for p in flat):
         return " ".join(p.strip() for p in flat if p.strip())  # type: ignore[union-attr]

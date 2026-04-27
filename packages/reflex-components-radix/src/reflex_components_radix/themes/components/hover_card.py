@@ -13,6 +13,7 @@ from reflex_components_core.el import elements
 
 from reflex_components_radix._radix_classes import popover_content_classes
 from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import apply_portal_theme
 from reflex_components_radix.primitives.base import (
     RadixPrimitiveComponent,
     RadixPrimitiveTriggerComponent,
@@ -86,6 +87,7 @@ class HoverCardContent(elements.Div, _HoverCardElement):
         existing = props.pop("class_name", "")
         props.pop("size", None)
         props["class_name"] = cn(popover_content_classes(), existing)
+        apply_portal_theme(props)
         content = super().create(*children, **props)
         return HoverCardPortal.create(content)
 
