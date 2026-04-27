@@ -2,7 +2,13 @@
 **/*.pyc
 assets/external/*
 dist/*
-examples/
+examples/*
+!examples/visual_diff_buttons/
+examples/visual_diff_buttons/.web/
+examples/visual_diff_buttons/.venv/
+examples/visual_diff_buttons/screenshots/
+examples/visual_diff_buttons/uv.lock
+examples/visual_diff_buttons/**/__pycache__/
 .web
 .states
 .idea

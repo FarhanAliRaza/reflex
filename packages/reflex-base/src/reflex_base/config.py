@@ -181,6 +181,7 @@ class BaseConfig:
         plugins: List of plugins to use in the app.
         disable_plugins: List of plugin types to disable in the app.
         transport: The transport method for client-server communication.
+        frontend_target: The generated frontend target. "react_router" (default, current) or "astro" (static-output target with Astro client islands). Selects the codegen path for the .web/ output and the dev/build commands.
     """
 
     app_name: str
@@ -254,6 +255,8 @@ class BaseConfig:
     disable_plugins: list[type[Plugin]] = dataclasses.field(default_factory=list)
 
     transport: Literal["websocket", "polling"] = "websocket"
+
+    frontend_target: Literal["react_router", "astro"] = "react_router"
 
     # Whether to skip plugin checks.
     _skip_plugins_checks: bool = dataclasses.field(default=False, repr=False)
@@ -504,6 +507,31 @@ class Config(BaseConfig):
             The path with the frontend path prepended if it begins with a slash, otherwise the original path.
         """
         return self._prepend_path(path, self.frontend_path)
+
+    def resolve_internal_link_href(self, href: str) -> str:
+        """Resolve a literal ``href`` for ``<a>``-based navigation.
+
+        Used by the Astro target where document-based navigation cannot
+        rely on a router ``basename``. External (``http(s)://``,
+        ``mailto:``, ``tel:``, protocol-relative ``//``, ``data:``) and
+        in-page anchor (``#...``) hrefs pass through unchanged. Internal
+        absolute hrefs are prefixed with ``frontend_path`` once.
+
+        Args:
+            href: The href value as authored by the user.
+
+        Returns:
+            The resolved href to emit into the rendered ``<a>``.
+        """
+        if not href or not href.startswith("/") or href.startswith("//"):
+            return href
+        prefix = self.frontend_path.strip("/")
+        if not prefix:
+            return href
+        prefixed = f"/{prefix}"
+        if href == prefixed or href.startswith(f"{prefixed}/"):
+            return href
+        return f"{prefixed}{href}"
 
     def prepend_backend_path(self, path: str) -> str:
         """Prepend the backend path to a given path.

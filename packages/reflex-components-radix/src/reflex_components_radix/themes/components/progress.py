@@ -1,81 +1,89 @@
-"""Progress from Radix Themes."""
+"""Progress — native ``<div role=progressbar>`` styled with Tailwind.
 
-from typing import Literal
+Renders a track div with an inner indicator whose width is computed
+from ``value`` / ``max``. No JS, no @radix-ui dependencies.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Literal
 
 from reflex_base.components.component import Component, field
-from reflex_base.style import Style
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
+from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import LiteralAccentColor, RadixThemesComponent
+from reflex_components_radix._variants import cn, variants
+from reflex_components_radix.themes.base import LiteralAccentColor
+
+LiteralProgressSize = Literal["1", "2", "3"]
 
 
-class Progress(RadixThemesComponent):
+_track_classes = variants(
+    base="relative w-full overflow-hidden rounded-full bg-[var(--gray-a3)]",
+    defaults={"size": "2"},
+    size={
+        "1": "h-1",
+        "2": "h-1.5",
+        "3": "h-2",
+    },
+)
+
+
+class Progress(elements.Div):
     """A progress bar component."""
 
-    tag = "Progress"
+    tag = "div"
 
-    value: Var[int] = field(doc="The value of the progress bar: 0 to max (default 100)")
-
-    max: Var[int] = field(doc="The maximum progress value.")
-
-    size: Var[Responsive[Literal["1", "2", "3"]]] = field(
-        doc='The size of the progress bar: "1" | "2" | "3"'
-    )
-
-    variant: Var[Literal["classic", "surface", "soft"]] = field(
-        doc='The variant of the progress bar: "classic" | "surface" | "soft"'
-    )
-
-    color_scheme: Var[LiteralAccentColor] = field(
-        doc="The color theme of the progress bar"
-    )
-
-    high_contrast: Var[bool] = field(
-        doc="Whether to render the progress bar with higher contrast color against background"
-    )
-
-    radius: Var[Literal["none", "small", "medium", "large", "full"]] = field(
-        doc='Override theme radius for progress bar: "none" | "small" | "medium" | "large" | "full"'
-    )
-
-    duration: Var[str] = field(
-        doc="The duration of the progress bar animation. Once the duration times out, the progress bar will start an indeterminate animation."
-    )
-
-    fill_color: Var[str] = field(doc="The color of the progress bar fill animation.")
-
-    @staticmethod
-    def _color_selector(color: str) -> Style:
-        """Return a style object with the correct color and css selector.
-
-        Args:
-            color: Color of the fill part.
-
-        Returns:
-            Style: Style object with the correct css selector and color.
-        """
-        return Style({".rt-ProgressIndicator": {"background_color": color}})
+    value: Var[int] = field(doc="Current value (0..max)")
+    max: Var[int] = field(doc="Maximum value, default 100")
+    size: Var[Responsive[LiteralProgressSize]] = field(doc='Size: "1"|"2"|"3"')
+    variant: Var[Literal["classic", "surface", "soft"]] = field(doc="Variant")
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    high_contrast: Var[bool] = field(doc="Higher contrast")
+    radius: Var[Literal["none", "small", "medium", "large", "full"]] = field(doc="Radius")
+    duration: Var[str] = field(doc="Indeterminate timeout duration")
+    fill_color: Var[str] = field(doc="Override fill colour")
 
     @classmethod
-    def create(cls, *children, **props) -> Component:
-        """Create a Progress component.
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a progress bar.
 
         Args:
-            *children: The children of the component.
-            **props: The properties of the component.
+            *children: Ignored.
+            **props: value/max/size/colour props.
 
         Returns:
-            The Progress Component.
+            The progress component.
         """
-        props.setdefault("width", "100%")
-        if "fill_color" in props:
-            color = props.get("fill_color", "")
-            style = props.get("style", {})
-            style = style | cls._color_selector(color)
-            props["style"] = style
+        size = props.pop("size", "2")
+        value = props.pop("value", 0)
+        maximum = props.pop("max", 100)
+        fill_color = props.pop("fill_color", "var(--accent-9)")
+        existing = props.pop("class_name", "")
+        size_str = size if isinstance(size, str) else "2"
 
-        return super().create(*children, **props)
+        props.setdefault("role", "progressbar")
+        props["aria-valuemax"] = maximum
+        props["aria-valuemin"] = 0
+        if isinstance(value, (int, float)):
+            props["aria-valuenow"] = value
+            width_css = f"{(value / maximum) * 100 if maximum else 0}%"
+        else:
+            props["aria-valuenow"] = value
+            width_css = "var(--progress-value, 0%)"
+
+        indicator = elements.Div.create(
+            class_name="h-full transition-all duration-300",
+            style={
+                "width": width_css,
+                "background-color": fill_color,
+            },
+            data_indicator="",
+        )
+
+        props["class_name"] = cn(_track_classes(size=size_str), existing)
+        return super().create(indicator, **props)
 
 
 progress = Progress.create

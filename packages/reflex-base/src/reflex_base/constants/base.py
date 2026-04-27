@@ -32,6 +32,14 @@ class Dirs(SimpleNamespace):
     UTILS = "utils"
     # The name of the state file.
     STATE_PATH = UTILS + "/state"
+    # The name of the side-effect-free helpers module. Components import
+    # ``isTrue`` / ``refs`` / ``getRefValue`` from here so they don't drag
+    # the socket.io transport in ``state.js``.
+    COERCE_PATH = UTILS + "/coerce"
+    # The name of the ``ClientSide`` SSR-safe lazy-loader module. Lives
+    # outside ``context.js`` so islands that only need lazy hydration
+    # don't transitively pull ``state.js``.
+    CLIENT_SIDE_PATH = UTILS + "/client_side"
     # The name of the components file.
     COMPONENTS_PATH = UTILS + "/components"
     # The name of the contexts file.
@@ -166,8 +174,10 @@ class ReactRouter(Javascript):
     # The associated Vite config file
     VITE_CONFIG_FILE = "vite.config.js"
 
-    # Regex to check for message displayed when frontend comes up
-    DEV_FRONTEND_LISTENING_REGEX = r"Local:[\s]+"
+    # Regex to check for message displayed when frontend comes up.
+    # Matches both Vite's "Local:  http://..." and Astro's "Local    http://..."
+    # (Astro renders the arrow, then "Local" with whitespace, no colon).
+    DEV_FRONTEND_LISTENING_REGEX = r"Local:?[\s]+"
 
     # Regex to pattern the route path in the config file
     # INFO  Accepting connections at http://localhost:3000
@@ -178,6 +188,33 @@ class ReactRouter(Javascript):
     )
 
     SPA_FALLBACK = "__spa-fallback.html"
+
+
+class Astro(Javascript):
+    """Constants related to the Astro frontend target."""
+
+    # The Astro config file
+    CONFIG_FILE = "astro.config.mjs"
+
+    # Generated source layout under .web/
+    PAGES_DIR = "src/pages"
+    LAYOUTS_DIR = "src/layouts"
+    REFLEX_DIR = "src/reflex"
+    ISLANDS_DIR = "src/reflex/islands"
+    COMPONENTS_DIR = "src/components"
+
+    # Regex to detect Astro dev server "Local" line. Astro prints lines like:
+    #   ➜  Local    http://localhost:4321/
+    # Both this and the Vite form share the same combined regex above.
+    DEV_FRONTEND_LISTENING_REGEX = r"Local[\s]+"
+
+    # Static-output build directory inside .web/
+    BUILD_DIR = "dist"
+
+
+# Valid frontend codegen targets
+LITERAL_FRONTEND_TARGET = Literal["react_router", "astro"]
+FRONTEND_TARGETS: tuple[str, ...] = ("react_router", "astro")
 
 
 # Color mode variables

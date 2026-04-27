@@ -303,13 +303,10 @@ class VarData:
             state=state_name,
             field_name=field_name,
             hooks={
-                "const {0} = useContext(StateContexts.{0})".format(
-                    format.format_state_name(state_name)
-                ): None
+                f'const {format.format_state_name(state_name)} = useReflexState("{state_name}")': None
             },
             imports={
-                f"$/{constants.Dirs.CONTEXTS_PATH}": [ImportVar(tag="StateContexts")],
-                "react": [ImportVar(tag="useContext")],
+                f"$/{constants.Dirs.UTILS}/store": [ImportVar(tag="useReflexState")],
             },
         )
 
@@ -1137,7 +1134,7 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
             _js_expr=f"refs[{Var.create(str(self))}]",
             _var_data=VarData(
                 imports={
-                    f"$/{constants.Dirs.STATE_PATH}": [imports.ImportVar(tag="refs")]
+                    f"$/{constants.Dirs.COERCE_PATH}": [imports.ImportVar(tag="refs")]
                 }
             ),
         ).to(str)
@@ -3070,7 +3067,7 @@ def get_uuid_string_var() -> Var:
     unique_uuid_var = get_unique_variable_name()
     unique_uuid_var_data = VarData(
         imports={
-            f"$/{constants.Dirs.STATE_PATH}": ImportVar(tag="generateUUID"),
+            f"$/{constants.Dirs.COERCE_PATH}": ImportVar(tag="generateUUID"),
             "react": "useMemo",
         },
         hooks={f"const {unique_uuid_var} = useMemo(generateUUID, [])": None},

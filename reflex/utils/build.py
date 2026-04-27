@@ -14,6 +14,36 @@ from reflex.utils import console, js_runtimes, path_ops, prerequisites, processe
 from reflex.utils.exec import is_in_app_harness
 
 
+def _frontend_build_dir(wdir: Path, frontend_target: str) -> Path:
+    """Get the target-specific build directory under ``.web``.
+
+    Args:
+        wdir: The ``.web`` directory.
+        frontend_target: The configured frontend target.
+
+    Returns:
+        The directory to clean before running the frontend build.
+    """
+    if frontend_target == "astro":
+        return wdir / constants.Astro.BUILD_DIR
+    return wdir / constants.Dirs.BUILD_DIR
+
+
+def _frontend_output_dir(wdir: Path, frontend_target: str) -> Path:
+    """Get the target-specific static output directory under ``.web``.
+
+    Args:
+        wdir: The ``.web`` directory.
+        frontend_target: The configured frontend target.
+
+    Returns:
+        The directory that contains deployable frontend files.
+    """
+    if frontend_target == "astro":
+        return wdir / constants.Astro.BUILD_DIR
+    return wdir / constants.Dirs.STATIC
+
+
 def set_env_json():
     """Write the upload url to a REFLEX_JSON."""
     path_ops.update_json_file(
@@ -141,10 +171,11 @@ def zip_app(
     }
 
     if frontend:
+        wdir = prerequisites.get_web_dir()
         _zip(
             component_name=constants.ComponentName.FRONTEND,
             target=zip_dest_dir / constants.ComponentName.FRONTEND.zip(),
-            root_directory=prerequisites.get_web_dir() / constants.Dirs.STATIC,
+            root_directory=_frontend_output_dir(wdir, get_config().frontend_target),
             files_to_exclude=files_to_exclude,
             exclude_venv_directories=False,
         )
@@ -187,6 +218,43 @@ def _duplicate_index_html_to_parent_directory(directory: Path):
             _duplicate_index_html_to_parent_directory(child)
 
 
+def _postprocess_static_build(wdir: Path, frontend_target: str, frontend_path: str):
+    """Apply React Router-only static build post-processing.
+
+    Args:
+        wdir: The ``.web`` directory.
+        frontend_target: The configured frontend target.
+        frontend_path: Optional deployment subpath from config.
+    """
+    if frontend_target == "astro":
+        return
+
+    output_dir = _frontend_output_dir(wdir, frontend_target)
+    _duplicate_index_html_to_parent_directory(output_dir)
+
+    spa_fallback = output_dir / constants.ReactRouter.SPA_FALLBACK
+    if not spa_fallback.exists():
+        spa_fallback = output_dir / "index.html"
+
+    if spa_fallback.exists():
+        path_ops.cp(
+            spa_fallback,
+            output_dir / "404.html",
+        )
+
+    if frontend_path := frontend_path.strip("/"):
+        # Create a subdirectory that matches the configured frontend_path.
+        frontend_path = PosixPath(frontend_path)
+        first_part = frontend_path.parts[0]
+        for child in list(output_dir.iterdir()):
+            if child.is_dir() and child.name == first_part:
+                continue
+            path_ops.mv(
+                child,
+                output_dir / frontend_path / child.name,
+            )
+
+
 def build():
     """Build the app for deployment.
 
@@ -194,9 +262,10 @@ def build():
         SystemExit: If the build process fails.
     """
     wdir = prerequisites.get_web_dir()
+    config = get_config()
 
     # Clean the static directory if it exists.
-    path_ops.rm(str(wdir / constants.Dirs.BUILD_DIR))
+    path_ops.rm(str(_frontend_build_dir(wdir, config.frontend_target)))
 
     checkpoints = [
         "building client environment for production...",
@@ -204,6 +273,14 @@ def build():
         "building ssr environment for production...",
         "built in",
     ]
+
+    # Bump Node's heap limit so large apps (hundreds of routes / generated
+    # auto-memo modules) don't OOM during the Vite client bundle. Node's
+    # default is ~4 GB; on big sites it isn't enough. A user-supplied
+    # ``NODE_OPTIONS`` is preserved verbatim so callers can override.
+    node_options = os.environ.get("NODE_OPTIONS", "")
+    if "--max-old-space-size" not in node_options:
+        node_options = f"{node_options} --max-old-space-size=8192".strip()
 
     # Start the subprocess with the progress bar.
     process = processes.new_process(
@@ -217,6 +294,7 @@ def build():
         env={
             **os.environ,
             "NO_COLOR": "1",
+            "NODE_OPTIONS": node_options,
         },
     )
     processes.show_progress("Creating Production Build", process, checkpoints)
@@ -226,31 +304,7 @@ def build():
             "Failed to build the frontend. Please run with --loglevel debug for more information.",
         )
         raise SystemExit(1)
-    _duplicate_index_html_to_parent_directory(wdir / constants.Dirs.STATIC)
-
-    spa_fallback = wdir / constants.Dirs.STATIC / constants.ReactRouter.SPA_FALLBACK
-    if not spa_fallback.exists():
-        spa_fallback = wdir / constants.Dirs.STATIC / "index.html"
-
-    if spa_fallback.exists():
-        path_ops.cp(
-            spa_fallback,
-            wdir / constants.Dirs.STATIC / "404.html",
-        )
-
-    config = get_config()
-
-    if frontend_path := config.frontend_path.strip("/"):
-        # Create a subdirectory that matches the configured frontend_path.
-        frontend_path = PosixPath(frontend_path)
-        first_part = frontend_path.parts[0]
-        for child in list((wdir / constants.Dirs.STATIC).iterdir()):
-            if child.is_dir() and child.name == first_part:
-                continue
-            path_ops.mv(
-                child,
-                wdir / constants.Dirs.STATIC / frontend_path / child.name,
-            )
+    _postprocess_static_build(wdir, config.frontend_target, config.frontend_path)
 
 
 def setup_frontend(

@@ -5,7 +5,12 @@ from __future__ import annotations
 import dataclasses
 from typing import Any, Literal
 
-from reflex_base.components.component import Component, ComponentNamespace, field
+from reflex_base.components.component import (
+    Component,
+    ComponentNamespace,
+    NoSSRComponent,
+    field,
+)
 from reflex_base.components.props import NoExtrasAllowedProps
 from reflex_base.constants.base import Dirs
 from reflex_base.event import EventSpec, run_script
@@ -31,7 +36,7 @@ LiteralPosition = Literal[
 
 toast_ref = Var(
     _js_expr="refs['__toast']",
-    _var_data=VarData(imports={f"$/{Dirs.STATE_PATH}": [ImportVar(tag="refs")]}),
+    _var_data=VarData(imports={f"$/{Dirs.COERCE_PATH}": [ImportVar(tag="refs")]}),
 )
 
 
@@ -168,12 +173,18 @@ class ToastProps(NoExtrasAllowedProps):
         return d
 
 
-class Toaster(Component):
+class Toaster(NoSSRComponent):
     """A Toaster Component for displaying toast notifications."""
 
     library: str | None = "sonner@2.0.7"
 
     tag = "Toaster"
+
+    # Sonner reads from a global toast store and crashes during SSR with
+    # ``Cannot read properties of undefined (reading 'slice')``. Mark it as
+    # client-only so the Astro target wraps it appropriately and skips
+    # rendering it during the build-time SSR pass.
+    client_only = True
 
     theme: Var[str] = field(default=resolved_color_mode, doc="the theme of the toast")
 
@@ -231,7 +242,7 @@ class Toaster(Component):
             _js_expr=f"{toast_ref} = toast",
             _var_data=VarData(
                 imports={
-                    "$/utils/state": [ImportVar(tag="refs")],
+                    f"$/{Dirs.COERCE_PATH}": [ImportVar(tag="refs")],
                     self.library: [ImportVar(tag="toast", install=False)],
                 }
             ),

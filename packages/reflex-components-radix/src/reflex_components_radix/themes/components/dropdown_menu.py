@@ -1,302 +1,280 @@
-"""Interactive components provided by @radix-ui/themes."""
+"""DropdownMenu — wraps ``@radix-ui/react-dropdown-menu`` with Tailwind styling."""
 
-from typing import ClassVar, Literal
+from __future__ import annotations
 
-from reflex_base.components.component import ComponentNamespace, field
+from typing import Any, ClassVar, Literal
+
+from reflex_base.components.component import Component, ComponentNamespace, field
 from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.event import EventHandler, no_args_event_spec, passthrough_event_spec
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
+from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import (
-    LiteralAccentColor,
-    RadixThemesComponent,
-    RadixThemesTriggerComponent,
+from reflex_components_radix._radix_classes import popover_content_classes
+from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import apply_portal_theme
+from reflex_components_radix.primitives.base import (
+    RadixPrimitiveComponent,
+    RadixPrimitiveTriggerComponent,
 )
+from reflex_components_radix.themes.base import LiteralAccentColor
 
 LiteralDirType = Literal["ltr", "rtl"]
-
 LiteralSizeType = Literal["1", "2"]
-
 LiteralVariantType = Literal["solid", "soft"]
-
 LiteralSideType = Literal["top", "right", "bottom", "left"]
-
 LiteralAlignType = Literal["start", "center", "end"]
-
-LiteralStickyType = Literal[
-    "partial",
-    "always",
-]
+LiteralStickyType = Literal["partial", "always"]
 
 
-class DropdownMenuRoot(RadixThemesComponent):
-    """The Dropdown Menu Root Component."""
+_item_classes = (
+    "relative flex cursor-pointer select-none items-center "
+    "rounded-(--radius-2) px-2 py-1.5 text-sm outline-none "
+    "focus:bg-[var(--accent-3)] focus:text-[var(--accent-12)] "
+    "data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
+)
+_separator_classes = "my-1 h-px bg-[var(--gray-a5)]"
 
-    tag = "DropdownMenu.Root"
 
-    default_open: Var[bool] = field(
-        doc="The open state of the dropdown menu when it is initially rendered. Use when you do not need to control its open state."
-    )
+class _DropdownMenuElement(RadixPrimitiveComponent):
+    """Base for @radix-ui/react-dropdown-menu components."""
 
-    open: Var[bool] = field(
-        doc="The controlled open state of the dropdown menu. Must be used in conjunction with onOpenChange."
-    )
+    library = "@radix-ui/react-dropdown-menu@2.1.15"
 
-    modal: Var[bool] = field(
-        doc="The modality of the dropdown menu. When set to true, interaction with outside elements will be disabled and only menu content will be visible to screen readers. Defaults to True."
-    )
 
-    dir: Var[LiteralDirType] = field(
-        doc="The reading direction of submenus when applicable. If omitted, inherits globally from DirectionProvider or assumes LTR (left-to-right) reading mode."
-    )
+class DropdownMenuRoot(_DropdownMenuElement):
+    """Root component for DropdownMenu."""
+
+    tag = "Root"
+    alias = "RadixPrimitiveDropdownMenuRoot"
+
+    default_open: Var[bool] = field(doc="Initial open state")
+    open: Var[bool] = field(doc="Controlled open state")
+    modal: Var[bool] = field(doc="Modal mode")
+    dir: Var[LiteralDirType] = field(doc="Reading direction")
 
     _invalid_children: ClassVar[list[str]] = ["DropdownMenuItem"]
 
-    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(
-        doc="Fired when the open state changes."
-    )
+    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(doc="Open change.")
 
 
-class DropdownMenuTrigger(RadixThemesTriggerComponent):
-    """The button that toggles the dropdown menu."""
+class DropdownMenuTrigger(_DropdownMenuElement, RadixPrimitiveTriggerComponent):
+    """Trigger that opens the menu."""
 
-    tag = "DropdownMenu.Trigger"
-
-    as_child: Var[bool] = field(
-        doc="Change the default rendered element for the one passed as a child, merging their props and behavior. Defaults to False."
-    )
+    tag = "Trigger"
+    alias = "RadixPrimitiveDropdownMenuTrigger"
 
     _valid_parents: ClassVar[list[str]] = ["DropdownMenuRoot"]
-
     _invalid_children: ClassVar[list[str]] = ["DropdownMenuContent"]
-
     _memoization_mode = MemoizationMode(recursive=False)
 
 
-class DropdownMenuContent(RadixThemesComponent):
-    """The Dropdown Menu Content component that pops out when the dropdown menu is open."""
+class DropdownMenuPortal(_DropdownMenuElement):
+    """Portal for menu content."""
 
-    tag = "DropdownMenu.Content"
+    tag = "Portal"
+    alias = "RadixPrimitiveDropdownMenuPortal"
 
-    size: Var[Responsive[LiteralSizeType]] = field(
-        doc='Dropdown Menu Content size "1" - "2"'
-    )
-
-    variant: Var[LiteralVariantType] = field(
-        doc='Variant of Dropdown Menu Content: "solid" | "soft"'
-    )
-
-    color_scheme: Var[LiteralAccentColor] = field(
-        doc="Override theme color for Dropdown Menu Content"
-    )
-
-    high_contrast: Var[bool] = field(
-        doc="Renders the Dropdown Menu Content in higher contrast"
-    )
-
-    as_child: Var[bool] = field(
-        doc="Change the default rendered element for the one passed as a child, merging their props and behavior. Defaults to False."
-    )
-
-    loop: Var[bool] = field(
-        doc="When True, keyboard navigation will loop from last item to first, and vice versa. Defaults to False."
-    )
-
-    force_mount: Var[bool] = field(
-        doc="Used to force mounting when more control is needed. Useful when controlling animation with React animation libraries."
-    )
-
-    side: Var[LiteralSideType] = field(
-        doc='The preferred side of the trigger to render against when open. Will be reversed when collisions occur and `avoid_collisions` is enabled.The position of the tooltip. Defaults to "top".'
-    )
-
-    side_offset: Var[float | int] = field(
-        doc="The distance in pixels from the trigger. Defaults to 0."
-    )
-
-    align: Var[LiteralAlignType] = field(
-        doc='The preferred alignment against the trigger. May change when collisions occur. Defaults to "center".'
-    )
-
-    align_offset: Var[float | int] = field(
-        doc='An offset in pixels from the "start" or "end" alignment options.'
-    )
-
-    avoid_collisions: Var[bool] = field(
-        doc="When true, overrides the side and align preferences to prevent collisions with boundary edges. Defaults to True."
-    )
-
-    collision_padding: Var[float | int | dict[str, float | int]] = field(
-        doc='The distance in pixels from the boundary edges where collision detection should occur. Accepts a number (same for all sides), or a partial padding object, for example: { "top": 20, "left": 20 }. Defaults to 0.'
-    )
-
-    sticky: Var[LiteralStickyType] = field(
-        doc='The sticky behavior on the align axis. "partial" will keep the content in the boundary as long as the trigger is at least partially in the boundary whilst "always" will keep the content in the boundary regardless. Defaults to "partial".'
-    )
-
-    hide_when_detached: Var[bool] = field(
-        doc="Whether to hide the content when the trigger becomes fully occluded. Defaults to False."
-    )
-
-    on_close_auto_focus: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the dialog is closed."
-    )
-
-    on_escape_key_down: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the escape key is pressed."
-    )
-
-    on_pointer_down_outside: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the pointer is down outside the dialog."
-    )
-
-    on_focus_outside: EventHandler[no_args_event_spec] = field(
-        doc="Fired when focus moves outside the dialog."
-    )
-
-    on_interact_outside: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the pointer interacts outside the dialog."
-    )
+    force_mount: Var[bool] = field(doc="Force mount")
 
 
-class DropdownMenuSubTrigger(RadixThemesTriggerComponent):
-    """An item that opens a submenu."""
+class DropdownMenuContent(elements.Div, _DropdownMenuElement):
+    """Menu content panel — auto-wraps in Portal."""
 
-    tag = "DropdownMenu.SubTrigger"
+    tag = "Content"
+    alias = "RadixPrimitiveDropdownMenuContent"
 
-    as_child: Var[bool] = field(
-        doc="Change the default rendered element for the one passed as a child, merging their props and behavior. Defaults to False."
-    )
+    size: Var[Responsive[LiteralSizeType]] = field(doc='Size "1" - "2"')
+    variant: Var[LiteralVariantType] = field(doc="Variant: solid|soft")
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    high_contrast: Var[bool] = field(doc="Higher contrast")
+    loop: Var[bool] = field(doc="Loop keyboard nav")
+    force_mount: Var[bool] = field(doc="Force mount")
+    side: Var[LiteralSideType] = field(doc="Side")
+    side_offset: Var[float | int] = field(doc="Side offset")
+    align: Var[LiteralAlignType] = field(doc="Align")
+    align_offset: Var[float | int] = field(doc="Align offset")
+    avoid_collisions: Var[bool] = field(doc="Avoid collisions")
+    collision_padding: Var[float | int | dict[str, float | int]] = field(doc="Padding")
+    sticky: Var[LiteralStickyType] = field(doc="Sticky")
+    hide_when_detached: Var[bool] = field(doc="Hide when detached")
 
-    disabled: Var[bool] = field(
-        doc="When true, prevents the user from interacting with the item."
-    )
+    on_close_auto_focus: EventHandler[no_args_event_spec] = field(doc="Close focus.")
+    on_escape_key_down: EventHandler[no_args_event_spec] = field(doc="Escape down.")
+    on_pointer_down_outside: EventHandler[no_args_event_spec] = field(doc="Pointer outside.")
+    on_focus_outside: EventHandler[no_args_event_spec] = field(doc="Focus outside.")
+    on_interact_outside: EventHandler[no_args_event_spec] = field(doc="Interact outside.")
 
-    text_value: Var[str] = field(
-        doc="Optional text used for typeahead purposes. By default the typeahead behavior will use the .textContent of the item. Use this when the content is complex, or you have non-textual content inside."
-    )
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create dropdown-menu content wrapped in Portal.
+
+        Args:
+            *children: Menu items.
+            **props: Standard content props.
+
+        Returns:
+            The content component.
+        """
+        existing = props.pop("class_name", "")
+        props.pop("size", None)
+        props["class_name"] = cn(
+            popover_content_classes(),
+            "min-w-[8rem] p-1",
+            existing,
+        )
+        apply_portal_theme(props)
+        content = super().create(*children, **props)
+        return DropdownMenuPortal.create(content)
+
+
+class DropdownMenuSub(_DropdownMenuElement):
+    """Submenu container."""
+
+    tag = "Sub"
+    alias = "RadixPrimitiveDropdownMenuSub"
+
+    open: Var[bool] = field(doc="Controlled open state")
+    default_open: Var[bool] = field(doc="Initial open state")
+
+    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(doc="Open change.")
+
+
+class DropdownMenuSubTrigger(_DropdownMenuElement, RadixPrimitiveTriggerComponent):
+    """Trigger that opens a submenu."""
+
+    tag = "SubTrigger"
+    alias = "RadixPrimitiveDropdownMenuSubTrigger"
+
+    disabled: Var[bool] = field(doc="Disable")
+    text_value: Var[str] = field(doc="Typeahead text")
 
     _valid_parents: ClassVar[list[str]] = ["DropdownMenuContent", "DropdownMenuSub"]
-
     _memoization_mode = MemoizationMode(recursive=False)
 
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a sub-trigger.
 
-class DropdownMenuSub(RadixThemesComponent):
-    """Contains all the parts of a submenu."""
+        Args:
+            *children: Trigger label.
+            **props: Standard props.
 
-    tag = "DropdownMenu.Sub"
-
-    open: Var[bool] = field(
-        doc="The controlled open state of the submenu. Must be used in conjunction with `on_open_change`."
-    )
-
-    default_open: Var[bool] = field(
-        doc="The open state of the submenu when it is initially rendered. Use when you do not need to control its open state."
-    )
-
-    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(
-        doc="Fired when the open state changes."
-    )
+        Returns:
+            The sub-trigger component.
+        """
+        existing = props.pop("class_name", "")
+        props["class_name"] = cn(_item_classes, "data-[state=open]:bg-[var(--accent-3)]", existing)
+        return super().create(*children, **props)
 
 
-class DropdownMenuSubContent(RadixThemesComponent):
-    """The component that pops out when a submenu is open. Must be rendered inside DropdownMenuSub."""
+class DropdownMenuSubContent(elements.Div, _DropdownMenuElement):
+    """Submenu content panel."""
 
-    tag = "DropdownMenu.SubContent"
+    tag = "SubContent"
+    alias = "RadixPrimitiveDropdownMenuSubContent"
 
-    as_child: Var[bool] = field(
-        doc="Change the default rendered element for the one passed as a child, merging their props and behavior. Defaults to False."
-    )
-
-    loop: Var[bool] = field(
-        doc="When True, keyboard navigation will loop from last item to first, and vice versa. Defaults to False."
-    )
-
-    force_mount: Var[bool] = field(
-        doc="Used to force mounting when more control is needed. Useful when controlling animation with React animation libraries."
-    )
-
-    side_offset: Var[float | int] = field(
-        doc="The distance in pixels from the trigger. Defaults to 0."
-    )
-
-    align_offset: Var[float | int] = field(
-        doc='An offset in pixels from the "start" or "end" alignment options.'
-    )
-
-    avoid_collisions: Var[bool] = field(
-        doc="When true, overrides the side and align preferences to prevent collisions with boundary edges. Defaults to True."
-    )
-
-    collision_padding: Var[float | int | dict[str, float | int]] = field(
-        doc='The distance in pixels from the boundary edges where collision detection should occur. Accepts a number (same for all sides), or a partial padding object, for example: { "top": 20, "left": 20 }. Defaults to 0.'
-    )
-
-    sticky: Var[LiteralStickyType] = field(
-        doc='The sticky behavior on the align axis. "partial" will keep the content in the boundary as long as the trigger is at least partially in the boundary whilst "always" will keep the content in the boundary regardless. Defaults to "partial".'
-    )
-
-    hide_when_detached: Var[bool] = field(
-        doc="Whether to hide the content when the trigger becomes fully occluded. Defaults to False."
-    )
+    loop: Var[bool] = field(doc="Loop keyboard nav")
+    force_mount: Var[bool] = field(doc="Force mount")
+    side_offset: Var[float | int] = field(doc="Side offset")
+    align_offset: Var[float | int] = field(doc="Align offset")
+    avoid_collisions: Var[bool] = field(doc="Avoid collisions")
+    collision_padding: Var[float | int | dict[str, float | int]] = field(doc="Padding")
+    sticky: Var[LiteralStickyType] = field(doc="Sticky")
+    hide_when_detached: Var[bool] = field(doc="Hide when detached")
 
     _valid_parents: ClassVar[list[str]] = ["DropdownMenuSub"]
 
-    on_escape_key_down: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the escape key is pressed."
-    )
+    on_escape_key_down: EventHandler[no_args_event_spec] = field(doc="Escape down.")
+    on_pointer_down_outside: EventHandler[no_args_event_spec] = field(doc="Pointer outside.")
+    on_focus_outside: EventHandler[no_args_event_spec] = field(doc="Focus outside.")
+    on_interact_outside: EventHandler[no_args_event_spec] = field(doc="Interact outside.")
 
-    on_pointer_down_outside: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the pointer is down outside the dialog."
-    )
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a submenu content panel.
 
-    on_focus_outside: EventHandler[no_args_event_spec] = field(
-        doc="Fired when focus moves outside the dialog."
-    )
+        Args:
+            *children: Submenu items.
+            **props: Standard props.
 
-    on_interact_outside: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the pointer interacts outside the dialog."
-    )
+        Returns:
+            The sub-content component.
+        """
+        existing = props.pop("class_name", "")
+        props["class_name"] = cn(
+            popover_content_classes(),
+            "min-w-[8rem] p-1",
+            existing,
+        )
+        apply_portal_theme(props)
+        return super().create(*children, **props)
 
 
-class DropdownMenuItem(RadixThemesComponent):
-    """The Dropdown Menu Item Component."""
+class DropdownMenuItem(_DropdownMenuElement):
+    """A menu item."""
 
-    tag = "DropdownMenu.Item"
+    tag = "Item"
+    alias = "RadixPrimitiveDropdownMenuItem"
 
-    color_scheme: Var[LiteralAccentColor] = field(
-        doc="Override theme color for Dropdown Menu Item"
-    )
-
-    shortcut: Var[str] = field(doc="Shortcut to render a menu item as a link")
-
-    as_child: Var[bool] = field(
-        doc="Change the default rendered element for the one passed as a child, merging their props and behavior. Defaults to False."
-    )
-
-    disabled: Var[bool] = field(
-        doc="When true, prevents the user from interacting with the item."
-    )
-
-    text_value: Var[str] = field(
-        doc="Optional text used for typeahead purposes. By default the typeahead behavior will use the .textContent of the item. Use this when the content is complex, or you have non-textual content inside."
-    )
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    shortcut: Var[str] = field(doc="Right-aligned shortcut text")
+    disabled: Var[bool] = field(doc="Disable")
+    text_value: Var[str] = field(doc="Typeahead text")
 
     _valid_parents: ClassVar[list[str]] = [
         "DropdownMenuContent",
         "DropdownMenuSubContent",
     ]
 
-    on_select: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the item is selected."
-    )
+    on_select: EventHandler[no_args_event_spec] = field(doc="Item selected.")
+
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a menu item.
+
+        Args:
+            *children: Item label.
+            **props: shortcut/disabled/text_value + standard props.
+
+        Returns:
+            The item component.
+        """
+        shortcut = props.pop("shortcut", None)
+        existing = props.pop("class_name", "")
+        props["class_name"] = cn(_item_classes, existing)
+        if shortcut is not None:
+            children = (
+                *children,
+                elements.Span.create(
+                    shortcut,
+                    class_name="ml-auto text-xs tracking-widest text-[var(--gray-10)]",
+                ),
+            )
+        return super().create(*children, **props)
 
 
-class DropdownMenuSeparator(RadixThemesComponent):
-    """Dropdown Menu Separator Component. Used to visually separate items in the dropdown menu."""
+class DropdownMenuSeparator(_DropdownMenuElement):
+    """Visual separator between items."""
 
-    tag = "DropdownMenu.Separator"
+    tag = "Separator"
+    alias = "RadixPrimitiveDropdownMenuSeparator"
+
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a separator.
+
+        Args:
+            *children: Ignored.
+            **props: Standard props.
+
+        Returns:
+            The separator component.
+        """
+        existing = props.pop("class_name", "")
+        props["class_name"] = cn(_separator_classes, existing)
+        return super().create(**props)
 
 
 class DropdownMenu(ComponentNamespace):

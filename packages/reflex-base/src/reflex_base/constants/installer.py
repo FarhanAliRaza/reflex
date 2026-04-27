@@ -98,14 +98,58 @@ def _determine_react_version() -> str:
     return default_version
 
 
+def _determine_astro_version() -> str:
+    default_version = "5.6.1"
+    if (version := os.getenv("ASTRO_VERSION")) and version != default_version:
+        from reflex_base.utils import console
+
+        console.warn(
+            f"You have requested astro@{version} but the supported version is {default_version}."
+        )
+        return version
+    return default_version
+
+
+def _determine_astro_react_version() -> str:
+    default_version = "4.2.4"
+    if (version := os.getenv("ASTROJS_REACT_VERSION")) and version != default_version:
+        from reflex_base.utils import console
+
+        console.warn(
+            f"You have requested @astrojs/react@{version} but the supported version is {default_version}."
+        )
+        return version
+    return default_version
+
+
+def _determine_zustand_version() -> str:
+    default_version = "5.0.2"
+    if (version := os.getenv("ZUSTAND_VERSION")) and version != default_version:
+        from reflex_base.utils import console
+
+        console.warn(
+            f"You have requested zustand@{version} but the supported version is {default_version}."
+        )
+        return version
+    return default_version
+
+
 class PackageJson(SimpleNamespace):
     """Constants used to build the package.json file."""
 
     class Commands(SimpleNamespace):
-        """The commands to define in package.json."""
+        """The commands to define in package.json (defaults: react_router target).
+
+        Astro target overrides are exposed via :meth:`PackageJson.commands_for`.
+        Kept as class-level constants because the React Router target is the
+        current default and this preserves the existing public surface.
+        """
 
         DEV = "react-router dev --host"
         EXPORT = "react-router build"
+
+        ASTRO_DEV = "astro dev --host"
+        ASTRO_EXPORT = "astro build"
 
     PATH = "package.json"
 
@@ -113,25 +157,137 @@ class PackageJson(SimpleNamespace):
 
     _react_router_version = _determine_react_router_version()
 
+    _astro_version = _determine_astro_version()
+
+    _astro_react_version = _determine_astro_react_version()
+
+    _zustand_version = _determine_zustand_version()
+
     @classproperty
     @classmethod
     def DEPENDENCIES(cls) -> dict[str, str]:
-        """The dependencies to include in package.json.
+        """The dependencies to include in package.json (react_router target).
 
         Returns:
             A dictionary of dependencies with their versions.
         """
-        return {
+        return cls.dependencies_for("react_router")
+
+    @classmethod
+    def dependencies_for(cls, target: str) -> dict[str, str]:
+        """Target-aware dependencies dictionary for `package.json`.
+
+        The shared baseline (React, socket.io, Zustand, cookies) lands on both
+        targets. Each target then adds its own framework deps.
+
+        Args:
+            target: The frontend target. One of "react_router" or "astro".
+
+        Returns:
+            A dictionary of dependencies for the requested target.
+
+        Raises:
+            ValueError: If the target is not a known frontend target.
+        """
+        from .base import FRONTEND_TARGETS
+
+        if target not in FRONTEND_TARGETS:
+            msg = (
+                f"Unknown frontend_target={target!r}. "
+                f"Expected one of {FRONTEND_TARGETS}."
+            )
+            raise ValueError(msg)
+        shared: dict[str, str] = {
             "json5": "2.2.3",
-            "react-router": cls._react_router_version,
-            "react-router-dom": cls._react_router_version,
-            "@react-router/node": cls._react_router_version,
             "react": cls._react_version,
-            "react-helmet": "6.1.0",
             "react-dom": cls._react_version,
             "isbot": "5.1.36",
             "socket.io-client": "4.8.3",
             "universal-cookie": "7.2.2",
+            "zustand": cls._zustand_version,
+        }
+        if target == "react_router":
+            return {
+                **shared,
+                "react-router": cls._react_router_version,
+                "react-router-dom": cls._react_router_version,
+                "@react-router/node": cls._react_router_version,
+                "react-helmet": "6.1.0",
+            }
+        # Astro target.
+        return {
+            **shared,
+            "astro": cls._astro_version,
+            "@astrojs/react": cls._astro_react_version,
+        }
+
+    @classmethod
+    def dev_dependencies_for(cls, target: str) -> dict[str, str]:
+        """Target-aware dev dependencies dictionary for `package.json`.
+
+        Args:
+            target: The frontend target. One of "react_router" or "astro".
+
+        Returns:
+            A dictionary of dev dependencies for the requested target.
+
+        Raises:
+            ValueError: If the target is not a known frontend target.
+        """
+        from .base import FRONTEND_TARGETS
+
+        if target not in FRONTEND_TARGETS:
+            msg = (
+                f"Unknown frontend_target={target!r}. "
+                f"Expected one of {FRONTEND_TARGETS}."
+            )
+            raise ValueError(msg)
+        shared: dict[str, str] = {
+            "@emotion/react": "11.14.0",
+            "autoprefixer": "10.4.27",
+            "postcss": "8.5.8",
+            "postcss-import": "16.1.1",
+        }
+        if target == "react_router":
+            return {
+                **shared,
+                "@react-router/dev": cls._react_router_version,
+                "@react-router/fs-routes": cls._react_router_version,
+                "vite": "8.0.0",
+            }
+        # target == "astro": Astro brings its own Vite — do not pin.
+        return shared
+
+    @classmethod
+    def commands_for(cls, target: str) -> dict[str, str]:
+        """Target-aware `dev` / `export` command pair for `package.json`.
+
+        Args:
+            target: The frontend target. One of "react_router" or "astro".
+
+        Returns:
+            A two-key dictionary mapping "dev" and "export" to the shell
+            command string for the requested target.
+
+        Raises:
+            ValueError: If the target is not a known frontend target.
+        """
+        from .base import FRONTEND_TARGETS
+
+        if target not in FRONTEND_TARGETS:
+            msg = (
+                f"Unknown frontend_target={target!r}. "
+                f"Expected one of {FRONTEND_TARGETS}."
+            )
+            raise ValueError(msg)
+        if target == "react_router":
+            return {
+                "dev": cls.Commands.DEV,
+                "export": cls.Commands.EXPORT,
+            }
+        return {
+            "dev": cls.Commands.ASTRO_DEV,
+            "export": cls.Commands.ASTRO_EXPORT,
         }
 
     DEV_DEPENDENCIES = {

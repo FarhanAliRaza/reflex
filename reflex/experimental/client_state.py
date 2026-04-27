@@ -18,7 +18,7 @@ NoValue = object()
 
 
 _refs_import = {
-    f"$/{constants.Dirs.STATE_PATH}": [ImportVar(tag="refs")],
+    f"$/{constants.Dirs.COERCE_PATH}": [ImportVar(tag="refs")],
 }
 
 

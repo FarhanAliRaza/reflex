@@ -1,7 +1,9 @@
 from pathlib import Path
 
 import pytest
+from reflex_base.config import Config
 from reflex_base.plugins import tailwind_v3, tailwind_v4
+from reflex_base.plugins.shared_tailwind import TailwindConfig
 
 
 @pytest.mark.parametrize("module", [tailwind_v3, tailwind_v4])
@@ -39,3 +41,33 @@ def test_v3_compile_root_style_keeps_expected_output_path():
     output_path, _ = tailwind_v3.compile_root_style(include_radix_themes=False)
 
     assert output_path == str(Path("styles") / "tailwind.css")
+
+
+@pytest.mark.parametrize("module", [tailwind_v3, tailwind_v4])
+def test_compile_config_includes_astro_content_paths(module, monkeypatch):
+    """When frontend_target='astro', Tailwind should also scan Astro output paths.
+
+    In islands mode, static HTML is emitted inline in ``src/pages/<route>.astro``
+    files and user-authored React components live under ``public/components/``.
+    Without these paths in Tailwind's content config, the classes used there
+    are missing from the generated CSS bundle and the page renders unstyled.
+    """
+    cfg = Config(app_name="test_app", frontend_target="astro")
+    monkeypatch.setattr("reflex_base.config.get_config", lambda: cfg)
+
+    _, generated = module.compile_config(TailwindConfig())
+
+    assert "./src/pages/**/*.astro" in generated
+    assert "./public/components/**/*.{js,ts,jsx,tsx}" in generated
+
+
+@pytest.mark.parametrize("module", [tailwind_v3, tailwind_v4])
+def test_compile_config_omits_astro_paths_for_react_router(module, monkeypatch):
+    """React-router target should keep the original two-path content list."""
+    cfg = Config(app_name="test_app", frontend_target="react_router")
+    monkeypatch.setattr("reflex_base.config.get_config", lambda: cfg)
+
+    _, generated = module.compile_config(TailwindConfig())
+
+    assert "./src/pages/**/*.astro" not in generated
+    assert "./public/components/**/*.{js,ts,jsx,tsx}" not in generated

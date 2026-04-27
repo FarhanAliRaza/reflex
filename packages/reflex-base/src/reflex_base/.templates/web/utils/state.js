@@ -5,12 +5,10 @@ import env from "$/env.json";
 import reflexEnvironment from "$/reflex.json";
 import Cookies from "universal-cookie";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  useLocation,
-  useNavigate,
-  useSearchParams,
-  useParams,
-} from "react-router";
+// Router hooks live behind a target-agnostic adapter. ``router_adapter.js``
+// is generated per ``frontend_target`` so this shared runtime never imports
+// ``react-router`` directly (Master Task 5 / Astro migration).
+import { useRouterAdapter } from "$/utils/router_adapter";
 import {
   initialEvents,
   initialState,
@@ -21,6 +19,7 @@ import {
 import debounce from "$/utils/helpers/debounce";
 import throttle from "$/utils/helpers/throttle";
 import { uploadFiles } from "$/utils/helpers/upload";
+import { refs, generateUUID } from "$/utils/coerce";
 
 // Endpoint URLs.
 const EVENTURL = env.EVENT;
@@ -37,32 +36,8 @@ const TOKEN_KEY = "token";
 // create cookie instance
 const cookies = new Cookies();
 
-// Dictionary holding component references.
-export const refs = {};
-
 // Array holding pending events to be processed.
 const event_queue = [];
-
-/**
- * Generate a UUID (Used for session tokens).
- * Taken from: https://stackoverflow.com/questions/105034/how-do-i-create-a-guid-uuid
- * @returns A UUID.
- */
-export const generateUUID = () => {
-  let d = new Date().getTime(),
-    d2 = (performance && performance.now && performance.now() * 1000) || 0;
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    let r = Math.random() * 16;
-    if (d > 0) {
-      r = ((d + r) % 16) | 0;
-      d = Math.floor(d / 16);
-    } else {
-      r = ((d2 + r) % 16) | 0;
-      d2 = Math.floor(d2 / 16);
-    }
-    return (c == "x" ? r : (r & 0x7) | 0x8).toString(16);
-  });
-};
 
 /**
  * Get the token for the current session.
@@ -860,11 +835,13 @@ export const useEventLoop = (
   client_storage = {},
 ) => {
   const socket = useRef(null);
-  const location = useLocation();
-  const navigate = useNavigate();
-  const paramsR = useParams();
+  const {
+    location,
+    navigate,
+    params: paramsR,
+    searchParams,
+  } = useRouterAdapter();
   const prevLocationRef = useRef(location);
-  const [searchParams] = useSearchParams();
   const [connectErrors, setConnectErrors] = useState([]);
   const params = useRef(paramsR);
   const mounted = useRef(false);
@@ -1080,85 +1057,3 @@ export const useEventLoop = (
   return [addEvents, connectErrors];
 };
 
-/***
- * Check if a value is truthy in python.
- * @param val The value to check.
- * @returns True if the value is truthy, false otherwise.
- */
-export const isTrue = (val) => {
-  if (Array.isArray(val)) return val.length > 0;
-  if (val === Object(val)) return Object.keys(val).length > 0;
-  return Boolean(val);
-};
-
-/***
- * Check if a value is not null or undefined.
- * @param val The value to check.
- * @returns True if the value is not null or undefined, false otherwise.
- */
-export const isNotNullOrUndefined = (val) => {
-  return (val ?? undefined) !== undefined;
-};
-
-/**
- * Get the value from a ref.
- * @param ref The ref to get the value from.
- * @returns The value.
- */
-export const getRefValue = (ref) => {
-  if (!ref || !ref.current) {
-    return;
-  }
-  if (ref.current.type == "checkbox") {
-    return ref.current.checked; // chakra
-  } else if (
-    ref.current.className?.includes("rt-CheckboxRoot") ||
-    ref.current.className?.includes("rt-SwitchRoot")
-  ) {
-    return ref.current.ariaChecked == "true"; // radix
-  } else if (ref.current.className?.includes("rt-SliderRoot")) {
-    // find the actual slider
-    return ref.current.querySelector(".rt-SliderThumb")?.ariaValueNow;
-  } else {
-    //querySelector(":checked") is needed to get value from radio_group
-    return (
-      ref.current.value ||
-      (ref.current.querySelector &&
-        ref.current.querySelector(":checked") &&
-        ref.current.querySelector(":checked")?.value)
-    );
-  }
-};
-
-/**
- * Get the values from a ref array.
- * @param refs The refs to get the values from.
- * @returns The values array.
- */
-export const getRefValues = (refs) => {
-  if (!refs) {
-    return;
-  }
-  // getAttribute is used by RangeSlider because it doesn't assign value
-  return refs.map((ref) =>
-    ref.current
-      ? ref.current.value || ref.current.getAttribute("aria-valuenow")
-      : null,
-  );
-};
-
-/**
- * Spread two arrays or two objects.
- * @param first The first array or object.
- * @param second The second array or object.
- * @returns The final merged array or object.
- */
-export const spreadArraysOrObjects = (first, second) => {
-  if (Array.isArray(first) && Array.isArray(second)) {
-    return [...first, ...second];
-  } else if (typeof first === "object" && typeof second === "object") {
-    return { ...first, ...second };
-  } else {
-    throw new Error("Both parameters must be either arrays or objects.");
-  }
-};

@@ -1,99 +1,185 @@
-"""Interactive components provided by @radix-ui/themes."""
+"""AlertDialog — wraps ``@radix-ui/react-alert-dialog`` with Tailwind styling.
 
-from typing import Literal
+The original Radix Themes AlertDialog auto-wrapped content in
+Portal + Overlay. This rewrite uses the bare primitive directly and
+attaches Tailwind class strings for the overlay + content panel.
+``@radix-ui/themes`` is no longer required.
+"""
 
-from reflex_base.components.component import ComponentNamespace, field
+from __future__ import annotations
+
+from typing import Any, ClassVar, Literal
+
+from reflex_base.components.component import Component, ComponentNamespace, field
 from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.event import EventHandler, no_args_event_spec, passthrough_event_spec
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import (
-    RadixThemesComponent,
-    RadixThemesTriggerComponent,
+from reflex_components_radix._radix_classes import (
+    dialog_content_classes,
+    dialog_overlay_classes,
 )
-
-LiteralContentSize = Literal["1", "2", "3", "4"]
-
-
-class AlertDialogRoot(RadixThemesComponent):
-    """Contains all the parts of the dialog."""
-
-    tag = "AlertDialog.Root"
-
-    open: Var[bool] = field(doc="The controlled open state of the dialog.")
-
-    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(
-        doc="Fired when the open state changes."
-    )
-
-    default_open: Var[bool] = field(
-        doc="The open state of the dialog when it is initially rendered. Use when you do not need to control its open state."
-    )
+from reflex_components_radix._variants import cn
+from reflex_components_radix.primitives.base import (
+    RadixPrimitiveComponent,
+    RadixPrimitiveTriggerComponent,
+)
+from reflex_components_radix.themes.base import apply_portal_theme
 
 
-class AlertDialogTrigger(RadixThemesTriggerComponent):
-    """Wraps the control that will open the dialog."""
+class _AlertDialogElement(RadixPrimitiveComponent):
+    """Base for @radix-ui/react-alert-dialog components."""
 
-    tag = "AlertDialog.Trigger"
+    library = "@radix-ui/react-alert-dialog@1.1.15"
+
+
+class AlertDialogRoot(_AlertDialogElement):
+    """Root component for AlertDialog."""
+
+    tag = "Root"
+    alias = "RadixPrimitiveAlertDialogRoot"
+
+    open: Var[bool] = field(doc="Controlled open state")
+    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(doc="Open change.")
+    default_open: Var[bool] = field(doc="Initial open state")
+
+    _valid_children: ClassVar[list[str]] = [
+        "AlertDialogTrigger",
+        "AlertDialogPortal",
+    ]
+
+
+class AlertDialogPortal(_AlertDialogElement):
+    """Portal for AlertDialog content."""
+
+    tag = "Portal"
+    alias = "RadixPrimitiveAlertDialogPortal"
+
+    force_mount: Var[bool] = field(doc="Force mount")
+
+    _valid_parents: ClassVar[list[str]] = ["AlertDialogRoot"]
+
+
+class AlertDialogOverlay(_AlertDialogElement):
+    """Backdrop covering inert content."""
+
+    tag = "Overlay"
+    alias = "RadixPrimitiveAlertDialogOverlay"
+
+    force_mount: Var[bool] = field(doc="Force mount")
+
+    _valid_parents: ClassVar[list[str]] = ["AlertDialogPortal"]
+
+
+class AlertDialogTrigger(_AlertDialogElement, RadixPrimitiveTriggerComponent):
+    """Trigger that opens the dialog."""
+
+    tag = "Trigger"
+    alias = "RadixPrimitiveAlertDialogTrigger"
 
     _memoization_mode = MemoizationMode(recursive=False)
+    _valid_parents: ClassVar[list[str]] = ["AlertDialogRoot"]
 
 
-class AlertDialogContent(elements.Div, RadixThemesComponent):
-    """Contains the content of the dialog. This component is based on the div element."""
+class AlertDialogContent(elements.Div, _AlertDialogElement):
+    """Dialog content panel — auto-wraps in Portal + Overlay."""
 
-    tag = "AlertDialog.Content"
+    tag = "Content"
+    alias = "RadixPrimitiveAlertDialogContent"
 
-    size: Var[Responsive[LiteralContentSize]] = field(doc="The size of the content.")
+    size: Var[Responsive[Literal["1", "2", "3", "4"]]] = field(doc='Size "1"-"4"')
+    force_mount: Var[bool] = field(doc="Force mount")
 
-    force_mount: Var[bool] = field(doc="Whether to force mount the content on open.")
+    on_open_auto_focus: EventHandler[no_args_event_spec] = field(doc="Open focus.")
+    on_close_auto_focus: EventHandler[no_args_event_spec] = field(doc="Close focus.")
+    on_escape_key_down: EventHandler[no_args_event_spec] = field(doc="Escape down.")
 
-    on_open_auto_focus: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the dialog is opened."
-    )
+    _valid_parents: ClassVar[list[str]] = ["AlertDialogPortal"]
 
-    on_close_auto_focus: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the dialog is closed."
-    )
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create alert-dialog content wrapped in Portal + Overlay.
 
-    on_escape_key_down: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the escape key is pressed."
-    )
+        Args:
+            *children: Dialog body.
+            **props: Standard content props.
 
-
-class AlertDialogTitle(RadixThemesComponent):
-    """An accessible title that is announced when the dialog is opened.
-    This part is based on the Heading component with a pre-defined font size and
-    leading trim on top.
-    """
-
-    tag = "AlertDialog.Title"
-
-
-class AlertDialogDescription(RadixThemesComponent):
-    """An optional accessible description that is announced when the dialog is opened.
-    This part is based on the Text component with a pre-defined font size.
-    """
-
-    tag = "AlertDialog.Description"
+        Returns:
+            The content component (already inside a portal/overlay).
+        """
+        existing = props.pop("class_name", "")
+        props.pop("size", None)
+        props["class_name"] = cn(dialog_content_classes(), existing)
+        apply_portal_theme(props)
+        content = super().create(*children, **props)
+        return AlertDialogPortal.create(
+            AlertDialogOverlay.create(class_name=dialog_overlay_classes()),
+            content,
+        )
 
 
-class AlertDialogAction(RadixThemesTriggerComponent):
-    """Wraps the control that will close the dialog. This should be distinguished
-    visually from the Cancel control.
-    """
+class AlertDialogTitle(_AlertDialogElement):
+    """Dialog title (accessible)."""
 
-    tag = "AlertDialog.Action"
+    tag = "Title"
+    alias = "RadixPrimitiveAlertDialogTitle"
+
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create the dialog title.
+
+        Args:
+            *children: Title content.
+            **props: Standard props.
+
+        Returns:
+            The title component.
+        """
+        existing = props.pop("class_name", "")
+        props["class_name"] = cn(
+            "text-lg font-semibold text-[var(--gray-12)] mb-1", existing,
+        )
+        return super().create(*children, **props)
 
 
-class AlertDialogCancel(RadixThemesTriggerComponent):
-    """Wraps the control that will close the dialog. This should be distinguished
-    visually from the Action control.
-    """
+class AlertDialogDescription(_AlertDialogElement):
+    """Dialog description (accessible)."""
 
-    tag = "AlertDialog.Cancel"
+    tag = "Description"
+    alias = "RadixPrimitiveAlertDialogDescription"
+
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create the dialog description.
+
+        Args:
+            *children: Description content.
+            **props: Standard props.
+
+        Returns:
+            The description component.
+        """
+        existing = props.pop("class_name", "")
+        props["class_name"] = cn(
+            "text-sm text-[var(--gray-11)] mb-3", existing,
+        )
+        return super().create(*children, **props)
+
+
+class AlertDialogAction(_AlertDialogElement, RadixPrimitiveTriggerComponent):
+    """The destructive / confirming action that closes the dialog."""
+
+    tag = "Action"
+    alias = "RadixPrimitiveAlertDialogAction"
+
+
+class AlertDialogCancel(_AlertDialogElement, RadixPrimitiveTriggerComponent):
+    """The cancel action that closes the dialog."""
+
+    tag = "Cancel"
+    alias = "RadixPrimitiveAlertDialogCancel"
 
 
 class AlertDialog(ComponentNamespace):

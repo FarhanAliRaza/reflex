@@ -272,7 +272,15 @@ class MemoizeStatefulPlugin(Plugin):
         wrapper_factory, definition = create_passthrough_component_memo(tag, comp)
         compile_context.auto_memo_components[tag] = definition
 
-        return wrapper_factory()
+        wrapper = wrapper_factory()
+        # Surface the original component on the wrapper so downstream passes
+        # (notably the Astro islands classifier) can decide whether the memo
+        # actually needs client-side hydration. Auto-memoize fires on any
+        # var_data — including build-time-only signals such as icon imports —
+        # so the wrapper alone cannot tell whether its subtree carries
+        # runtime state.
+        object.__setattr__(wrapper, "_memoized_source", comp)
+        return wrapper
 
 
 __all__ = ["MemoizeStatefulPlugin"]

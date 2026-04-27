@@ -1,9 +1,10 @@
-"""Interactive components provided by @radix-ui/themes."""
+"""RadioGroup — native radios styled with Tailwind utilities."""
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, ClassVar, Literal
 
 from reflex_base.components.component import Component, ComponentNamespace, field
 from reflex_base.event import EventHandler, passthrough_event_spec
@@ -13,150 +14,146 @@ from reflex_base.vars.sequence import StringVar
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.core.cond import cond
 from reflex_components_core.core.foreach import foreach
+from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import (
-    LiteralAccentColor,
-    LiteralSpacing,
-    RadixThemesComponent,
-)
+from reflex_components_radix._radix_classes import radio_classes
+from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import LiteralAccentColor, LiteralSpacing
 from reflex_components_radix.themes.layout.flex import Flex
 from reflex_components_radix.themes.typography.text import Text
 
 LiteralFlexDirection = Literal["row", "column", "row-reverse", "column-reverse"]
 
+_RADIO_GROUP_UID = itertools.count(1)
 
-class RadioGroupRoot(RadixThemesComponent):
-    """A set of interactive radio buttons where only one can be selected at a time."""
 
-    tag = "RadioGroup.Root"
+def _walk_radio_items(node: Any, group_name: str, default_value: str | None) -> None:
+    """Recursively set ``name`` on every RadioGroupItem and pre-check the match."""
+    if isinstance(node, RadioGroupItem):
+        if not getattr(node, "name", None):
+            node.name = LiteralVar.create(group_name)
+        raw = getattr(node, "_radio_raw_value", None)
+        if default_value is not None and raw is not None and raw == default_value:
+            node.default_checked = LiteralVar.create(True)
+    for child in getattr(node, "children", []) or []:
+        _walk_radio_items(child, group_name, default_value)
+
+
+class RadioGroupRoot(elements.Div):
+    """A set of radio buttons, only one selectable at a time."""
+
+    tag = "div"
 
     size: Var[Responsive[Literal["1", "2", "3"]]] = field(
         default=LiteralVar.create("2"),
-        doc='The size of the radio group: "1" | "2" | "3"',
+        doc='Size: "1" | "2" | "3"',
     )
-
     variant: Var[Literal["classic", "surface", "soft"]] = field(
-        default=LiteralVar.create("classic"), doc="The variant of the radio group"
+        default=LiteralVar.create("classic"), doc="Variant"
     )
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    high_contrast: Var[bool] = field(doc="Higher contrast")
+    value: Var[str] = field(doc="Controlled value")
+    default_value: Var[str] = field(doc="Initial value")
+    disabled: Var[bool] = field(doc="Disable")
+    name: Var[str] = field(doc="Form name")
+    required: Var[bool] = field(doc="Required")
 
-    color_scheme: Var[LiteralAccentColor] = field(doc="The color of the radio group")
-
-    high_contrast: Var[bool] = field(
-        doc="Whether to render the radio group with higher contrast color against background"
-    )
-
-    value: Var[str] = field(
-        doc="The controlled value of the radio item to check. Should be used in conjunction with on_change."
-    )
-
-    default_value: Var[str] = field(
-        doc="The initial value of checked radio item. Should be used in conjunction with on_change."
-    )
-
-    disabled: Var[bool] = field(doc="Whether the radio group is disabled")
-
-    name: Var[str] = field(
-        doc="The name of the group. Submitted with its owning form as part of a name/value pair."
-    )
-
-    required: Var[bool] = field(doc="Whether the radio group is required")
-
-    # Props to rename
-    _rename_props = {"onChange": "onValueChange"}
+    _rename_props: ClassVar[dict[str, str]] = {"onChange": "onValueChange"}
 
     on_change: EventHandler[passthrough_event_spec(str)] = field(
-        doc="Fired when the value of the radio group changes."
+        doc="Fired when the selected value changes."
     )
 
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a radio-group root container.
 
-class RadioGroupItem(RadixThemesComponent):
-    """An item in the group that can be checked."""
+        Args:
+            *children: RadioGroupItem children.
+            **props: variant/size/colour props.
 
-    tag = "RadioGroup.Item"
+        Returns:
+            The radio-group root component.
+        """
+        existing = props.pop("class_name", "")
+        default_value = props.get("default_value")
+        # Resolve a literal default_value for child pre-checking.
+        literal_default: str | None = None
+        if isinstance(default_value, str):
+            literal_default = default_value
+        elif isinstance(default_value, LiteralVar):
+            v = getattr(default_value, "_var_value", None)
+            if isinstance(v, str):
+                literal_default = v
+        group_name = props.get("name") or f"_rg{next(_RADIO_GROUP_UID)}"
+        props.setdefault("role", "radiogroup")
+        props["class_name"] = cn("flex flex-col gap-2", existing)
+        for child in children:
+            _walk_radio_items(child, group_name, literal_default)
+        return super().create(*children, **props)
 
-    value: Var[str] = field(
-        doc="The value of the radio item to check. Should be used in conjunction with on_change."
-    )
 
-    disabled: Var[bool] = field(
-        doc="When true, prevents the user from interacting with the radio item."
-    )
+class RadioGroupItem(elements.Input):
+    """An individual radio in a group."""
 
-    required: Var[bool] = field(
-        doc="When true, indicates that the user must check the radio item before the owning form can be submitted."
-    )
+    tag = "input"
+
+    value: Var[str] = field(doc="Item value")
+    disabled: Var[bool] = field(doc="Disable")
+    required: Var[bool] = field(doc="Required")
+    name: Var[str] = field(doc="Form name (auto-set by group)")
+
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create an individual radio input.
+
+        Args:
+            *children: Ignored.
+            **props: value + standard radio props.
+
+        Returns:
+            The radio component.
+        """
+        raw_value = props.get("value") if isinstance(props.get("value"), str) else None
+        existing = props.pop("class_name", "")
+        props["type"] = "radio"
+        props["class_name"] = cn(radio_classes(), existing)
+        instance = super().create(**props)
+        instance._radio_raw_value = raw_value
+        return instance
 
 
-class HighLevelRadioGroup(RadixThemesComponent):
-    """High level wrapper for the RadioGroup component."""
+class HighLevelRadioGroup(RadioGroupRoot):
+    """High-level wrapper for RadioGroup taking a list of values."""
 
     items: Var[Sequence[str]] = field(doc="The items of the radio group.")
-
     direction: Var[LiteralFlexDirection] = field(
-        default=LiteralVar.create("row"), doc="The direction of the radio group."
+        default=LiteralVar.create("row"), doc="Layout direction"
     )
-
-    spacing: Var[LiteralSpacing] = field(
-        default=LiteralVar.create("2"),
-        doc="The gap between the items of the radio group.",
-    )
-
-    size: Var[Literal["1", "2", "3"]] = field(
-        default=LiteralVar.create("2"), doc="The size of the radio group."
-    )
-
-    variant: Var[Literal["classic", "surface", "soft"]] = field(
-        default=LiteralVar.create("classic"), doc="The variant of the radio group"
-    )
-
-    color_scheme: Var[LiteralAccentColor] = field(doc="The color of the radio group")
-
-    high_contrast: Var[bool] = field(
-        doc="Whether to render the radio group with higher contrast color against background"
-    )
-
-    value: Var[str] = field(
-        doc="The controlled value of the radio item to check. Should be used in conjunction with on_change."
-    )
-
-    default_value: Var[str] = field(
-        doc="The initial value of checked radio item. Should be used in conjunction with on_change."
-    )
-
-    disabled: Var[bool] = field(doc="Whether the radio group is disabled")
-
-    name: Var[str] = field(
-        doc="The name of the group. Submitted with its owning form as part of a name/value pair."
-    )
-
-    required: Var[bool] = field(doc="Whether the radio group is required")
-
-    # Props to rename
-    _rename_props = {"onChange": "onValueChange"}
+    spacing: Var[LiteralSpacing] = field(default=LiteralVar.create("2"), doc="Gap")
 
     @classmethod
     def create(
         cls,
         items: Var[Sequence[str | int | float | list | dict | bool | None]],
-        **props,
+        **props: Any,
     ) -> Component:
-        """Create a radio group component.
+        """Create a radio group from a list of items.
 
         Args:
-            items: The items of the radio group.
-            **props: Additional properties to apply to the accordion item.
+            items: The items to render.
+            **props: variant/size/colour/value props.
 
         Returns:
-            The created radio group component.
+            The radio group component.
 
         Raises:
-            TypeError: If the type of items is invalid.
+            TypeError: If items is not a list or Var of list.
         """
         direction = props.pop("direction", "row")
         spacing = props.pop("spacing", "2")
         size = props.pop("size", "2")
-        variant = props.pop("variant", "classic")
-        color_scheme = props.pop("color_scheme", None)
         default_value = props.pop("default_value", "")
 
         if not isinstance(items, (list, Var)) or (
@@ -167,16 +164,13 @@ class HighLevelRadioGroup(RadixThemesComponent):
             msg = f"The radio group component takes in a list, got {items_type} instead"
             raise TypeError(msg)
 
-        default_value = LiteralVar.create(default_value)
-
-        # convert only non-strings to json(JSON.stringify) so quotes are not rendered
-        # for string literal types.
+        default_value_var = LiteralVar.create(default_value)
         if isinstance(default_value, str) or (
             isinstance(default_value, Var) and default_value._var_type is str
         ):
-            default_value = LiteralVar.create(default_value)
+            default_value_var = LiteralVar.create(default_value)
         else:
-            default_value = LiteralVar.create(default_value).to_string()
+            default_value_var = LiteralVar.create(default_value).to_string()
 
         def radio_group_item(value: Var) -> Component:
             item_value = cond(
@@ -184,37 +178,26 @@ class HighLevelRadioGroup(RadixThemesComponent):
                 value,
                 value.to_string(),
             ).to(StringVar)
-
             return Text.create(
                 Flex.create(
                     RadioGroupItem.create(
                         value=item_value,
                         disabled=props.get("disabled", LiteralVar.create(False)),
+                        default_checked=item_value == default_value_var,
                     ),
                     item_value,
                     spacing="2",
+                    align="center",
                 ),
                 size=size,
                 as_="label",
             )
 
-        children = [
-            foreach(
-                items,
-                radio_group_item,
-            )
-        ]
-
+        children = [foreach(items, radio_group_item)]
         return RadioGroupRoot.create(
-            Flex.create(
-                *children,
-                direction=direction,
-                spacing=spacing,
-            ),
+            Flex.create(*children, direction=direction, spacing=spacing),
             size=size,
-            variant=variant,
-            color_scheme=color_scheme,
-            default_value=default_value,
+            default_value=default_value_var,
             **props,
         )
 

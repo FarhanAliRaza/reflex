@@ -2087,7 +2087,7 @@ def test_app_wrap_compile_theme(
 
     expected = (
         "function AppWrap({children}) {\n"
-        "const [addEvents, connectErrors] = useContext(EventLoopContext);\n\n\n\n"
+        "const { addEvents = () => {}, connectErrors = [] } = useReflexEventLoop();\n\n\n\n"
         "return ("
         + ("jsx(StrictMode,{}," if react_strict_mode else "")
         + "jsx(ErrorBoundary,{"
@@ -2341,7 +2341,7 @@ def test_app_wrap_priority(
 
     expected = (
         "function AppWrap({children}) {\n"
-        "const [addEvents, connectErrors] = useContext(EventLoopContext);\n\n\n\n"
+        "const { addEvents = () => {}, connectErrors = [] } = useReflexEventLoop();\n\n\n\n"
         "return ("
         + ("jsx(StrictMode,{}," if react_strict_mode else "")
         + "jsx(RadixThemesBox,{},"
@@ -2425,6 +2425,42 @@ def test_generate_component():
 
     with pytest.raises(exceptions.MatchTypeError):
         App._generate_component(index_mismatch)
+
+
+def test_add_page_render_mode_round_trip():
+    """add_page stores render_mode on the UnevaluatedPage record."""
+    app = App()
+
+    def index():
+        return rx.text("home")
+
+    app.add_page(index, render_mode="app")
+    assert app._unevaluated_pages["index"].render_mode == "app"
+
+
+def test_add_page_render_mode_invalid_raises():
+    """An invalid render_mode raises CompileError before the page is recorded."""
+    from reflex_base.utils.exceptions import CompileError
+
+    app = App()
+
+    def index():
+        return rx.text("home")
+
+    with pytest.raises(CompileError, match="Invalid render_mode"):
+        app.add_page(index, render_mode="ssr")  # pyright: ignore[reportArgumentType]
+    assert "index" not in app._unevaluated_pages
+
+
+def test_add_page_render_mode_default_is_none():
+    """When the user does not pass render_mode, the field stays None."""
+    app = App()
+
+    def index():
+        return rx.text("home")
+
+    app.add_page(index)
+    assert app._unevaluated_pages["index"].render_mode is None
 
 
 def test_add_page_component_returning_tuple():

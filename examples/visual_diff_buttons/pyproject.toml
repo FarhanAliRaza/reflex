@@ -1,0 +1,13 @@
+[project]
+name = "visual_diff_buttons"
+version = "0.0.1"
+description = "Visual diff harness — Radix Themes Button vs shadcn Button."
+requires-python = ">=3.10,<4.0"
+dependencies = [
+  "reflex",
+  "playwright",
+  "pillow",
+]
+
+[tool.uv.sources]
+reflex = { path = "../..", editable = true }

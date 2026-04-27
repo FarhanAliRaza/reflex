@@ -1791,8 +1791,12 @@ def test_custom_component_get_imports():
     # The imports are only resolved during compilation.
     _, imports_outer = compile_custom_component(outer_comp)
     assert "inner" not in imports_outer
-    assert "$/utils/components" in imports_outer
-    assert imports_outer["$/utils/components"] == [ImportVar(tag="Wrapper")]
+    # ``CustomComponent.library`` is per-file (``$/utils/components/<tag>``)
+    # so each nested ``@rx.memo`` is imported from its own module — not the
+    # ``$/utils/components`` barrel — to keep Vite/Rollup tree-shaking honest.
+    assert "$/utils/components" not in imports_outer
+    assert "$/utils/components/Wrapper" in imports_outer
+    assert imports_outer["$/utils/components/Wrapper"] == [ImportVar(tag="Wrapper")]
 
 
 def test_custom_component_declare_event_handlers_in_fields():
@@ -2131,7 +2135,7 @@ def test_add_style_embedded_vars(test_state: type[TestState]):
     page._add_style_recursive(Style())
 
     assert (
-        f"const {test_state.get_name()} = useContext(StateContexts.{test_state.get_name()})"
+        f'const {test_state.get_name()} = useReflexState("{test_state.get_full_name()}")'
         in page._get_all_hooks_internal()
     )
     assert "useText" in page._get_all_hooks_internal()

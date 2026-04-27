@@ -60,16 +60,44 @@ class ReactRouterLink(A):
     def create(cls, *children, **props):
         """Create a ReactRouterLink component for client-side navigation.
 
+        On the Astro target, rx.link compiles to a plain ``<a href=...>``
+        with no framework router involvement: navigation is document-based.
+        The ``to`` prop is normalized back to ``href`` and the ``A`` element
+        class is constructed instead so the generated module imports nothing
+        from ``react-router``.
+
         Args:
             *children: The children of the component.
             **props: The props of the component.
 
         Returns:
-            The ReactRouterLink component.
+            On the React Router target, a ``ReactRouterLink``. On the
+            Astro target, a plain ``<a>`` (`A`) element.
         """
         # React Router special behavior is triggered on the `to` prop, not href.
         if "to" not in props and "href" in props:
             props["to"] = props.pop("href")
+        from reflex_base.config import get_config
+
+        if (config := get_config()).frontend_target == "astro":
+            # Drop React-Router-only props that don't translate to <a>.
+            href = props.pop("to", props.pop("href", None))
+            for unsupported in (
+                "replace",
+                "reload_document",
+                "prevent_scroll_reset",
+                "relative",
+                "preventScrollReset",
+                "prefetch",
+                "discover",
+                "view_transition",
+            ):
+                props.pop(unsupported, None)
+            if href is not None:
+                if isinstance(href, str):
+                    href = config.resolve_internal_link_href(href)
+                props["href"] = href
+            return A.create(*children, **props)
         return super().create(*children, **props)
 
     _invalid_children: ClassVar[list[str]] = ["A", "ReactRouterLink"]

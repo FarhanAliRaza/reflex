@@ -1,59 +1,68 @@
-"""Declarative layout and common spacing props."""
+"""Container — bounded centred content wrapper, Tailwind-styled."""
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from reflex_base.components.component import field
+from reflex_base.components.component import Component, field
 from reflex_base.style import STACK_CHILDREN_FULL_WIDTH
 from reflex_base.vars.base import LiteralVar, Var
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import RadixThemesComponent
+from reflex_components_radix._variants import cn
 
 LiteralContainerSize = Literal["1", "2", "3", "4"]
 
 
-class Container(elements.Div, RadixThemesComponent):
-    """Constrains the maximum width of page content.
+_SIZE = {
+    "1": "max-w-[448px]",
+    "2": "max-w-[688px]",
+    "3": "max-w-[880px]",
+    "4": "max-w-[1136px]",
+}
 
-    See https://www.radix-ui.com/themes/docs/components/container
-    """
 
-    tag = "Container"
+class Container(elements.Div):
+    """Constrains the maximum width of page content."""
+
+    tag = "div"
 
     size: Var[Responsive[LiteralContainerSize]] = field(
         default=LiteralVar.create("3"),
-        doc='The size of the container: "1" - "4" (default "3")',
+        doc='Container size: "1" - "4"',
     )
 
     @classmethod
     def create(
         cls,
-        *children,
+        *children: Any,
         padding: str = "16px",
         stack_children_full_width: bool = False,
-        **props,
-    ):
-        """Create the container component.
+        **props: Any,
+    ) -> Component:
+        """Create a container.
 
         Args:
-            *children: The children components.
-            padding: The padding of the container.
-            stack_children_full_width: If True, any vstack/hstack children will have 100% width.
-            **props: The properties of the container.
+            *children: Children components.
+            padding: Container padding.
+            stack_children_full_width: If True, child stacks span full width.
+            **props: Container properties.
 
         Returns:
             The container component.
         """
         if stack_children_full_width:
             props["style"] = {**STACK_CHILDREN_FULL_WIDTH, **props.pop("style", {})}
-        return super().create(
-            *children,
-            padding=padding,
-            **props,
+        size = props.pop("size", "3")
+        existing = props.pop("class_name", "")
+        size_class = _SIZE.get(size, _SIZE["3"]) if isinstance(size, str) else ""
+        if not isinstance(size, str) and size is not None:
+            props["size"] = size
+        props["class_name"] = cn(
+            f"mx-auto w-full {size_class}".strip(), existing
         )
+        return super().create(*children, padding=padding, **props)
 
 
 container = Container.create

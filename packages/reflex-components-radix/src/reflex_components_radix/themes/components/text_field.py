@@ -1,8 +1,14 @@
-"""Interactive components provided by @radix-ui/themes."""
+"""TextField — native ``<input>`` with Tailwind utility classes.
+
+Public API matches the original ``TextField.Root`` / ``TextField.Slot``
+namespace so existing call sites keep working. The slot wraps the
+input in a relatively-positioned div so absolute-positioned icons sit
+inside the field.
+"""
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, ClassVar, Literal
 
 from reflex_base.components.component import Component, ComponentNamespace, field
 from reflex_base.event import EventHandler, input_event, key_event
@@ -13,102 +19,72 @@ from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.core.debounce import DebounceInput
 from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import (
-    LiteralAccentColor,
-    LiteralRadius,
-    RadixThemesComponent,
-)
+from reflex_components_radix._radix_classes import text_field_classes
+from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import LiteralAccentColor, LiteralRadius
 
 LiteralTextFieldSize = Literal["1", "2", "3"]
 LiteralTextFieldVariant = Literal["classic", "surface", "soft"]
 
 
-class TextFieldRoot(elements.Input, RadixThemesComponent):
-    """Captures user input with an optional slot for buttons and icons."""
+class TextFieldRoot(elements.Input):
+    """Captures user input."""
 
-    tag = "TextField.Root"
+    tag = "input"
 
-    size: Var[Responsive[LiteralTextFieldSize]] = field(doc='Text field size "1" - "3"')
+    size: Var[Responsive[LiteralTextFieldSize]] = field(doc='Field size "1" - "3"')
+    variant: Var[LiteralTextFieldVariant] = field(doc='Variant: classic|surface|soft')
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    radius: Var[LiteralRadius] = field(doc="Override theme radius")
 
-    variant: Var[LiteralTextFieldVariant] = field(
-        doc='Variant of text field: "classic" | "surface" | "soft"'
-    )
+    auto_complete: Var[bool] = field(doc="Enable autocomplete")
+    default_value: Var[str] = field(doc="Initial value")
+    disabled: Var[bool] = field(doc="Disable input")
+    max_length: Var[int] = field(doc="Max chars")
+    min_length: Var[int] = field(doc="Min chars")
+    name: Var[str] = field(doc="Form name")
+    placeholder: Var[str] = field(doc="Placeholder text")
+    read_only: Var[bool] = field(doc="Read-only")
+    required: Var[bool] = field(doc="Required")
+    type: Var[str] = field(doc="Input type")
+    value: Var[str | int | float] = field(doc="Input value")
+    list: Var[str] = field(doc="Datalist id")
 
-    color_scheme: Var[LiteralAccentColor] = field(
-        doc="Override theme color for text field"
-    )
+    on_change: EventHandler[input_event] = field(doc="Value change.")
+    on_focus: EventHandler[input_event] = field(doc="Focus.")
+    on_blur: EventHandler[input_event] = field(doc="Blur.")
+    on_key_down: EventHandler[key_event] = field(doc="Key down.")
+    on_key_up: EventHandler[key_event] = field(doc="Key up.")
 
-    radius: Var[LiteralRadius] = field(
-        doc='Override theme radius for text field: "none" | "small" | "medium" | "large" | "full"'
-    )
-
-    auto_complete: Var[bool] = field(
-        doc="Whether the input should have autocomplete enabled"
-    )
-
-    default_value: Var[str] = field(
-        doc="The value of the input when initially rendered."
-    )
-
-    disabled: Var[bool] = field(doc="Disables the input")
-
-    max_length: Var[int] = field(
-        doc="Specifies the maximum number of characters allowed in the input"
-    )
-
-    min_length: Var[int] = field(
-        doc="Specifies the minimum number of characters required in the input"
-    )
-
-    name: Var[str] = field(doc="Name of the input, used when sending form data")
-
-    placeholder: Var[str] = field(doc="Placeholder text in the input")
-
-    read_only: Var[bool] = field(doc="Indicates whether the input is read-only")
-
-    required: Var[bool] = field(doc="Indicates that the input is required")
-
-    type: Var[str] = field(doc="Specifies the type of input")
-
-    value: Var[str | int | float] = field(doc="Value of the input")
-
-    list: Var[str] = field(doc="References a datalist for suggested options")
-
-    on_change: EventHandler[input_event] = field(
-        doc="Fired when the value of the textarea changes."
-    )
-
-    on_focus: EventHandler[input_event] = field(
-        doc="Fired when the textarea is focused."
-    )
-
-    on_blur: EventHandler[input_event] = field(
-        doc="Fired when the textarea is blurred."
-    )
-
-    on_key_down: EventHandler[key_event] = field(
-        doc="Fired when a key is pressed down."
-    )
-
-    on_key_up: EventHandler[key_event] = field(doc="Fired when a key is released.")
+    _rename_props: ClassVar[dict[str, str]] = {"colorScheme": "data-accent-color"}
 
     @classmethod
-    def create(cls, *children, **props) -> Component:
-        """Create an Input component.
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a text input.
 
         Args:
-            *children: The children of the component.
-            **props: The properties of the component.
+            *children: Ignored (input is void).
+            **props: Standard input props plus variant/size/colour.
 
         Returns:
-            The component.
+            The text-field component (debounced if controlled).
         """
-        value = props.get("value")
+        variant = props.pop("variant", None)
+        size = props.pop("size", None)
+        existing = props.pop("class_name", "")
+        selections: dict[str, str] = {}
+        if isinstance(variant, str):
+            selections["variant"] = variant
+        elif variant is not None:
+            props["variant"] = variant
+        if isinstance(size, str):
+            selections["size"] = size
+        elif size is not None:
+            props["size"] = size
+        props["class_name"] = cn(text_field_classes(**selections), existing)
 
-        # React expects an empty string(instead of null) for controlled inputs.
-        if value is not None and is_optional(
-            (value_var := Var.create(value))._var_type
-        ):
+        value = props.get("value")
+        if value is not None and is_optional((value_var := Var.create(value))._var_type):
             value_var_is_not_none = value_var != Var.create(None)
             value_var_is_not_undefined = value_var != Var(_js_expr="undefined")
             props["value"] = ternary_operation(
@@ -119,23 +95,38 @@ class TextFieldRoot(elements.Input, RadixThemesComponent):
 
         component = super().create(*children, **props)
         if props.get("value") is not None and props.get("on_change") is not None:
-            # create a debounced input if the user requests full control to avoid typing jank
             return DebounceInput.create(component)
         return component
 
 
-class TextFieldSlot(RadixThemesComponent):
-    """Contains icons or buttons associated with an Input."""
+class TextFieldSlot(elements.Div):
+    """Wrapper for icons or buttons positioned inside a TextField."""
 
-    tag = "TextField.Slot"
+    tag = "div"
 
-    color_scheme: Var[LiteralAccentColor] = field(
-        doc="Override theme color for text field slot"
-    )
+    color_scheme: Var[LiteralAccentColor] = field(doc="Slot accent color")
+    side: Var[Literal["left", "right"]] = field(doc="Slot side: left|right")
 
-    side: Var[Literal["left", "right"]] = field(
-        doc="Which side of the input the slot should be placed on"
-    )
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a text-field slot wrapper.
+
+        Args:
+            *children: Slot icon/button.
+            **props: ``side`` plus standard div props.
+
+        Returns:
+            The slot component.
+        """
+        side = props.pop("side", "left")
+        existing = props.pop("class_name", "")
+        position = "left-2" if side == "left" else "right-2"
+        props["class_name"] = cn(
+            f"absolute top-1/2 -translate-y-1/2 {position} "
+            "flex items-center text-[var(--gray-11)]",
+            existing,
+        )
+        return super().create(*children, **props)
 
 
 class TextField(ComponentNamespace):

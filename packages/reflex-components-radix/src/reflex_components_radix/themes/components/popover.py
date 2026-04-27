@@ -1,120 +1,112 @@
-"""Interactive components provided by @radix-ui/themes."""
+"""Popover — wraps ``@radix-ui/react-popover`` with Tailwind styling."""
 
-from typing import Literal
+from __future__ import annotations
 
-from reflex_base.components.component import ComponentNamespace, field
+from typing import Any, ClassVar, Literal
+
+from reflex_base.components.component import Component, ComponentNamespace, field
 from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.event import EventHandler, no_args_event_spec, passthrough_event_spec
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import (
-    RadixThemesComponent,
-    RadixThemesTriggerComponent,
+from reflex_components_radix._radix_classes import popover_content_classes
+from reflex_components_radix._variants import cn
+from reflex_components_radix.primitives.base import (
+    RadixPrimitiveComponent,
+    RadixPrimitiveTriggerComponent,
 )
+from reflex_components_radix.themes.base import apply_portal_theme
 
 
-class PopoverRoot(RadixThemesComponent):
-    """Floating element for displaying rich content, triggered by a button."""
+class _PopoverElement(RadixPrimitiveComponent):
+    """Base for @radix-ui/react-popover components."""
 
-    tag = "Popover.Root"
-
-    open: Var[bool] = field(doc="The controlled open state of the popover.")
-
-    modal: Var[bool] = field(
-        doc="The modality of the popover. When set to true, interaction with outside elements will be disabled and only popover content will be visible to screen readers."
-    )
-
-    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(
-        doc="Fired when the open state changes."
-    )
-
-    default_open: Var[bool] = field(
-        doc="The open state of the popover when it is initially rendered. Use when you do not need to control its open state."
-    )
+    library = "@radix-ui/react-popover@1.1.15"
 
 
-class PopoverTrigger(RadixThemesTriggerComponent):
-    """Wraps the control that will open the popover."""
+class PopoverRoot(_PopoverElement):
+    """Root component for Popover."""
 
-    tag = "Popover.Trigger"
+    tag = "Root"
+    alias = "RadixPrimitivePopoverRoot"
+
+    open: Var[bool] = field(doc="Controlled open state")
+    modal: Var[bool] = field(doc="Modal mode")
+    on_open_change: EventHandler[passthrough_event_spec(bool)] = field(doc="Open change.")
+    default_open: Var[bool] = field(doc="Initial open state")
+
+
+class PopoverPortal(_PopoverElement):
+    """Portal for popover content."""
+
+    tag = "Portal"
+    alias = "RadixPrimitivePopoverPortal"
+
+    force_mount: Var[bool] = field(doc="Force mount")
+
+
+class PopoverTrigger(_PopoverElement, RadixPrimitiveTriggerComponent):
+    """Wraps the control that opens the popover."""
+
+    tag = "Trigger"
+    alias = "RadixPrimitivePopoverTrigger"
 
     _memoization_mode = MemoizationMode(recursive=False)
 
 
-class PopoverContent(elements.Div, RadixThemesComponent):
-    """Contains content to be rendered in the open popover."""
+class PopoverContent(elements.Div, _PopoverElement):
+    """Popover content panel — auto-wraps in Portal."""
 
-    tag = "Popover.Content"
+    tag = "Content"
+    alias = "RadixPrimitivePopoverContent"
 
-    size: Var[Responsive[Literal["1", "2", "3", "4"]]] = field(
-        doc='Size of the button: "1" | "2" | "3" | "4"'
-    )
+    size: Var[Responsive[Literal["1", "2", "3", "4"]]] = field(doc='Size "1" - "4"')
+    side: Var[Literal["top", "right", "bottom", "left"]] = field(doc="Preferred side")
+    side_offset: Var[int] = field(doc="Side offset (px)")
+    align: Var[Literal["start", "center", "end"]] = field(doc="Alignment")
+    align_offset: Var[int] = field(doc="Align offset")
+    avoid_collisions: Var[bool] = field(doc="Avoid collisions")
+    collision_padding: Var[float | int | dict[str, float | int]] = field(doc="Padding")
+    sticky: Var[Literal["partial", "always"]] = field(doc="Sticky behavior")
+    hide_when_detached: Var[bool] = field(doc="Hide when detached")
 
-    side: Var[Literal["top", "right", "bottom", "left"]] = field(
-        doc="The preferred side of the anchor to render against when open. Will be reversed when collisions occur and avoidCollisions is enabled."
-    )
+    on_open_auto_focus: EventHandler[no_args_event_spec] = field(doc="Open focus.")
+    on_close_auto_focus: EventHandler[no_args_event_spec] = field(doc="Close focus.")
+    on_escape_key_down: EventHandler[no_args_event_spec] = field(doc="Escape down.")
+    on_pointer_down_outside: EventHandler[no_args_event_spec] = field(doc="Pointer down outside.")
+    on_focus_outside: EventHandler[no_args_event_spec] = field(doc="Focus outside.")
+    on_interact_outside: EventHandler[no_args_event_spec] = field(doc="Interact outside.")
 
-    side_offset: Var[int] = field(doc="The distance in pixels from the anchor.")
+    @classmethod
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create popover content wrapped in Portal.
 
-    align: Var[Literal["start", "center", "end"]] = field(
-        doc="The preferred alignment against the anchor. May change when collisions occur."
-    )
+        Args:
+            *children: Popover body.
+            **props: Standard content props.
 
-    align_offset: Var[int] = field(
-        doc="The vertical distance in pixels from the anchor."
-    )
-
-    avoid_collisions: Var[bool] = field(
-        doc="When true, overrides the side andalign preferences to prevent collisions with boundary edges."
-    )
-
-    collision_padding: Var[float | int | dict[str, float | int]] = field(
-        doc='The distance in pixels from the boundary edges where collision detection should occur. Accepts a number (same for all sides), or a partial padding object, for example: { "top": 20, "left": 20 }. Defaults to 0.'
-    )
-
-    sticky: Var[Literal["partial", "always"]] = field(
-        doc='The sticky behavior on the align axis. "partial" will keep the content in the boundary as long as the trigger is at least partially in the boundary whilst "always" will keep the content in the boundary regardless. Defaults to "partial".'
-    )
-
-    hide_when_detached: Var[bool] = field(
-        doc="Whether to hide the content when the trigger becomes fully occluded. Defaults to False."
-    )
-
-    on_open_auto_focus: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the dialog is opened."
-    )
-
-    on_close_auto_focus: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the dialog is closed."
-    )
-
-    on_escape_key_down: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the escape key is pressed."
-    )
-
-    on_pointer_down_outside: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the pointer is down outside the dialog."
-    )
-
-    on_focus_outside: EventHandler[no_args_event_spec] = field(
-        doc="Fired when focus moves outside the dialog."
-    )
-
-    on_interact_outside: EventHandler[no_args_event_spec] = field(
-        doc="Fired when the pointer interacts outside the dialog."
-    )
+        Returns:
+            The content component (already inside a portal).
+        """
+        existing = props.pop("class_name", "")
+        props.pop("size", None)
+        props["class_name"] = cn(popover_content_classes(), existing)
+        apply_portal_theme(props)
+        content = super().create(*children, **props)
+        return PopoverPortal.create(content)
 
 
-class PopoverClose(RadixThemesTriggerComponent):
-    """Wraps the control that will close the popover."""
+class PopoverClose(_PopoverElement, RadixPrimitiveTriggerComponent):
+    """Closes the popover."""
 
-    tag = "Popover.Close"
+    tag = "Close"
+    alias = "RadixPrimitivePopoverClose"
 
 
 class Popover(ComponentNamespace):
-    """Floating element for displaying rich content, triggered by a button."""
+    """Popover components namespace."""
 
     root = staticmethod(PopoverRoot.create)
     trigger = staticmethod(PopoverTrigger.create)

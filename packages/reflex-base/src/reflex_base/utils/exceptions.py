@@ -284,3 +284,7 @@ class InvalidLockWarningThresholdError(ReflexError):
 
 class UnretrievableVarValueError(ReflexError):
     """Raised when the value of a var is not retrievable."""
+
+
+class CompileError(ReflexError):
+    """Raised when a compile-time invariant is violated (e.g. render_mode misuse)."""

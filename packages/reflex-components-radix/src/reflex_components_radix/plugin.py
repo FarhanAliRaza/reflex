@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from reflex_base.plugins.compiler import PageContext
 
 
-RADIX_THEMES_STYLESHEET = "@radix-ui/themes/styles.css"
+RADIX_THEMES_STYLESHEET = "@radix-ui/themes/tokens.css"
 RADIX_THEMES_PACKAGE = "@radix-ui/themes@3.3.0"
 _DEPRECATION_VERSION = "0.9.0"
 _REMOVAL_VERSION = "1.0"
@@ -72,10 +72,11 @@ class RadixThemesPlugin(Plugin):
             console.deprecate(
                 feature_name="Implicit Radix Themes enablement",
                 reason=(
-                    "a Radix Themes component was detected, which enables the full "
-                    "Radix CSS bundle. Configure `rx.plugins.RadixThemesPlugin()` in "
-                    "`rxconfig.py` to make this explicit, or remove Radix components "
-                    "to avoid loading the stylesheet"
+                    "a Radix Themes component was detected, which enables the "
+                    "@radix-ui/themes/tokens.css variable preflight. Configure "
+                    "`rx.plugins.RadixThemesPlugin()` in `rxconfig.py` to make "
+                    "this explicit, or remove Radix components to avoid "
+                    "loading the stylesheet"
                 ),
                 deprecation_version=_DEPRECATION_VERSION,
                 removal_version=_REMOVAL_VERSION,

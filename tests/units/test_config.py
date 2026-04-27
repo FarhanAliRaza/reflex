@@ -214,6 +214,30 @@ def test_prepend_backend_path(backend_path: str, path: str, expected: str):
     assert config.prepend_backend_path(path) == expected
 
 
+@pytest.mark.parametrize(
+    ("frontend_path", "href", "expected"),
+    [
+        ("", "/foo", "/foo"),
+        ("/docs", "/foo", "/docs/foo"),
+        ("docs", "/foo/bar/", "/docs/foo/bar/"),
+        ("/docs/", "/getting-started/", "/docs/getting-started/"),
+        ("/docs", "/docs/foo", "/docs/foo"),
+        ("/docs", "/docs", "/docs"),
+        ("/docs", "/docsx/foo", "/docs/docsx/foo"),
+        ("/docs", "https://example.com/foo", "https://example.com/foo"),
+        ("/docs", "//cdn.example.com/foo", "//cdn.example.com/foo"),
+        ("/docs", "mailto:a@b.co", "mailto:a@b.co"),
+        ("/docs", "#section", "#section"),
+        ("/docs", "relative/path", "relative/path"),
+        ("/docs", "", ""),
+    ],
+)
+def test_resolve_internal_link_href(frontend_path: str, href: str, expected: str):
+    """resolve_internal_link_href idempotently prefixes internal absolute hrefs."""
+    config = rx.Config(app_name="test_app", frontend_path=frontend_path)
+    assert config.resolve_internal_link_href(href) == expected
+
+
 @pytest.mark.parametrize("backend_path", ["", "/api", "api/", "/api/v1"])
 @pytest.mark.parametrize("endpoint", list(Endpoint))
 def test_endpoint_get_url_with_backend_path(
@@ -557,3 +581,23 @@ class TestDisablePlugins:
         """Test that builtin plugins are added when not disabled."""
         config = rx.Config(app_name="test")
         assert any(isinstance(p, SitemapPlugin) for p in config.plugins)
+
+
+def test_frontend_target_default_react_router():
+    """frontend_target defaults to 'react_router' for backwards compatibility."""
+    config = rx.Config(app_name="test_app")
+    assert config.frontend_target == "react_router"
+
+
+@pytest.mark.parametrize("target", ["react_router", "astro"])
+def test_frontend_target_round_trip(target: str):
+    """Both supported frontend targets round-trip through Config."""
+    config = rx.Config(app_name="test_app", frontend_target=target)  # pyright: ignore[reportArgumentType]
+    assert config.frontend_target == target
+
+
+def test_frontend_target_from_environment(monkeypatch: pytest.MonkeyPatch):
+    """REFLEX_FRONTEND_TARGET env var overrides the default."""
+    monkeypatch.setenv("REFLEX_FRONTEND_TARGET", "astro")
+    config = rx.Config(app_name="test_app")
+    assert config.frontend_target == "astro"

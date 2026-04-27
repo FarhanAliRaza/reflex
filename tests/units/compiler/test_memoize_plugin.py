@@ -160,8 +160,8 @@ def test_special_form_memo_wrappers_render_structural_body(
     """Generated memo wrappers for special forms render the structural body.
 
     The memo body must subscribe to the state the special form references
-    (via ``useContext(StateContexts...)``), and the page must not — otherwise
-    the state-dependent render has leaked into page scope.
+    (via ``useReflexState(...)``), and the page must not — otherwise the
+    state-dependent render has leaked into page scope.
     """
     from reflex.compiler.compiler import compile_memo_components
 
@@ -197,7 +197,7 @@ def test_special_form_memo_wrappers_render_structural_body(
     )
     memo_code = "\n".join(code for _, code in memo_files)
 
-    state_wiring = "useContext(StateContexts"
+    state_wiring = "useReflexState"
     assert state_wiring in memo_code
     assert state_wiring not in (page_ctx.output_code or "")
     assert body_marker in memo_code

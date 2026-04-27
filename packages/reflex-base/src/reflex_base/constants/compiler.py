@@ -128,8 +128,7 @@ class Imports(SimpleNamespace):
     """Common sets of import vars."""
 
     EVENTS = {
-        "react": [ImportVar(tag="useContext")],
-        f"$/{Dirs.CONTEXTS_PATH}": [ImportVar(tag="EventLoopContext")],
+        f"$/{Dirs.UTILS}/store": [ImportVar(tag="useReflexEventLoop")],
         f"$/{Dirs.STATE_PATH}": [
             ImportVar(tag=CompileVars.TO_EVENT),
             ImportVar(tag=CompileVars.APPLY_EVENT_ACTIONS),
@@ -140,7 +139,12 @@ class Imports(SimpleNamespace):
 class Hooks(SimpleNamespace):
     """Common sets of hook declarations."""
 
-    EVENTS = f"const [{CompileVars.ADD_EVENTS}, {CompileVars.CONNECT_ERROR}] = useContext(EventLoopContext);"
+    EVENTS = (
+        "const { "
+        f"{CompileVars.ADD_EVENTS} = () => {{}}, "
+        f"{CompileVars.CONNECT_ERROR} = [] "
+        "} = useReflexEventLoop();"
+    )
 
     class HookPosition(enum.Enum):
         """The position of the hook in the component."""

@@ -139,9 +139,15 @@ _COMPONENTS_BASE_MAPPING: lazy_loader.SubmodAttrsType = {
 _ALL_COMPONENTS_MAPPING: lazy_loader.SubmodAttrsType = {
     "reflex_base.components.component": [
         "Component",
+        "HydratedComponent",
         "NoSSRComponent",
         "memo",
         "ComponentNamespace",
+    ],
+    "reflex_base.components.island": [
+        "island",
+        "IslandComponent",
+        "IslandSpec",
     ],
     "reflex_components_core.el.elements.media": ["image"],
     "reflex_components_lucide": ["icon"],

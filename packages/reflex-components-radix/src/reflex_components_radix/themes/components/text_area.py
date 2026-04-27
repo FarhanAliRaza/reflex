@@ -1,6 +1,8 @@
-"""Interactive components provided by @radix-ui/themes."""
+"""TextArea — native ``<textarea>`` with Tailwind utility classes."""
 
-from typing import Literal
+from __future__ import annotations
+
+from typing import Any, ClassVar, Literal
 
 from reflex_base.components.component import Component, field
 from reflex_base.vars.base import Var
@@ -8,113 +10,84 @@ from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.core.debounce import DebounceInput
 from reflex_components_core.el import elements
 
-from reflex_components_radix.themes.base import (
-    LiteralAccentColor,
-    LiteralRadius,
-    RadixThemesComponent,
-)
+from reflex_components_radix._radix_classes import text_area_classes
+from reflex_components_radix._variants import cn
+from reflex_components_radix.themes.base import LiteralAccentColor, LiteralRadius
 
 LiteralTextAreaSize = Literal["1", "2", "3"]
-
 LiteralTextAreaResize = Literal["none", "vertical", "horizontal", "both"]
 
+_RESIZE = {
+    "none": "resize-none",
+    "vertical": "resize-y",
+    "horizontal": "resize-x",
+    "both": "resize",
+}
 
-class TextArea(RadixThemesComponent, elements.Textarea):
-    """The input part of a TextArea, may be used by itself."""
 
-    tag = "TextArea"
+class TextArea(elements.Textarea):
+    """A multi-line text input."""
 
-    size: Var[Responsive[LiteralTextAreaSize]] = field(
-        doc='The size of the text area: "1" | "2" | "3"'
-    )
+    tag = "textarea"
 
-    variant: Var[Literal["classic", "surface", "soft"]] = field(
-        doc="The variant of the text area"
-    )
+    size: Var[Responsive[LiteralTextAreaSize]] = field(doc='Size: "1" | "2" | "3"')
+    variant: Var[Literal["classic", "surface", "soft"]] = field(doc="Variant")
+    resize: Var[Responsive[LiteralTextAreaResize]] = field(doc='Resize: none|vertical|horizontal|both')
+    color_scheme: Var[LiteralAccentColor] = field(doc="Override accent color")
+    radius: Var[LiteralRadius] = field(doc="Override theme radius")
 
-    resize: Var[Responsive[LiteralTextAreaResize]] = field(
-        doc='The resize behavior of the text area: "none" | "vertical" | "horizontal" | "both"'
-    )
+    auto_complete: Var[bool] = field(doc="Enable autocomplete")
+    auto_focus: Var[bool] = field(doc="Autofocus on mount")
+    default_value: Var[str] = field(doc="Initial value")
+    dirname: Var[str] = field(doc="dirname")
+    disabled: Var[bool] = field(doc="Disable")
+    form: Var[str] = field(doc="Form id")
+    max_length: Var[int] = field(doc="Max chars")
+    min_length: Var[int] = field(doc="Min chars")
+    name: Var[str] = field(doc="Form name")
+    placeholder: Var[str] = field(doc="Placeholder")
+    read_only: Var[bool] = field(doc="Read-only")
+    required: Var[bool] = field(doc="Required")
+    rows: Var[str] = field(doc="Number of visible rows")
+    value: Var[str] = field(doc="Controlled value")
+    wrap: Var[str] = field(doc="Wrap mode")
 
-    color_scheme: Var[LiteralAccentColor] = field(doc="The color of the text area")
-
-    radius: Var[LiteralRadius] = field(
-        doc='The radius of the text area: "none" | "small" | "medium" | "large" | "full"'
-    )
-
-    auto_complete: Var[bool] = field(
-        doc="Whether the form control should have autocomplete enabled"
-    )
-
-    auto_focus: Var[bool] = field(
-        doc="Automatically focuses the textarea when the page loads"
-    )
-
-    default_value: Var[str] = field(
-        doc="The default value of the textarea when initially rendered"
-    )
-
-    dirname: Var[str] = field(
-        doc="Name part of the textarea to submit in 'dir' and 'name' pair when form is submitted"
-    )
-
-    disabled: Var[bool] = field(doc="Disables the textarea")
-
-    form: Var[str] = field(doc="Associates the textarea with a form (by id)")
-
-    max_length: Var[int] = field(
-        doc="Maximum number of characters allowed in the textarea"
-    )
-
-    min_length: Var[int] = field(
-        doc="Minimum number of characters required in the textarea"
-    )
-
-    name: Var[str] = field(doc="Name of the textarea, used when submitting the form")
-
-    placeholder: Var[str] = field(doc="Placeholder text in the textarea")
-
-    read_only: Var[bool] = field(doc="Indicates whether the textarea is read-only")
-
-    required: Var[bool] = field(doc="Indicates that the textarea is required")
-
-    rows: Var[str] = field(doc="Visible number of lines in the text control")
-
-    value: Var[str] = field(
-        doc="The controlled value of the textarea, read only unless used with on_change"
-    )
-
-    wrap: Var[str] = field(
-        doc="How the text in the textarea is to be wrapped when submitting the form"
-    )
+    _rename_props: ClassVar[dict[str, str]] = {"colorScheme": "data-accent-color"}
 
     @classmethod
-    def create(cls, *children, **props) -> Component:
-        """Create an Input component.
+    def create(cls, *children: Any, **props: Any) -> Component:
+        """Create a textarea.
 
         Args:
-            *children: The children of the component.
-            **props: The properties of the component.
+            *children: Default text content.
+            **props: Standard textarea props plus variant/size/resize.
 
         Returns:
-            The component.
+            The textarea component (debounced if controlled).
         """
+        variant = props.pop("variant", None)
+        size = props.pop("size", None)
+        resize = props.pop("resize", None)
+        existing = props.pop("class_name", "")
+        selections: dict[str, str] = {}
+        if isinstance(variant, str):
+            selections["variant"] = variant
+        elif variant is not None:
+            props["variant"] = variant
+        if isinstance(size, str):
+            selections["size"] = size
+        elif size is not None:
+            props["size"] = size
+        parts = [text_area_classes(**selections)]
+        if isinstance(resize, str):
+            parts.append(_RESIZE[resize])
+        elif resize is not None:
+            props["resize"] = resize
+        props["class_name"] = cn(" ".join(parts), existing)
+
         if props.get("value") is not None and props.get("on_change") is not None:
-            # create a debounced input if the user requests full control to avoid typing jank
             return DebounceInput.create(super().create(*children, **props))
         return super().create(*children, **props)
-
-    def add_style(self):
-        """Add the style to the component.
-
-        Returns:
-            The style of the component.
-        """
-        added_style: dict[str, dict] = {}
-        added_style.setdefault("& textarea", {})
-        if "padding" in self.style:
-            added_style["& textarea"]["padding"] = self.style.pop("padding")
-        return added_style
 
 
 text_area = TextArea.create
