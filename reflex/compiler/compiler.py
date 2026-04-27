@@ -1159,7 +1159,6 @@ def _compile_astro_artifacts(
         base=config.frontend_path or "",
         host=config.backend_host or "0.0.0.0",
         port=config.frontend_port,
-        frontend_inspector=config.frontend_inspector,
     )
 
     # Per-route island modules generated for islands-mode pages.
