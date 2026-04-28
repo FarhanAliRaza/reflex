@@ -755,6 +755,52 @@ def test_cond_stateful_branch_component_renders_via_memoized_wrapper() -> None:
     )
 
 
+def test_cond_stateful_condition_renders_branch_logic_in_memo_body() -> None:
+    """Stateful Cond memo body must render both branches, not a children hole.
+
+    Regression: component-valued ``rx.cond`` currently returns an outer
+    Fragment, so when the stateful condition is memoized the generated memo
+    body can collapse to ``condition ? children : <empty>``. That drops the
+    false branch entirely and duplicates the true branch via the page-side
+    children payload.
+    """
+    from reflex.compiler.compiler import compile_memo_components
+
+    def page() -> Component:
+        comp = rx.cond(
+            SpecialFormMemoState.flag,
+            rx.text("yes"),
+            rx.text("no"),
+        )
+        assert isinstance(comp, Component)
+        return comp
+
+    ctx, _page_ctx = _compile_single_page(page)
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Expected stateful Cond to produce one memo wrapper, got: {list(ctx.memoize_wrappers)}"
+    )
+
+    memo_files, _memo_imports = compile_memo_components(
+        components=(),
+        experimental_memos=tuple(ctx.auto_memo_components.values()),
+    )
+    memo_code = "\n".join(code for _, code in memo_files)
+
+    assert '"yes"' in memo_code, (
+        "Cond memo body should render the true branch.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+    assert '"no"' in memo_code, (
+        "Cond memo body should render the false branch.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+    assert "? children" not in memo_code, (
+        "Cond memo body unexpectedly rendered a generic children hole instead "
+        "of branch-specific JSX.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+
+
 def test_match_stateful_branch_component_renders_via_memoized_wrapper() -> None:
     """Components inside Match branches must be rendered via their memo wrappers.
 
@@ -783,6 +829,57 @@ def test_match_stateful_branch_component_renders_via_memoized_wrapper() -> None:
     assert f"jsx({wrapper_tag}," in output, (
         f"Memo wrapper {wrapper_tag!r} not found in page output.\n"
         f"Output snippet: {output[:2000]}"
+    )
+
+
+def test_match_stateful_condition_uses_memoized_branch_wrapper_in_memo_body() -> None:
+    """Stateful Match memo body must call branch wrappers instead of inlining.
+
+    Regression: when both the match condition and a branch are stateful, the
+    Match wrapper itself should be memoized and the branch should be memoized
+    separately. The generated Match memo body must call the branch wrapper in
+    the selected case rather than inlining the original branch component.
+    """
+    from reflex.compiler.compiler import compile_memo_components
+
+    def page() -> Component:
+        comp = rx.match(
+            SpecialFormMemoState.value,
+            ("a", WithProp.create(label=STATE_VAR)),
+            WithProp.create(label=LiteralVar.create("default")),
+        )
+        assert isinstance(comp, Component)
+        return comp
+
+    ctx, _page_ctx = _compile_single_page(page)
+    assert len(ctx.memoize_wrappers) == 2, (
+        "Expected both Match and its stateful branch component to be memoized, "
+        f"got wrappers: {list(ctx.memoize_wrappers)}"
+    )
+
+    match_wrapper_tag = next(
+        tag for tag in ctx.memoize_wrappers if "match" in tag.lower()
+    )
+    branch_wrapper_tag = next(
+        tag for tag in ctx.memoize_wrappers if "withprop" in tag.lower()
+    )
+
+    memo_files, _memo_imports = compile_memo_components(
+        components=(),
+        experimental_memos=tuple(ctx.auto_memo_components.values()),
+    )
+    match_memo_code = next(
+        code for path, code in memo_files if path.endswith(f"/{match_wrapper_tag}.jsx")
+    )
+
+    assert f"jsx({branch_wrapper_tag}," in match_memo_code, (
+        f"Expected Match memo body to reference branch memo wrapper {branch_wrapper_tag!r}.\n"
+        f"Memo code snippet: {match_memo_code[:2000]}"
+    )
+    assert 'jsx(WithProp,{label:"value"},);' not in match_memo_code, (
+        "Match memo body unexpectedly inlined the stateful branch component "
+        "instead of using its memo wrapper.\n"
+        f"Memo code snippet: {match_memo_code[:2000]}"
     )
 
 

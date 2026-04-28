@@ -242,12 +242,12 @@ def get_memoization_strategy(component: Component) -> MemoizationStrategy:
     Returns:
         The strategy to use when generating a memo wrapper.
     """
+    from reflex_components_core.core.cond import Cond
     from reflex_components_core.core.match import Match
 
-    # Match compiles branch returns into switch/case-like code from explicit
-    # children, so it cannot use a single passthrough {children} hole in memo
-    # compilation.
-    if isinstance(component, Match):
+    # Cond and Match compile branch returns from explicit ordered children, so
+    # they cannot use a single passthrough {children} hole in memo compilation.
+    if isinstance(component, (Cond, Match)):
         return MemoizationStrategy.SNAPSHOT
 
     if (

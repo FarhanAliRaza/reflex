@@ -111,7 +111,7 @@ def _should_memoize(component: Component) -> bool:
     if (
         strategy is MemoizationStrategy.SNAPSHOT
         and not is_snapshot_boundary(component)
-        and not isinstance(component, Match)
+        and not isinstance(component, (Cond, Match))
     ):
         return True
 
@@ -131,12 +131,13 @@ class MemoizeStatefulPlugin(Plugin):
       ``Foreach`` wrappers): wrapped in ``enter_component``
       and returned with empty structural children. The walker skips descent, so
       hooks attached to the captured body are compiled into the memo body only.
-    - Passthrough wrappers (including ``Cond``) are wrapped in
+    - Passthrough wrappers are wrapped in
       ``leave_component`` after descendants have already compiled, so any inner
       memo wrappers flow into this wrapper's children.
-    - ``Match`` is classified as snapshot for memo rendering semantics, but is
-      handled specially to recurse during the page walk and wrap in
-      ``leave_component`` so case branches can still be memoized independently.
+    - ``Cond`` and ``Match`` are classified as snapshot for memo rendering
+      semantics, but are handled specially to recurse during the page walk and
+      wrap in ``leave_component`` so branch components can still be memoized
+      independently.
 
     Descendants of a snapshot boundary are never independently memoized; the
     boundary owns the wrapping decision for its whole subtree. This is tracked
@@ -188,11 +189,13 @@ class MemoizeStatefulPlugin(Plugin):
         strategy = get_memoization_strategy(comp)
         if strategy is not MemoizationStrategy.SNAPSHOT:
             return None
+        from reflex_components_core.core.cond import Cond
         from reflex_components_core.core.match import Match
 
-        if isinstance(comp, Match):
-            # Match needs snapshot memo body rendering but still must recurse so
-            # stateful case components can be memoized independently.
+        if isinstance(comp, (Cond, Match)):
+            # Cond and Match need snapshot memo body rendering but still must
+            # recurse so stateful branch components can be memoized
+            # independently.
             return None
         snapshot_boundary = is_snapshot_boundary(comp)
 
@@ -245,11 +248,21 @@ class MemoizeStatefulPlugin(Plugin):
         if stack:
             return None
 
+        if len(children) != len(comp.children) or any(
+            compiled_child is not current_child
+            for compiled_child, current_child in zip(
+                children, comp.children, strict=True
+            )
+        ):
+            comp = page_context.own(comp)
+            comp.children = list(children)
+
         strategy = get_memoization_strategy(comp)
         if strategy is MemoizationStrategy.SNAPSHOT:
+            from reflex_components_core.core.cond import Cond
             from reflex_components_core.core.match import Match
 
-            if not isinstance(comp, Match):
+            if not isinstance(comp, (Cond, Match)):
                 return None
 
             if not _should_memoize(comp):
