@@ -363,6 +363,68 @@ def test_compile_memo_components_includes_experimental_functions_and_components(
     assert "export const MyCard = memo(" in code
 
 
+def test_compile_memo_components_extends_imports_without_remerging(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Memo import aggregation should not repeatedly reprocess prior imports."""
+
+    def noop() -> None:
+        pass
+
+    memos = tuple(
+        ExperimentalMemoComponentDefinition(
+            fn=noop,
+            python_name=f"memo_{idx}",
+            params=(),
+            export_name=f"Memo{idx}",
+            component=rx.fragment(),
+            passthrough_hole_child=None,
+        )
+        for idx in range(5)
+    )
+
+    def fake_compile_experimental_component_memo(
+        definition: ExperimentalMemoComponentDefinition,
+    ) -> tuple[dict[str, str], dict[str, list[ImportVar]]]:
+        return {"name": definition.export_name}, {}
+
+    def fake_compile_single_memo_component(
+        component_render: dict[str, str],
+        component_imports: dict[str, list[ImportVar]],
+    ) -> tuple[str, dict[str, list[ImportVar]]]:
+        return (
+            f"export const {component_render['name']} = null",
+            {"shared-lib": [ImportVar(tag=component_render["name"])]},
+        )
+
+    real_merge_imports = compiler.utils.merge_imports
+
+    def reject_growing_merge(*imports):
+        if len(imports) == 2 and imports[0]:
+            msg = "aggregate imports should be extended, not remerged"
+            raise AssertionError(msg)
+        return real_merge_imports(*imports)
+
+    monkeypatch.setattr(
+        compiler.utils,
+        "compile_experimental_component_memo",
+        fake_compile_experimental_component_memo,
+    )
+    monkeypatch.setattr(
+        compiler,
+        "_compile_single_memo_component",
+        fake_compile_single_memo_component,
+    )
+    monkeypatch.setattr(compiler.utils, "merge_imports", reject_growing_merge)
+
+    files, aggregate_imports = compiler.compile_memo_components((), memos)
+
+    assert len(files) == len(memos) + 1
+    assert [import_var.tag for import_var in aggregate_imports["shared-lib"]] == [
+        f"Memo{idx}" for idx in range(5)
+    ]
+
+
 def test_experimental_component_memo_get_imports():
     """Experimental component memos should resolve imports during compilation."""
 

@@ -67,6 +67,36 @@ def _apply_common_imports(
     )
 
 
+def _extend_imports_in_place(
+    target: dict[str, list[ImportVar]],
+    import_dict: dict[str, Any] | tuple[tuple[str, Any], ...],
+) -> None:
+    """Append imports to an existing parsed import dict.
+
+    Args:
+        target: The import dictionary to update.
+        import_dict: The imports to append.
+    """
+    for lib, fields in (
+        import_dict if isinstance(import_dict, tuple) else import_dict.items()
+    ):
+        lib = (
+            "$" + lib
+            if lib.startswith(("/utils/", "/components/", "/styles/", "/public/"))
+            else lib
+        )
+        target_fields = target.setdefault(lib, [])
+        if isinstance(fields, (list, tuple, set)):
+            target_fields.extend(
+                ImportVar(field) if isinstance(field, str) else field
+                for field in fields
+            )
+        else:
+            target_fields.append(
+                ImportVar(fields) if isinstance(fields, str) else fields
+            )
+
+
 def _compile_document_root(root: Component) -> str:
     """Compile the document root.
 
@@ -410,7 +440,7 @@ def _compile_memo_components(
         specifier = _memo_component_index_specifier(name)
         per_memo_files.append((path, code))
         index_entries.append((name, specifier))
-        aggregate_imports = utils.merge_imports(aggregate_imports, file_imports)
+        _extend_imports_in_place(aggregate_imports, file_imports)
 
     for memo in experimental_memos:
         if isinstance(memo, ExperimentalMemoComponentDefinition):
@@ -421,7 +451,7 @@ def _compile_memo_components(
             )
             path = _memo_component_file_path(base_dir, name)
             per_memo_files.append((path, code))
-            aggregate_imports = utils.merge_imports(aggregate_imports, file_imports)
+            _extend_imports_in_place(aggregate_imports, file_imports)
         elif isinstance(memo, ExperimentalMemoFunctionDefinition):
             memo_render, memo_imports = utils.compile_experimental_function_memo(memo)
             name = memo_render["name"]
@@ -430,7 +460,7 @@ def _compile_memo_components(
             )
             path = _memo_component_file_path(base_dir, name)
             per_memo_files.append((path, code))
-            aggregate_imports = utils.merge_imports(aggregate_imports, file_imports)
+            _extend_imports_in_place(aggregate_imports, file_imports)
 
     index_path = utils.get_components_path()
     index_code = templates.memo_index_template(index_entries)
