@@ -7,7 +7,7 @@
 import launch from "launch-editor";
 
 const reflexEditorMiddleware = (req, res, next) => {
-  if (!req.url || !req.url.startsWith("/__open-in-editor")) {
+  if (!req.url || !req.url.includes("/__open-in-editor")) {
     return next();
   }
   let url;

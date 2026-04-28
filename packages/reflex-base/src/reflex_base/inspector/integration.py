@@ -25,8 +25,11 @@ from reflex_base.environment import environment
 from reflex_base.utils.exceptions import ConfigError
 
 from . import (
+    EDITOR_URL,
+    INSPECTOR_CSS_URL,
     INSPECTOR_JS_URL,
     SHORTCUT_CONFIG_KEY,
+    SOURCE_MAP_URL,
     WINDOW_CONFIG_KEY,
     capture,
     emit,
@@ -35,12 +38,12 @@ from . import (
 
 if TYPE_CHECKING:
     from reflex_base.components.component import Component
-    from reflex_base.config import BaseConfig
+    from reflex_base.config import Config
 
 LAUNCH_EDITOR_VERSION = "^2.6.1"
 
 
-def is_active(config: BaseConfig) -> bool:
+def is_active(config: Config) -> bool:
     """Whether the inspector should emit wiring for the current build.
 
     The config alone is not enough: ``REFLEX_ENV_MODE`` may flip to ``prod``
@@ -58,7 +61,7 @@ def is_active(config: BaseConfig) -> bool:
     return environment.REFLEX_ENV_MODE.get() != constants.Env.PROD
 
 
-def validate(config: BaseConfig) -> None:
+def validate(config: Config) -> None:
     """Raise if config and runtime env disagree.
 
     Called from ``Config._post_init`` (best effort; env may not be set yet)
@@ -82,7 +85,7 @@ def validate(config: BaseConfig) -> None:
         raise ConfigError(msg)
 
 
-def prepare_for_compile(config: BaseConfig) -> None:
+def prepare_for_compile(config: Config) -> None:
     """Validate and sync runtime state at the start of a compile pass.
 
     This is the single integration point the host's compile path should
@@ -100,7 +103,7 @@ def prepare_for_compile(config: BaseConfig) -> None:
         capture.reset()
 
 
-def package_json_dev_dependencies(config: BaseConfig) -> dict[str, str]:
+def package_json_dev_dependencies(config: Config) -> dict[str, str]:
     """Extra dev dependencies to merge into ``package.json``.
 
     Args:
@@ -114,7 +117,7 @@ def package_json_dev_dependencies(config: BaseConfig) -> dict[str, str]:
     return {"launch-editor": LAUNCH_EDITOR_VERSION}
 
 
-def head_components(config: BaseConfig) -> list[Component]:
+def head_components(config: Config) -> list[Component]:
     """The ``<script>`` tags to inject into the document head.
 
     React Router 7 renders HTML through React rather than serving a static
@@ -136,14 +139,21 @@ def head_components(config: BaseConfig) -> list[Component]:
     from .shortcut import parse_shortcut
 
     shortcut = parse_shortcut(config.frontend_inspector_shortcut)
-    payload = json.dumps({SHORTCUT_CONFIG_KEY: shortcut.to_json_payload()})
+    payload = json.dumps({
+        SHORTCUT_CONFIG_KEY: shortcut.to_json_payload(),
+        "sourceMapUrl": config.prepend_frontend_path(SOURCE_MAP_URL),
+        "cssUrl": config.prepend_frontend_path(INSPECTOR_CSS_URL),
+        "editorUrl": config.prepend_frontend_path(EDITOR_URL),
+    })
     return [
         Script.create(f"window.{WINDOW_CONFIG_KEY} = {payload};"),
-        Script.create(type="module", src=INSPECTOR_JS_URL),
+        Script.create(
+            type="module", src=config.prepend_frontend_path(INSPECTOR_JS_URL)
+        ),
     ]
 
 
-def plugin_text(config: BaseConfig) -> str:
+def plugin_text(config: Config) -> str:
     """Render the Vite plugin file content.
 
     Args:

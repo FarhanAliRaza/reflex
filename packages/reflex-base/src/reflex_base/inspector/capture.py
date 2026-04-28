@@ -23,6 +23,7 @@ class SourceInfo:
 
 
 _REGISTRY: dict[int, SourceInfo] = {}
+_BY_INFO: dict[SourceInfo, int] = {}
 _COUNTER = itertools.count(1)
 _FRAMEWORK_ROOTS: tuple[Path, ...] = ()
 _RESOLVED_PATH_CACHE: dict[str, str] = {}
@@ -89,13 +90,17 @@ def capture(component_name: str) -> int | None:
     try:
         if user_frame is None:
             return None
-        cid = next(_COUNTER)
-        _REGISTRY[cid] = SourceInfo(
+        info = SourceInfo(
             file=_resolve_filename(user_frame.f_code.co_filename),
             line=user_frame.f_lineno,
             column=1,
             component=component_name,
         )
+        if (existing := _BY_INFO.get(info)) is not None:
+            return existing
+        cid = next(_COUNTER)
+        _REGISTRY[cid] = info
+        _BY_INFO[info] = cid
         return cid
     finally:
         # Break the local frame reference so the captured frame's locals
@@ -120,6 +125,7 @@ def reset() -> None:
     """
     global _COUNTER, _FRAMEWORK_ROOTS
     _REGISTRY.clear()
+    _BY_INFO.clear()
     _COUNTER = itertools.count(1)
     _FRAMEWORK_ROOTS = ()
     _is_framework_frame.cache_clear()

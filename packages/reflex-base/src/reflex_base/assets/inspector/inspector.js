@@ -10,14 +10,15 @@
  */
 
 const RX_DATA_ATTR = "data-rx";
-const SOURCE_MAP_URL = "/__reflex/source-map.json";
-const EDITOR_URL = "/__open-in-editor";
 const SESSION_KEY = "__reflex_inspector_persistent";
 const OUTLINE_ID = "__reflex_inspector_outline";
 const LABEL_ID = "__reflex_inspector_label";
 const TOGGLE_ID = "__reflex_inspector_toggle";
 
 const config = window.__REFLEX_INSPECTOR_CONFIG__ || {};
+const SOURCE_MAP_URL = config.sourceMapUrl || "/__reflex/source-map.json";
+const CSS_URL = config.cssUrl || "/__reflex/inspector.css";
+const EDITOR_URL = config.editorUrl || "/__open-in-editor";
 const shortcut = config.shortcut || {
   key: "x",
   alt: true,
@@ -34,6 +35,7 @@ let lastTarget = null;
 let outlineEl = null;
 let labelEl = null;
 let toggleEl = null;
+let focusGuardUntil = 0;
 
 const loadSourceMap = () => {
   if (sourceMap) return Promise.resolve(sourceMap);
@@ -54,7 +56,7 @@ const ensureStylesheet = () => {
   const link = document.createElement("link");
   link.id = "__reflex_inspector_css";
   link.rel = "stylesheet";
-  link.href = "/__reflex/inspector.css";
+  link.href = CSS_URL;
   document.head.appendChild(link);
 };
 
@@ -217,6 +219,7 @@ const setPersistent = async (on) => {
 
 const onMouseMove = (event) => {
   if (!isActive()) return;
+  if (Date.now() < focusGuardUntil) return;
   if (isInspectorChrome(event.target)) {
     hideOverlay();
     lastTarget = null;
@@ -245,6 +248,16 @@ const isInspectorChrome = (node) => {
 const onClick = (event) => {
   if (!isActive()) return;
   if (isInspectorChrome(event.target)) return;
+  // Require the configured modifier at click time so re-focusing the
+  // window or clicking through the page doesn't hijack normal clicks.
+  if (!event.altKey) return;
+  // Swallow the very first click after the window regains focus — the
+  // browser fires it as part of the focus transition and the user almost
+  // never means it as an inspector action.
+  if (Date.now() < focusGuardUntil) {
+    focusGuardUntil = 0;
+    return;
+  }
   const target = findInspected(event.target);
   if (!target) return;
   event.preventDefault();
@@ -287,7 +300,10 @@ const installEvents = () => {
   document.addEventListener("keyup", onKeyUp, true);
   window.addEventListener("blur", () => {
     modifierHeld = false;
-    if (!persistent) hideOverlay();
+    hideOverlay();
+  });
+  window.addEventListener("focus", () => {
+    focusGuardUntil = Date.now() + 350;
   });
 };
 

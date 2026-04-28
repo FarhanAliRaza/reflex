@@ -29,7 +29,7 @@ Three modes:
 
 - **Hover with `alt` held** — show the overlay while inspecting. The overlay disappears as soon as you release `alt`.
 - **`alt+x`** — toggle persistent mode. The overlay stays on; the small `rx-inspect` button in the bottom-right corner reflects the state.
-- **Click** — open the source file at the captured line in your editor.
+- **`alt`+click** — open the source file at the captured line in your editor. The modifier is required at click time so re-focusing the browser window doesn't hijack normal clicks.
 
 `Esc` exits persistent mode. Pressing `c` while hovering copies `path:line:column` to the clipboard.
 
