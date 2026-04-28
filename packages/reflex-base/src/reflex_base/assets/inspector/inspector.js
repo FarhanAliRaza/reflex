@@ -36,16 +36,28 @@ let outlineEl = null;
 let labelEl = null;
 let toggleEl = null;
 let focusGuardUntil = 0;
+let sourceMapRequestId = 0;
 
-const loadSourceMap = () => {
+const clearSourceMap = () => {
+  sourceMap = null;
+  sourceMapPromise = null;
+  sourceMapRequestId += 1;
+};
+
+const loadSourceMap = (fresh = false) => {
+  if (fresh) clearSourceMap();
   if (sourceMap) return Promise.resolve(sourceMap);
   if (sourceMapPromise) return sourceMapPromise;
+  const requestId = sourceMapRequestId;
   sourceMapPromise = fetch(SOURCE_MAP_URL, { cache: "no-store" })
     .then((res) => (res.ok ? res.json() : {}))
     .catch(() => ({}))
     .then((map) => {
-      sourceMap = map;
+      if (requestId === sourceMapRequestId) sourceMap = map;
       return map;
+    })
+    .finally(() => {
+      if (requestId === sourceMapRequestId) sourceMapPromise = null;
     });
   return sourceMapPromise;
 };
@@ -198,6 +210,16 @@ const matchesShortcut = (event) => {
   );
 };
 
+const hasConfiguredModifier =
+  !!shortcut.alt || !!shortcut.ctrl || !!shortcut.meta || !!shortcut.shift;
+
+const requiredModifiersHeld = (event) =>
+  hasConfiguredModifier &&
+  (!shortcut.alt || event.altKey) &&
+  (!shortcut.ctrl || event.ctrlKey) &&
+  (!shortcut.meta || event.metaKey) &&
+  (!shortcut.shift || event.shiftKey);
+
 const isActive = () => persistent || modifierHeld;
 
 const updateToggle = () => {
@@ -206,13 +228,14 @@ const updateToggle = () => {
 };
 
 const setPersistent = async (on) => {
+  const wasPersistent = persistent;
   persistent = !!on;
   try {
     sessionStorage.setItem(SESSION_KEY, persistent ? "1" : "0");
   } catch (_) {
     // sessionStorage may be disabled — ignore.
   }
-  if (persistent) await loadSourceMap();
+  if (persistent) await loadSourceMap(!wasPersistent);
   updateToggle();
   if (!isActive()) hideOverlay();
 };
@@ -245,12 +268,12 @@ const isInspectorChrome = (node) => {
   return false;
 };
 
-const onClick = (event) => {
+const onClick = async (event) => {
   if (!isActive()) return;
   if (isInspectorChrome(event.target)) return;
   // Require the configured modifier at click time so re-focusing the
   // window or clicking through the page doesn't hijack normal clicks.
-  if (!event.altKey) return;
+  if (!requiredModifiersHeld(event)) return;
   // Swallow the very first click after the window regains focus — the
   // browser fires it as part of the focus transition and the user almost
   // never means it as an inspector action.
@@ -262,7 +285,8 @@ const onClick = (event) => {
   if (!target) return;
   event.preventDefault();
   event.stopPropagation();
-  const info = sourceMap && sourceMap[target.getAttribute(RX_DATA_ATTR)];
+  const map = await loadSourceMap(true);
+  const info = map && map[target.getAttribute(RX_DATA_ATTR)];
   openInEditor(info);
 };
 
@@ -273,9 +297,9 @@ const onKeyDown = (event) => {
     setPersistent(!persistent);
     return;
   }
-  if (event.altKey && !modifierHeld) {
+  if (requiredModifiersHeld(event) && !modifierHeld) {
     modifierHeld = true;
-    loadSourceMap();
+    loadSourceMap(true);
   }
   if (event.key === "Escape" && persistent) {
     setPersistent(false);
@@ -287,7 +311,7 @@ const onKeyDown = (event) => {
 };
 
 const onKeyUp = (event) => {
-  if (!event.altKey && modifierHeld) {
+  if (!requiredModifiersHeld(event) && modifierHeld) {
     modifierHeld = false;
     if (!persistent) hideOverlay();
   }
