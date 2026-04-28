@@ -359,12 +359,6 @@ class Config(BaseConfig):
         for key, env_value in env_kwargs.items():
             setattr(self, key, env_value)
 
-        # Best-effort inspector validation; the compile path re-runs this once
-        # REFLEX_ENV_MODE has settled (export/run-with-env set it after init).
-        from reflex_base.inspector import integration as inspector_integration
-
-        inspector_integration.validate(self)
-
         # Normalize disable_plugins: convert strings and Plugin subclasses to instances.
         self._normalize_disable_plugins()
 

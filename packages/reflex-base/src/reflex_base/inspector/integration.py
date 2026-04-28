@@ -4,14 +4,16 @@ Other code should call into this module rather than the underlying pieces
 (``capture`` / ``emit`` / ``state`` / ``shortcut`` / asset directory) so the
 inspector's lifecycle has a single canonical shape:
 
-  1. ``validate`` — fail loudly if config and runtime env disagree.
-  2. ``prepare_for_compile`` — flip the runtime state flag and clear stale
+  1. ``prepare_for_compile`` — flip the runtime state flag and clear stale
      capture data at the start of each compile.
-  3. ``package_json_dev_dependencies`` / ``head_components`` /
+  2. ``package_json_dev_dependencies`` / ``head_components`` /
      ``plugin_text`` — declarative inputs to the compile-time templates.
-  4. ``asset_source_dir`` — where browser assets live on disk; the host
+  3. ``asset_source_dir`` — where browser assets live on disk; the host
      package copies them into ``.web/public``.
-  5. ``write_source_map`` — emit the lookup table after pages render.
+  4. ``write_source_map`` — emit the lookup table after pages render.
+
+``frontend_inspector="dev"`` is a no-op when ``REFLEX_ENV_MODE=prod`` so the
+same ``rxconfig.py`` can be reused across dev and prod runs.
 """
 
 from __future__ import annotations
@@ -22,7 +24,6 @@ from typing import TYPE_CHECKING
 
 from reflex_base import constants
 from reflex_base.environment import environment
-from reflex_base.utils.exceptions import ConfigError
 
 from . import (
     EDITOR_URL,
@@ -61,32 +62,8 @@ def is_active(config: Config) -> bool:
     return environment.REFLEX_ENV_MODE.get() != constants.Env.PROD
 
 
-def validate(config: Config) -> None:
-    """Raise if config and runtime env disagree.
-
-    Called from ``Config._post_init`` (best effort; env may not be set yet)
-    and from the compile path (env is settled). The latter is the actual
-    safety net.
-
-    Args:
-        config: The current Reflex config.
-
-    Raises:
-        ConfigError: If ``frontend_inspector="dev"`` and ``REFLEX_ENV_MODE=prod``.
-    """
-    if (
-        config.frontend_inspector == "dev"
-        and environment.REFLEX_ENV_MODE.get() == constants.Env.PROD
-    ):
-        msg = (
-            "frontend_inspector='dev' cannot be used with REFLEX_ENV_MODE=prod. "
-            "Set frontend_inspector='off' for production builds."
-        )
-        raise ConfigError(msg)
-
-
 def prepare_for_compile(config: Config) -> None:
-    """Validate and sync runtime state at the start of a compile pass.
+    """Sync runtime state at the start of a compile pass.
 
     This is the single integration point the host's compile path should
     call. After this returns, ``state.is_enabled()`` reflects the current
@@ -96,7 +73,6 @@ def prepare_for_compile(config: Config) -> None:
     Args:
         config: The current Reflex config.
     """
-    validate(config)
     active = is_active(config)
     state.set_enabled(active)
     if active:
