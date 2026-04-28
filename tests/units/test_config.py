@@ -557,3 +557,101 @@ class TestDisablePlugins:
         """Test that builtin plugins are added when not disabled."""
         config = rx.Config(app_name="test")
         assert any(isinstance(p, SitemapPlugin) for p in config.plugins)
+
+
+class TestFrontendInspector:
+    """Tests for the dev-only frontend inspector config flags."""
+
+    def test_default_is_off(self):
+        """Default is "off" with the documented shortcut and empty editor."""
+        config = rx.Config(app_name="test")
+        assert config.frontend_inspector == "off"
+        assert config.frontend_inspector_shortcut == "alt+x"
+        assert config.frontend_inspector_editor == ""
+
+    def test_dev_in_prod_raises(self, monkeypatch: pytest.MonkeyPatch):
+        """`frontend_inspector="dev"` fails when REFLEX_ENV_MODE=prod."""
+        from reflex_base.utils.exceptions import ConfigError
+
+        monkeypatch.setenv("REFLEX_ENV_MODE", Env.PROD.value)
+        with pytest.raises(ConfigError):
+            rx.Config(app_name="test", frontend_inspector="dev")
+
+    def test_config_init_does_not_mutate_global_state(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Config construction is declarative; runtime state is untouched.
+
+        Runtime state is set later by
+        ``inspector.integration.prepare_for_compile`` (called from the
+        compile path). This protects tests and parallel callers from
+        order-dependent leakage between ``Config()`` instances.
+        """
+        from reflex_base.inspector import state as inspector_state
+
+        monkeypatch.setenv("REFLEX_ENV_MODE", Env.DEV.value)
+        inspector_state.set_enabled(False)
+        rx.Config(app_name="test", frontend_inspector="dev")
+        assert inspector_state.is_enabled() is False
+
+    def test_validate_raises_when_env_flips_to_prod(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Validation re-runs after env is set, catching late prod flips.
+
+        Regression: ``reflex export --env prod`` calls ``get_config()`` (env
+        still ``dev``) before setting ``REFLEX_ENV_MODE=prod``. The compile
+        path calls ``integration.validate`` so the prod build cannot ship
+        the inspector even when the init-time check missed it.
+        """
+        from reflex_base.inspector import integration as inspector_integration
+        from reflex_base.utils.exceptions import ConfigError
+
+        monkeypatch.setenv("REFLEX_ENV_MODE", Env.DEV.value)
+        config = rx.Config(app_name="test", frontend_inspector="dev")
+
+        monkeypatch.setenv("REFLEX_ENV_MODE", Env.PROD.value)
+        with pytest.raises(ConfigError):
+            inspector_integration.validate(config)
+
+    def test_is_active_gates_on_env_mode(self, monkeypatch: pytest.MonkeyPatch):
+        """``integration.is_active`` is the runtime gate at every emission site."""
+        from reflex_base.inspector import integration as inspector_integration
+
+        monkeypatch.setenv("REFLEX_ENV_MODE", Env.DEV.value)
+        config = rx.Config(app_name="test", frontend_inspector="dev")
+        assert inspector_integration.is_active(config) is True
+
+        monkeypatch.setenv("REFLEX_ENV_MODE", Env.PROD.value)
+        assert inspector_integration.is_active(config) is False
+
+    def test_is_active_returns_false_when_off(self):
+        """``integration.is_active`` is False whenever the mode is "off"."""
+        from reflex_base.inspector import integration as inspector_integration
+
+        config = rx.Config(app_name="test", frontend_inspector="off")
+        assert inspector_integration.is_active(config) is False
+
+    def test_prepare_for_compile_syncs_state_and_resets(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``prepare_for_compile`` is the single entry point for compile-time setup."""
+        from reflex_base.inspector import capture as inspector_capture
+        from reflex_base.inspector import integration as inspector_integration
+        from reflex_base.inspector import state as inspector_state
+
+        monkeypatch.setenv("REFLEX_ENV_MODE", Env.DEV.value)
+        inspector_capture._REGISTRY[999] = inspector_capture.SourceInfo(
+            file="/leftover.py", line=1, column=1, component="Stale"
+        )
+
+        inspector_integration.prepare_for_compile(
+            rx.Config(app_name="test", frontend_inspector="dev")
+        )
+        assert inspector_state.is_enabled() is True
+        assert inspector_capture.snapshot() == {}
+
+        inspector_integration.prepare_for_compile(
+            rx.Config(app_name="test", frontend_inspector="off")
+        )
+        assert inspector_state.is_enabled() is False

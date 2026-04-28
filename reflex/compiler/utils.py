@@ -522,11 +522,15 @@ def create_document_root(
     # Add theme preload script as the very first component to prevent FOUC
     theme_preload_components = [preload_color_theme()]
 
+    from reflex_base.config import get_config
+    from reflex_base.inspector import integration as inspector_integration
+
     head_components = [
         *theme_preload_components,
         *(head_components or []),
         *maybe_head_components,
         *always_head_components,
+        *inspector_integration.head_components(get_config()),
     ]
     html_component = Html.create(
         Head.create(*head_components),

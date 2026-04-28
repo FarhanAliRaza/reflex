@@ -1,0 +1,126 @@
+"""Walk the Python call stack and record where a component was created."""
+
+from __future__ import annotations
+
+import dataclasses
+import itertools
+import sys
+from pathlib import Path
+
+from reflex_base.utils import frames
+
+from . import state
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class SourceInfo:
+    """A user-code frame that constructed a component."""
+
+    file: str
+    line: int
+    column: int
+    component: str
+
+
+_REGISTRY: dict[int, SourceInfo] = {}
+_COUNTER = itertools.count(1)
+_FRAMEWORK_ROOTS: tuple[Path, ...] = ()
+_RESOLVED_PATH_CACHE: dict[str, str] = {}
+
+
+def _get_framework_roots() -> tuple[Path, ...]:
+    return _FRAMEWORK_ROOTS
+
+
+_is_framework_frame = frames.make_framework_frame_predicate(_get_framework_roots)
+
+
+def refresh_framework_roots() -> tuple[Path, ...]:
+    """Re-scan ``sys.modules`` and rebuild the cached framework roots.
+
+    Useful when a framework sub-package is imported lazily after the
+    inspector has already initialised. Inexpensive: only the in-process
+    module table is consulted (no distribution metadata reads).
+
+    Returns:
+        The freshly discovered framework roots.
+    """
+    global _FRAMEWORK_ROOTS
+    _FRAMEWORK_ROOTS = frames.discover_framework_roots_fast()
+    _is_framework_frame.cache_clear()
+    return _FRAMEWORK_ROOTS
+
+
+def _ensure_framework_roots() -> None:
+    global _FRAMEWORK_ROOTS
+    if not _FRAMEWORK_ROOTS:
+        _FRAMEWORK_ROOTS = frames.discover_framework_roots()
+
+
+def _resolve_filename(filename: str) -> str:
+    cached = _RESOLVED_PATH_CACHE.get(filename)
+    if cached is not None:
+        return cached
+    try:
+        resolved = str(Path(filename).resolve())
+    except OSError:
+        resolved = filename
+    _RESOLVED_PATH_CACHE[filename] = resolved
+    return resolved
+
+
+def capture(component_name: str) -> int | None:
+    """Walk the call stack and return a fresh inspector id for the user frame.
+
+    Args:
+        component_name: ``cls.__name__`` of the component being constructed.
+
+    Returns:
+        A new integer id when the inspector is enabled and a non-framework
+        frame is found; ``None`` otherwise (e.g. inspector disabled, only
+        framework code on the stack).
+    """
+    if not state.is_enabled():
+        return None
+    _ensure_framework_roots()
+    user_frame = frames.walk_to_first_non_framework_frame(
+        sys._getframe(1), _is_framework_frame
+    )
+    try:
+        if user_frame is None:
+            return None
+        cid = next(_COUNTER)
+        _REGISTRY[cid] = SourceInfo(
+            file=_resolve_filename(user_frame.f_code.co_filename),
+            line=user_frame.f_lineno,
+            column=1,
+            component=component_name,
+        )
+        return cid
+    finally:
+        # Break the local frame reference so the captured frame's locals
+        # (which can transitively reference this function) become reclaimable.
+        del user_frame
+
+
+def snapshot() -> dict[int, SourceInfo]:
+    """Return a copy of the current registry.
+
+    Returns:
+        A shallow copy of the inspector id → ``SourceInfo`` mapping.
+    """
+    return dict(_REGISTRY)
+
+
+def reset() -> None:
+    """Clear the registry. Intended for tests and per-compile resets.
+
+    Framework roots are also cleared so the next ``capture`` rediscovers
+    them — covers framework subpackages imported between compile passes.
+    """
+    global _COUNTER, _FRAMEWORK_ROOTS
+    _REGISTRY.clear()
+    _COUNTER = itertools.count(1)
+    _FRAMEWORK_ROOTS = ()
+    _is_framework_frame.cache_clear()
+    _RESOLVED_PATH_CACHE.clear()

@@ -143,6 +143,8 @@ class DBConfig:
 # These vars are not logged because they may contain sensitive information.
 _sensitive_env_vars = {"DB_URL", "ASYNC_DB_URL", "REDIS_URL"}
 
+FrontendInspectorMode = Literal["off", "dev"]
+
 
 @dataclasses.dataclass(kw_only=True)
 class BaseConfig:
@@ -181,6 +183,9 @@ class BaseConfig:
         plugins: List of plugins to use in the app.
         disable_plugins: List of plugin types to disable in the app.
         transport: The transport method for client-server communication.
+        frontend_inspector: Enable the dev-only frontend inspector. "off" disables it (default); "dev" enables it in dev mode and fails the prod build.
+        frontend_inspector_shortcut: Keyboard shortcut for toggling the inspector (default "alt+x"). Modifier aliases like "cmd"/"option" are accepted.
+        frontend_inspector_editor: Editor invocation override forwarded to launch-editor. Empty string falls back to $REFLEX_EDITOR / $VISUAL / $EDITOR / launch-editor's auto-detection.
     """
 
     app_name: str
@@ -254,6 +259,12 @@ class BaseConfig:
     disable_plugins: list[type[Plugin]] = dataclasses.field(default_factory=list)
 
     transport: Literal["websocket", "polling"] = "websocket"
+
+    frontend_inspector: FrontendInspectorMode = "off"
+
+    frontend_inspector_shortcut: str = "alt+x"
+
+    frontend_inspector_editor: str = ""
 
     # Whether to skip plugin checks.
     _skip_plugins_checks: bool = dataclasses.field(default=False, repr=False)
@@ -347,6 +358,12 @@ class Config(BaseConfig):
         env_kwargs = self.update_from_env()
         for key, env_value in env_kwargs.items():
             setattr(self, key, env_value)
+
+        # Best-effort inspector validation; the compile path re-runs this once
+        # REFLEX_ENV_MODE has settled (export/run-with-env set it after init).
+        from reflex_base.inspector import integration as inspector_integration
+
+        inspector_integration.validate(self)
 
         # Normalize disable_plugins: convert strings and Plugin subclasses to instances.
         self._normalize_disable_plugins()

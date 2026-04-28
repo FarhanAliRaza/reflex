@@ -8,6 +8,7 @@ config = rx.Config(
     frontend_packages=[
         "tailwindcss-animated",
     ],
+    frontend_inspector="dev",
     telemetry_enabled=False,
     plugins=[
         rx.plugins.TailwindV4Plugin(),

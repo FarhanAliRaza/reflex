@@ -83,6 +83,7 @@ from reflex.compiler.compiler import (
     readable_name_from_component,
 )
 from reflex.experimental.memo import EXPERIMENTAL_MEMOS
+from reflex.istate.data import RouterData
 from reflex.istate.manager import StateManager, StateModificationContext
 from reflex.istate.manager.token import BaseStateToken
 from reflex.page import DECORATED_PAGES
@@ -93,7 +94,6 @@ from reflex.route import (
 )
 from reflex.state import (
     BaseState,
-    RouterData,
     State,
     StateUpdate,
     all_base_state_classes,
@@ -1295,6 +1295,10 @@ class App(MiddlewareMixin, LifespanMixin):
             + plugin_count,
         )
 
+        from reflex_base.inspector import integration as inspector_integration
+
+        inspector_integration.prepare_for_compile(config)
+
         with console.timing("Evaluate Pages (Frontend)"):
             performance_metrics: list[tuple[str, float]] = []
             for route in self._unevaluated_pages:
@@ -1340,11 +1344,15 @@ class App(MiddlewareMixin, LifespanMixin):
 
         progress.advance(task)
 
-        # Reinitialize vite config in case runtime options have changed.
+        # frontend_inspector may toggle between runs; re-render dependent files.
+        # package.json must hit disk now so install_frontend_packages picks up
+        # any new dev deps (e.g. launch-editor) on this same compile pass.
         compile_results.append((
             constants.ReactRouter.VITE_CONFIG_FILE,
             frontend_skeleton._compile_vite_config(config),
         ))
+        frontend_skeleton.initialize_package_json()
+        frontend_skeleton.initialize_inspector_assets()
         progress.advance(task)
 
         # Track imports found.
@@ -1601,6 +1609,10 @@ class App(MiddlewareMixin, LifespanMixin):
         with console.timing("Write to Disk"):
             for output_path, code in output_mapping.items():
                 compiler_utils.write_file(output_path, code)
+
+        inspector_integration.write_source_map(
+            prerequisites.get_web_dir() / constants.Dirs.PUBLIC,
+        )
 
     def _write_stateful_pages_marker(self):
         """Write list of routes that create dynamic states for the backend to use later."""
