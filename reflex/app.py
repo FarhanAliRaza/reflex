@@ -1602,6 +1602,15 @@ class App(MiddlewareMixin, LifespanMixin):
             for output_path, code in output_mapping.items():
                 compiler_utils.write_file(output_path, code)
 
+        # Emit the frontend inspector source map after pages are rendered so
+        # ``Component._render`` has populated the registry. No-op when the
+        # inspector is disabled.
+        from reflex_base.inspector import emit as inspector_emit
+
+        inspector_emit.write_source_map(
+            prerequisites.get_web_dir() / constants.Dirs.PUBLIC,
+        )
+
     def _write_stateful_pages_marker(self):
         """Write list of routes that create dynamic states for the backend to use later."""
         if self._state is not None:

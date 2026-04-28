@@ -2,16 +2,29 @@
 
 import json
 import random
+import shutil
 from pathlib import Path
 
+import reflex_base
 from reflex_base import constants
+from reflex_base.compiler import inspector_plugins
 from reflex_base.config import Config, get_config
 from reflex_base.environment import environment
+from reflex_base.inspector import shortcut as inspector_shortcut
 
 from reflex.compiler import templates
 from reflex.utils import console, path_ops
 from reflex.utils.prerequisites import get_project_hash, get_web_dir
 from reflex.utils.registry import get_npm_registry
+
+INSPECTOR_PUBLIC_DIR = "__reflex"
+INSPECTOR_PLUGIN_FILE = "reflex-inspector-plugin.js"
+INSPECTOR_ASSET_FILES = (
+    "inspector.js",
+    "inspector.css",
+    "dev_server_middleware.js",
+)
+LAUNCH_EDITOR_VERSION = "^2.6.1"
 
 
 def initialize_gitignore(
@@ -176,6 +189,9 @@ def initialize_web_directory():
     console.debug("Initializing the vite.config.js file.")
     initialize_vite_config()
 
+    console.debug("Initializing the frontend inspector assets.")
+    initialize_inspector_assets()
+
     console.debug("Initializing the reflex.json file.")
     # Initialize the reflex json file.
     init_reflex_json(project_hash=project_hash)
@@ -221,13 +237,16 @@ def _update_react_router_config(config: Config, prerender_routes: bool = False):
 
 
 def _compile_package_json():
+    dev_dependencies = dict(constants.PackageJson.DEV_DEPENDENCIES)
+    if get_config().frontend_inspector != "off":
+        dev_dependencies["launch-editor"] = LAUNCH_EDITOR_VERSION
     return templates.package_json_template(
         scripts={
             "dev": constants.PackageJson.Commands.DEV,
             "export": constants.PackageJson.Commands.EXPORT,
         },
         dependencies=constants.PackageJson.DEPENDENCIES,
-        dev_dependencies=constants.PackageJson.DEV_DEPENDENCIES,
+        dev_dependencies=dev_dependencies,
         overrides=constants.PackageJson.OVERRIDES,
     )
 
@@ -247,6 +266,7 @@ def _compile_vite_config(config: Config):
         experimental_hmr=environment.VITE_EXPERIMENTAL_HMR.get(),
         sourcemap=environment.VITE_SOURCEMAP.get(),
         allowed_hosts=config.vite_allowed_hosts,
+        inspector=config.frontend_inspector,
     )
 
 
@@ -254,6 +274,51 @@ def initialize_vite_config():
     """Render and write in .web the vite.config.js file using Reflex config."""
     vite_config_file_path = get_web_dir() / constants.ReactRouter.VITE_CONFIG_FILE
     vite_config_file_path.write_text(_compile_vite_config(get_config()))
+
+
+def _inspector_asset_source() -> Path:
+    """Return the framework path containing the bundled inspector assets.
+
+    Returns:
+        Absolute path to ``reflex_base/assets/inspector``.
+    """
+    base = Path(reflex_base.__file__).resolve().parent
+    return base / "assets" / "inspector"
+
+
+def initialize_inspector_assets():
+    """Copy the inspector browser assets and emit the vite plugin file.
+
+    No-op when ``frontend_inspector`` is ``"off"``. The destination
+    ``.web/public/__reflex/`` is served at ``/__reflex/`` by both Vite and
+    Astro out of the box.
+    """
+    config = get_config()
+    if config.frontend_inspector == "off":
+        return
+
+    src_dir = _inspector_asset_source()
+    if not src_dir.is_dir():
+        console.warn(f"Inspector assets directory missing: {src_dir}")
+        return
+
+    dst_dir = get_web_dir() / constants.Dirs.PUBLIC / INSPECTOR_PUBLIC_DIR
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for name in INSPECTOR_ASSET_FILES:
+        src_file = src_dir / name
+        if not src_file.is_file():
+            console.warn(f"Inspector asset missing: {src_file}")
+            continue
+        shutil.copy2(src_file, dst_dir / name)
+
+    shortcut = inspector_shortcut.parse_shortcut(config.frontend_inspector_shortcut)
+    plugin_path = get_web_dir() / INSPECTOR_PLUGIN_FILE
+    plugin_path.write_text(
+        inspector_plugins.vite_plugin_template(
+            shortcut=shortcut,
+            force=config.frontend_inspector == "force",
+        )
+    )
 
 
 def initialize_bun_config():
