@@ -26,6 +26,16 @@ class Cond(Component):
 
     cond: Var[Any] = field(doc="The cond to determine which component to render.")
 
+    def _get_cond_children(self) -> tuple[BaseComponent, BaseComponent]:
+        """Get true and false branch components with safe defaults.
+
+        Returns:
+            A tuple containing true and false branch components.
+        """
+        true_child = self.children[0] if self.children else Fragment.create()
+        false_child = self.children[1] if len(self.children) > 1 else Fragment.create()
+        return true_child, false_child
+
     @classmethod
     def create(
         cls,
@@ -60,10 +70,11 @@ class Cond(Component):
         )
 
     def _render(self) -> Tag:
+        true_child, false_child = self._get_cond_children()
         return CondTag(
             cond_state=str(self.cond),
-            true_value=self.children[0].render(),
-            false_value=self.children[1].render(),
+            true_value=true_child.render(),
+            false_value=false_child.render(),
         )
 
     def render(self) -> dict:
@@ -72,10 +83,11 @@ class Cond(Component):
         Returns:
             The dictionary for template of component.
         """
+        true_child, false_child = self._get_cond_children()
         return {
             "cond_state": str(self.cond),
-            "true_value": self.children[0].render(),
-            "false_value": self.children[1].render(),
+            "true_value": true_child.render(),
+            "false_value": false_child.render(),
         }
 
     def add_imports(self) -> ImportDict:

@@ -13,8 +13,8 @@ Auto-memoized components compile using one of two render strategies:
   such as ``Form._get_form_refs`` working against the authored child tree.
 - Snapshot memo bodies render the captured subtree in the memo module. This is
   required for non-recursive memoization leaves and structural forms
-  (``Foreach``/``Cond``/``Match``) whose stateful render logic belongs inside
-  the memo component rather than the containing page.
+  (``Foreach``) whose stateful render logic belongs inside the memo component
+  rather than the containing page.
 """
 
 from __future__ import annotations
@@ -208,24 +208,17 @@ def _is_structural_memoization_child(component: Component) -> bool:
         True when the component's render body must stay inside the generated
         memo body rather than flowing through as a normal ``children`` payload.
     """
-    from reflex_components_core.core.cond import Cond
     from reflex_components_core.core.foreach import Foreach
-    from reflex_components_core.core.match import Match
 
-    if isinstance(component, Foreach):
-        return True
-    if isinstance(component, (Cond, Match)):
-        return bool(component.cond._get_all_var_data())
-    return False
+    return bool(isinstance(component, Foreach))
 
 
 def _has_memoization_snapshot_child(component: Component) -> bool:
     """Whether ``component`` has a structural child that needs a memo snapshot.
 
-    Component-valued ``Foreach``, ``Cond``, and ``Match`` are structural forms,
-    not ordinary user children. When they read state, the generated passthrough
-    memo must render their body in the memo module; otherwise state wiring
-    leaks into the page and the memo body degrades to just ``children``.
+    Component-valued ``Foreach`` is a structural form, not an ordinary user
+    child. It must render its body in the memo module instead of flowing
+    through as a normal ``children`` payload.
 
     Args:
         component: The component whose direct children should be inspected.
@@ -249,6 +242,14 @@ def get_memoization_strategy(component: Component) -> MemoizationStrategy:
     Returns:
         The strategy to use when generating a memo wrapper.
     """
+    from reflex_components_core.core.match import Match
+
+    # Match compiles branch returns into switch/case-like code from explicit
+    # children, so it cannot use a single passthrough {children} hole in memo
+    # compilation.
+    if isinstance(component, Match):
+        return MemoizationStrategy.SNAPSHOT
+
     if (
         is_snapshot_boundary(component)
         or _is_structural_memoization_child(component)

@@ -3,12 +3,7 @@
 import textwrap
 from typing import Any, cast
 
-from reflex_base.components.component import (
-    BaseComponent,
-    Component,
-    MemoizationLeaf,
-    field,
-)
+from reflex_base.components.component import BaseComponent, Component, field
 from reflex_base.components.tags import Tag
 from reflex_base.components.tags.match_tag import MatchTag
 from reflex_base.style import Style
@@ -21,7 +16,7 @@ from reflex_base.vars.base import LiteralVar, Var
 from reflex_components_core.base import Fragment
 
 
-class Match(MemoizationLeaf):
+class Match(Component):
     """Match cases based on a condition."""
 
     cond: Var[Any] = field(doc="The condition to determine which case to match.")
@@ -270,13 +265,32 @@ class Match(MemoizationLeaf):
         )
 
     def _render(self) -> Tag:
+        # Reconstruct match_cases and default from self.children, which may have
+        # been updated by the compiler walker to include memoized wrappers.
+        # self.children contains: [case_1_return, case_2_return, ..., default]
+        # self.match_cases contains the conditions as Vars.
+        num_cases = len(self.match_cases)
+        if len(self.children) != num_cases + 1:
+            msg = (
+                f"Match children count mismatch: expected {num_cases + 1} "
+                f"(cases + default), got {len(self.children)}"
+            )
+            raise ValueError(msg)
+
+        cases_returns = self.children[:num_cases]
+        default_return = self.children[num_cases]
+
         return MatchTag(
             cond=str(self.cond),
             match_cases=[
                 ([str(cond) for cond in conditions], return_value.render())
-                for conditions, return_value in self.match_cases
+                for (conditions, _), return_value in zip(
+                    self.match_cases,
+                    cases_returns,
+                    strict=True,
+                )
             ],
-            default=self.default.render(),
+            default=default_return.render(),
         )
 
     def render(self) -> dict:
