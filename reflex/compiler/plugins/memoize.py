@@ -85,6 +85,8 @@ def _should_memoize(component: Component) -> bool:
         True if the component should be wrapped in a memo definition.
     """
     from reflex_components_core.base.bare import Bare
+    from reflex_components_core.core.cond import Cond
+    from reflex_components_core.core.match import Match
 
     strategy = get_memoization_strategy(component)
 
@@ -93,7 +95,7 @@ def _should_memoize(component: Component) -> bool:
     if isinstance(component, Bare) and component.contents._get_all_var_data():
         # A stateful value will be wrapped in a separate component.
         return True
-    if component.tag is None:
+    if component.tag is None and not isinstance(component, (Cond, Match)):
         return False
     if component._memoization_mode.disposition == MemoizationDisposition.ALWAYS:
         return True
@@ -106,7 +108,11 @@ def _should_memoize(component: Component) -> bool:
     # Snapshot-strategy non-boundaries (structural forms or their parents)
     # must memoize so the state-dependent render logic lands inside the memo
     # body instead of the page.
-    if strategy is MemoizationStrategy.SNAPSHOT and not is_snapshot_boundary(component):
+    if (
+        strategy is MemoizationStrategy.SNAPSHOT
+        and not is_snapshot_boundary(component)
+        and not isinstance(component, Match)
+    ):
         return True
 
     # Components with event triggers are always memoized (to wrap callbacks).
@@ -122,12 +128,15 @@ class MemoizeStatefulPlugin(Plugin):
     wrappers (see ``get_memoization_strategy``):
 
     - Snapshot wrappers (``MemoizationLeaf``-style boundaries and structural
-      ``Foreach``/``Cond``/``Match`` wrappers): wrapped in ``enter_component``
+      ``Foreach`` wrappers): wrapped in ``enter_component``
       and returned with empty structural children. The walker skips descent, so
       hooks attached to the captured body are compiled into the memo body only.
-    - Passthrough wrappers: wrapped in ``leave_component`` after descendants
-      have already compiled, so any inner memo wrappers flow into this wrapper's
-      children.
+    - Passthrough wrappers (including ``Cond``) are wrapped in
+      ``leave_component`` after descendants have already compiled, so any inner
+      memo wrappers flow into this wrapper's children.
+    - ``Match`` is classified as snapshot for memo rendering semantics, but is
+      handled specially to recurse during the page walk and wrap in
+      ``leave_component`` so case branches can still be memoized independently.
 
     Descendants of a snapshot boundary are never independently memoized; the
     boundary owns the wrapping decision for its whole subtree. This is tracked
@@ -178,6 +187,12 @@ class MemoizeStatefulPlugin(Plugin):
             return None
         strategy = get_memoization_strategy(comp)
         if strategy is not MemoizationStrategy.SNAPSHOT:
+            return None
+        from reflex_components_core.core.match import Match
+
+        if isinstance(comp, Match):
+            # Match needs snapshot memo body rendering but still must recurse so
+            # stateful case components can be memoized independently.
             return None
         snapshot_boundary = is_snapshot_boundary(comp)
 
@@ -230,8 +245,18 @@ class MemoizeStatefulPlugin(Plugin):
         if stack:
             return None
 
-        if get_memoization_strategy(comp) is MemoizationStrategy.SNAPSHOT:
-            return None
+        strategy = get_memoization_strategy(comp)
+        if strategy is MemoizationStrategy.SNAPSHOT:
+            from reflex_components_core.core.match import Match
+
+            if not isinstance(comp, Match):
+                return None
+
+            if not _should_memoize(comp):
+                return None
+
+            wrapper = self._build_wrapper(comp, page_context, compile_context)
+            return None if wrapper is None else (wrapper, ())
 
         if not _should_memoize(comp):
             return None

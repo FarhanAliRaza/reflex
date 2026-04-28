@@ -1,6 +1,7 @@
 # ruff: noqa: D101
 
 import dataclasses
+import re
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
@@ -149,8 +150,6 @@ def test_memoize_wrapper_deduped_across_repeated_subtrees() -> None:
     ("special_form", "body_marker"),
     [
         ("foreach", "Array.prototype.map.call"),
-        ("cond", "flag_rx_state_?"),
-        ("match", "switch (JSON.stringify"),
     ],
 )
 def test_special_form_memo_wrappers_render_structural_body(
@@ -205,7 +204,8 @@ def test_special_form_memo_wrappers_render_structural_body(
 
 
 def test_common_memoization_snapshot_helper_classifies_snapshot_cases() -> None:
-    """The shared memoization strategy covers leaves and structural forms."""
+    """The shared memoization strategy classifies structural render forms."""
+    from reflex_components_core.core.match import Match
     from reflex_components_core.el.elements.forms import Form, Input
 
     foreach_parent = rx.box(
@@ -232,8 +232,12 @@ def test_common_memoization_snapshot_helper_classifies_snapshot_cases() -> None:
     )
 
     assert get_memoization_strategy(foreach_parent) is MemoizationStrategy.SNAPSHOT
-    assert get_memoization_strategy(cond_fragment) is MemoizationStrategy.SNAPSHOT
-    assert get_memoization_strategy(match_fragment) is MemoizationStrategy.SNAPSHOT
+    assert get_memoization_strategy(cond_fragment) is MemoizationStrategy.PASSTHROUGH
+    assert isinstance(match_fragment.children[0], Match)
+    assert (
+        get_memoization_strategy(match_fragment.children[0])
+        is MemoizationStrategy.SNAPSHOT
+    )
     assert (
         get_memoization_strategy(LeafComponent.create(Plain.create()))
         is MemoizationStrategy.SNAPSHOT
@@ -555,3 +559,270 @@ def test_plugin_only_registered_once_in_default_page_plugins() -> None:
     )
     memoize_index = plugins.index(memoize_plugins[0])
     assert memoize_index > collector_index
+
+
+def test_match_non_stateful_cond_allows_stateful_children_to_memoize() -> None:
+    """Match with a non-stateful condition must not suppress child memoization.
+
+    Regression: Match was a MemoizationLeaf, causing it to push onto the
+    suppressor stack when its condition had no VarData. That blocked
+    independently-stateful children from being wrapped. After the fix Match
+    is a plain Component and its stateful children are memoized normally.
+    """
+
+    def page() -> Component:
+        comp = rx.match(
+            "static",  # non-stateful condition
+            ("a", WithProp.create(label=STATE_VAR)),
+            WithProp.create(label=LiteralVar.create("default")),
+        )
+        assert isinstance(comp, Component)
+        return comp
+
+    ctx, _page_ctx = _compile_single_page(page)
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Expected the stateful WithProp inside match cases to be memoized, "
+        f"got wrappers: {list(ctx.memoize_wrappers)}"
+    )
+
+
+def test_cond_non_stateful_cond_allows_stateful_children_to_memoize() -> None:
+    """Cond with a non-stateful condition must not suppress child memoization.
+
+    When the condition carries no VarData, Cond should not be extracted to its
+    own memo component. Its stateful children (comp1 / comp2) should still be
+    independently memoized.
+    """
+
+    def page() -> Component:
+        comp = rx.cond(
+            True,  # non-stateful condition
+            WithProp.create(label=STATE_VAR),
+            WithProp.create(label=LiteralVar.create("false-branch")),
+        )
+        assert isinstance(comp, Component)
+        return comp
+
+    ctx, _page_ctx = _compile_single_page(page)
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Expected the stateful WithProp inside cond branch to be memoized, "
+        f"got wrappers: {list(ctx.memoize_wrappers)}"
+    )
+
+
+def test_cond_and_match_strategy_classification() -> None:
+    """Cond uses passthrough while Match uses snapshot strategy."""
+    from reflex_components_core.core.match import Match
+
+    cond_non_stateful = rx.cond(
+        True,
+        rx.text("yes"),
+        rx.text("no"),
+    )
+    cond_stateful = rx.cond(
+        SpecialFormMemoState.flag,
+        rx.text("yes"),
+        rx.text("no"),
+    )
+    match_non_stateful = rx.match(
+        "static",
+        ("a", rx.text("A")),
+        rx.text("default"),
+    )
+    match_stateful = rx.match(
+        SpecialFormMemoState.value,
+        ("a", rx.text("A")),
+        rx.text("default"),
+    )
+
+    components = (
+        cond_non_stateful,
+        cond_stateful,
+    )
+    for comp in components:
+        assert isinstance(comp, Component)
+        assert get_memoization_strategy(comp) is MemoizationStrategy.PASSTHROUGH
+
+    match_components = (
+        match_non_stateful,
+        match_stateful,
+    )
+    for comp in match_components:
+        assert isinstance(comp, Component)
+        assert isinstance(comp.children[0], Match)
+        assert (
+            get_memoization_strategy(comp.children[0]) is MemoizationStrategy.SNAPSHOT
+        )
+
+
+def test_cond_stateful_var_branch_memoized_as_bare() -> None:
+    """rx.cond(True, STATE_VAR, "false") embeds a stateful ternary Var in a Bare.
+
+    The ternary Var produced by the Var-returning cond path carries STATE_VAR's
+    VarData. When rendered inside rx.box it appears as a Bare child, which must
+    be extracted into its own memoized component.
+    """
+    ctx, _page_ctx = _compile_single_page(
+        lambda: rx.box(rx.cond(True, STATE_VAR, "false")),
+    )
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Expected stateful cond ternary var to produce one memoized Bare, "
+        f"got wrappers: {list(ctx.memoize_wrappers)}"
+    )
+
+
+def test_cond_stateful_condition_memoizes_whole_cond_and_stateful_branch() -> None:
+    """Stateful Cond condition memoizes both Cond and stateful branch.
+
+    Cond should recurse into branches so stateful branch components are wrapped
+    independently, while the Cond itself is also wrapped because its condition
+    var reads state.
+    """
+
+    def page() -> Component:
+        comp = rx.cond(
+            SpecialFormMemoState.flag,
+            WithProp.create(label=STATE_VAR),
+            WithProp.create(label=LiteralVar.create("false-branch")),
+        )
+        assert isinstance(comp, Component)
+        return comp
+
+    ctx, _page_ctx = _compile_single_page(page)
+
+    assert len(ctx.memoize_wrappers) == 2, (
+        "Expected both Cond and its stateful branch component to be memoized, "
+        f"got wrappers: {list(ctx.memoize_wrappers)}"
+    )
+    wrapper_tags = tuple(ctx.memoize_wrappers)
+    assert any("cond" in tag.lower() for tag in wrapper_tags)
+    assert any("withprop" in tag.lower() for tag in wrapper_tags)
+
+
+def test_match_stateful_condition_memoizes_whole_match_and_stateful_branch() -> None:
+    """Stateful Match condition memoizes both Match and stateful branch.
+
+    Match should recurse into branches so stateful branch components are
+    memoized independently, while Match itself is memoized when its condition
+    var carries VarData.
+    """
+
+    def page() -> Component:
+        comp = rx.match(
+            SpecialFormMemoState.value,
+            ("a", WithProp.create(label=STATE_VAR)),
+            WithProp.create(label=LiteralVar.create("default")),
+        )
+        assert isinstance(comp, Component)
+        return comp
+
+    ctx, _page_ctx = _compile_single_page(page)
+    assert len(ctx.memoize_wrappers) == 2, (
+        "Expected both Match and its stateful branch component to be memoized, "
+        f"got wrappers: {list(ctx.memoize_wrappers)}"
+    )
+    wrapper_tags = tuple(ctx.memoize_wrappers)
+    assert any("match" in tag.lower() for tag in wrapper_tags)
+    assert any("withprop" in tag.lower() for tag in wrapper_tags)
+
+
+def test_cond_stateful_branch_component_renders_via_memoized_wrapper() -> None:
+    """Components inside Cond branches must render via their memo wrappers.
+
+    Regression shape matching the Match case: when the walker memoizes a
+    branch component, Cond rendering must use the wrapped branch tag in page
+    output rather than the original unwrapped component tag.
+    """
+
+    def page() -> Component:
+        comp = rx.cond(
+            True,
+            WithProp.create(label=STATE_VAR),
+            WithProp.create(label=LiteralVar.create("false-branch")),
+        )
+        assert isinstance(comp, Component)
+        return comp
+
+    ctx, page_ctx = _compile_single_page(page)
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Expected stateful branch to produce one memo wrapper, got: {list(ctx.memoize_wrappers)}"
+    )
+    wrapper_tag = next(iter(ctx.memoize_wrappers))
+    output = page_ctx.output_code or ""
+    assert f"jsx({wrapper_tag}," in output, (
+        f"Memo wrapper {wrapper_tag!r} not found in page output.\n"
+        f"Output snippet: {output[:2000]}"
+    )
+
+
+def test_match_stateful_branch_component_renders_via_memoized_wrapper() -> None:
+    """Components inside Match branches must be rendered via their memo wrappers.
+
+    Regression: Match._render() used self.match_cases / self.default directly
+    instead of self.children. The walker updates children when it memoizes a
+    branch component, but those updates were invisible to Match's render, so
+    the generated page JSX still referenced the original unwrapped component
+    tag rather than the memo wrapper.
+    """
+
+    def page() -> Component:
+        comp = rx.match(
+            "static",
+            ("a", WithProp.create(label=STATE_VAR)),
+            WithProp.create(label=LiteralVar.create("default")),
+        )
+        assert isinstance(comp, Component)
+        return comp
+
+    ctx, page_ctx = _compile_single_page(page)
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Expected stateful branch to produce one memo wrapper, got: {list(ctx.memoize_wrappers)}"
+    )
+    wrapper_tag = next(iter(ctx.memoize_wrappers))
+    output = page_ctx.output_code or ""
+    assert f"jsx({wrapper_tag}," in output, (
+        f"Memo wrapper {wrapper_tag!r} not found in page output.\n"
+        f"Output snippet: {output[:2000]}"
+    )
+
+
+def test_memoized_match_wrapper_has_no_page_side_case_children() -> None:
+    """Memoized Match wrapper should not receive case children from page output."""
+
+    def page() -> Component:
+        comp = rx.match(
+            SpecialFormMemoState.value,
+            ("a", rx.text("A")),
+            ("b", rx.text("B")),
+            rx.text("default"),
+        )
+        assert isinstance(comp, Component)
+        return comp
+
+    ctx, page_ctx = _compile_single_page(page)
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Expected stateful Match to produce one memo wrapper, got: {list(ctx.memoize_wrappers)}"
+    )
+    wrapper_tag = next(iter(ctx.memoize_wrappers))
+    output = page_ctx.output_code or ""
+
+    assert f"jsx({wrapper_tag}," in output, (
+        f"Memo wrapper {wrapper_tag!r} not found in page output.\n"
+        f"Output snippet: {output[:2000]}"
+    )
+    assert re.search(
+        rf"jsx\({re.escape(wrapper_tag)},\s*\{{\}},\s*(\[\s*\]|)\s*\)",
+        output,
+    ), (
+        "Memoized Match wrapper should be called without rendered match-case "
+        "children in page output.\n"
+        f"Output snippet: {output[:2000]}"
+    )
+    assert not re.search(
+        rf"jsx\({re.escape(wrapper_tag)},\s*\{{\}},\s*(\[\s*)?jsx\(",
+        output,
+    ), (
+        "Memoized Match wrapper unexpectedly received rendered children in page "
+        "output.\n"
+        f"Output snippet: {output[:2000]}"
+    )
