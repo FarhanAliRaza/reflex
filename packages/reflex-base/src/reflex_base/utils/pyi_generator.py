@@ -1717,10 +1717,14 @@ class PyiGenerator:
 
         if use_json and (file_paths or file_targets):
             file_paths = list(map(Path, file_paths))
-            anchor = (
-                file_paths[0].parent if file_paths else file_targets[0].resolve().parent
-            )
-            pyi_hashes_parent = anchor
+            # Anchor the pyi_hashes.json search at cwd, not at the first written
+            # file. The hash file is workspace-scoped — there is one for the whole
+            # repo — so walking up from cwd is what the caller (make_pyi.py, run
+            # from the repo root) actually means. Anchoring at file_paths[0] would
+            # make the result depend on which file happened to land first in
+            # `written_files`, and could find a package-local hash file in a
+            # leaf-package walk-up before reaching the workspace root.
+            pyi_hashes_parent = Path.cwd().resolve()
             while (
                 pyi_hashes_parent != pyi_hashes_parent.parent
                 and not (pyi_hashes_parent / PYI_HASHES).exists()

@@ -282,7 +282,15 @@ if __name__ == "__main__":
 
     sha = _last_regen_sha()
     if sha is None:
-        logger.info("No pyi_hashes.json baseline in git, regenerating all .pyi files")
+        if PYI_HASHES.exists():
+            logger.warning(
+                f"{PYI_HASHES} exists locally but has no git history; "
+                "every run will full-regenerate until the file is committed."
+            )
+        else:
+            logger.info(
+                "No pyi_hashes.json baseline in git, regenerating all .pyi files"
+            )
         changed_files: list[Path] | None = None
     else:
         changed = _changed_python_paths(sha)
