@@ -15,7 +15,7 @@ from .sidebar_items.ai import (
     mcp_items,
     skills_items,
 )
-from .sidebar_items.component_lib import component_lib, graphing_libs
+from .sidebar_items.component_lib import component_lib, graphing_libs, html_lib
 from .sidebar_items.enterprise import (
     enterprise_component_items,
     enterprise_items,
@@ -119,7 +119,7 @@ def sidebar_leaf(
                     item.link == url,
                     sidebar_link(
                         rx.el.div(
-                            class_name="absolute left-0 top-1/2 -translate-y-1/2 w-full h-8 rounded-lg bg-m-slate-2 dark:bg-m-slate-10 z-[-1]",
+                            class_name="absolute left-0 top-1/2 -translate-y-1/2 w-full h-8 rounded-lg bg-m-slate-2 dark:bg-slate-3 z-[-1]",
                         ),
                         rx.flex(
                             rx.text(
@@ -155,6 +155,7 @@ def sidebar_leaf(
 def sidebar_icon(name):
     icon_map = {
         "Getting Started": "rocket",
+        "Tutorials": "graduation-cap",
         "Advanced Onboarding": "newspaper",
         "Components": "layers",
         "Pages": "sticky-note",
@@ -279,6 +280,7 @@ append_to_items(
     + hosting
     + component_lib
     + graphing_libs
+    + html_lib
     + recipes
     + ai_builder_overview_items
     + ai_builder_integrations
@@ -333,7 +335,7 @@ def sidebar_category(name: str, url: str, icon: str, index: int):
                         "flex flex-row justify-start items-center gap-2.5 w-full text-sm text-secondary-11 hover:text-secondary-12 h-8",
                         rx.cond(
                             SidebarState.sidebar_index == index,
-                            "text-primary-10 dark:text-primary-9",
+                            "text-slate-12",
                             "",
                         ),
                     ),
@@ -343,7 +345,7 @@ def sidebar_category(name: str, url: str, icon: str, index: int):
             rx.cond(
                 SidebarState.sidebar_index == index,
                 rx.el.div(
-                    class_name="absolute left-0 top-0 w-full h-full bg-m-slate-2 dark:bg-m-slate-10 rounded-lg z-[-1]",
+                    class_name="absolute left-0 top-0 w-full h-full bg-m-slate-2 dark:bg-slate-3 rounded-lg z-[-1]",
                 ),
             ),
             rx.el.a(
@@ -411,6 +413,7 @@ def sidebar_comp(
     frontend_index: list[int],
     backend_index: list[int],
     hosting_index: list[int],
+    html_lib_index: list[int],
     graphing_libs_index: list[int],
     api_reference_index: list[int],
     recipes_index: list[int],
@@ -657,6 +660,13 @@ def sidebar_comp(
                                 graphing_libs_index,
                                 url,
                             ),
+                            create_sidebar_section(
+                                "Other",
+                                "/library/html/",
+                                html_lib,
+                                html_lib_index,
+                                url,
+                            ),
                             rx.link(  # pyright: ignore [reportCallIssue]
                                 rx.box(  # pyright: ignore [reportCallIssue]
                                     rx.box(  # pyright: ignore [reportCallIssue]
@@ -736,6 +746,7 @@ def sidebar(url=None, width: str = "100%") -> rx.Component:
     frontend_index = calculate_index(frontend, url)
     backend_index = calculate_index(backend, url)
     hosting_index = calculate_index(hosting, url)
+    html_lib_index = calculate_index(html_lib, url)
     graphing_libs_index = calculate_index(graphing_libs, url)
     api_reference_index = calculate_index(api_reference, url)
     recipes_index = calculate_index(recipes, url)
@@ -757,6 +768,7 @@ def sidebar(url=None, width: str = "100%") -> rx.Component:
             frontend_index=frontend_index,
             backend_index=backend_index,
             hosting_index=hosting_index,
+            html_lib_index=html_lib_index,
             graphing_libs_index=graphing_libs_index,
             api_reference_index=api_reference_index,
             recipes_index=recipes_index,
