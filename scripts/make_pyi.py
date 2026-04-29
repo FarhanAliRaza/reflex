@@ -192,6 +192,10 @@ def _iter_import_nodes(
             yield from _iter_import_nodes(node.finalbody)
             for handler in node.handlers:
                 yield from _iter_import_nodes(handler.body)
+        elif hasattr(ast, "TryStar") and isinstance(node, ast.TryStar):
+            yield from _iter_import_nodes(node.body)
+            for handler in node.handlers:
+                yield from _iter_import_nodes(handler.body)
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             yield from _iter_import_nodes(node.body)
 
