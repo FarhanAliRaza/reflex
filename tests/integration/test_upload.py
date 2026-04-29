@@ -401,7 +401,15 @@ def expect_upload_in_flight(
                 return True
         return False
 
-    AppHarness.expect(in_flight)
+    try:
+        AppHarness.expect(in_flight, timeout=20)
+    except TimeoutError as exc:
+        msg = (
+            f"Upload never reached an in-flight state (0 < progress < 1) "
+            f"at {progress_xpath}; the upload may have completed before "
+            f"throttling took effect, or progress events were not emitted."
+        )
+        raise TimeoutError(msg) from exc
 
 
 @pytest.mark.parametrize("secondary", [False, True])
