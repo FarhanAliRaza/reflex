@@ -286,7 +286,14 @@ class MemoizeStatefulPlugin(Plugin):
         wrapper_factory, definition = create_passthrough_component_memo(tag, comp)
         compile_context.auto_memo_components[tag] = definition
 
-        return wrapper_factory()
+        wrapper = wrapper_factory()
+        # The wrapper has no structural children at the page level, but parents
+        # walking ``_get_all_refs`` (e.g. ``Form._get_form_refs`` collecting
+        # ref_<id> mappings into ``handleSubmit``) need to see refs from the
+        # wrapped subtree. Delegate ref collection to the original component
+        # so descendants inside the memo body remain reachable for ref lookup.
+        object.__setattr__(wrapper, "_get_all_refs", comp._get_all_refs)
+        return wrapper
 
 
 __all__ = ["MemoizeStatefulPlugin"]

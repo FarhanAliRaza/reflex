@@ -1028,3 +1028,100 @@ def test_client_state_setter_in_call_function_event_imports_refs() -> None:
         "'refs' — the on_click handler references refs['_client_state_setCounter'].\n"
         f"Memo code snippet: {memo_code[:2000]}"
     )
+
+
+def test_debounce_input_memo_renders_react_debounce_wrapper() -> None:
+    """``rx.input(value=..., on_change=..., debounce_timeout=N)`` memoizes via DebounceInput.
+
+    When ``rx.input`` is given both ``value`` and ``on_change`` it is wrapped by
+    ``DebounceInput`` so the underlying input is fully controlled without typing
+    jank. The wrapper carries DebounceInput-known props (``debounce_timeout``,
+    ``input_ref``, ``element``) and also forwards the inner TextField as the
+    ``element`` prop. The memo body produced by the auto-memoize plugin must:
+
+    - Import ``DebounceInput`` from ``react-debounce-input`` and render it via
+      ``jsx(DebounceInput, ...)`` rather than rendering the inner TextField
+      directly. The whole point of the wrapping is to give react-debounce-input
+      ownership of the keystroke pipeline; if the memo emitted the inner
+      ``TextField.Root`` instead, controlled-input updates would race the
+      backend round-trip and drop characters.
+    - Pass ``debounceTimeout`` as a real DebounceInput prop, not via ``css``.
+      Reflex routes unknown TextFieldRoot kwargs (like ``debounce_timeout``)
+      into ``style`` at component construction; ``DebounceInput.create`` then
+      copies ``child.style`` into the wrapper, which can leak the timeout into
+      the rendered ``css`` block. The timeout belongs on the wrapper as a real
+      prop — leaking it to ``css`` makes it a no-op styling key while the real
+      debounce behavior depends on the prop alone.
+    - Wire ``element`` to ``RadixThemesTextField.Root`` so the underlying input
+      is the radix text field and not a bare ``<input>``.
+    """
+    from reflex.compiler.compiler import compile_memo_components
+
+    class DebounceState(BaseState):
+        value: str = ""
+
+        @rx.event
+        def set_value(self, v: str) -> None:
+            self.value = v
+
+    def page() -> Component:
+        return rx.input(
+            id="my_input",
+            value=DebounceState.value,
+            on_change=DebounceState.set_value,
+            debounce_timeout=250,
+        )
+
+    ctx, _page_ctx = _compile_single_page(page)
+
+    assert len(ctx.memoize_wrappers) == 1, (
+        "Expected the controlled rx.input to memoize as a single DebounceInput "
+        f"wrapper, got: {list(ctx.memoize_wrappers)}"
+    )
+    wrapper_tag = next(iter(ctx.memoize_wrappers))
+    assert "debounceinput" in wrapper_tag.lower(), (
+        f"Memo wrapper tag should be derived from DebounceInput, got: {wrapper_tag!r}"
+    )
+
+    memo_files, _memo_imports = compile_memo_components(
+        components=(),
+        experimental_memos=tuple(ctx.auto_memo_components.values()),
+    )
+    memo_code = next(
+        code for path, code in memo_files if Path(path).name == f"{wrapper_tag}.jsx"
+    )
+
+    assert re.search(
+        r'^import\s+DebounceInput\s+from\s+"react-debounce-input"',
+        memo_code,
+        flags=re.MULTILINE,
+    ), (
+        "Memo body must import DebounceInput from react-debounce-input.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+    assert "jsx(DebounceInput," in memo_code, (
+        "Memo body must render via DebounceInput, not inline the inner TextField.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+    assert "debounceTimeout:250" in memo_code, (
+        "Memo body must pass debounceTimeout as a DebounceInput prop.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+    assert "element:RadixThemesTextField.Root" in memo_code, (
+        "Memo body must pass the radix TextField as DebounceInput's element prop.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+
+    css_block_match = re.search(
+        r"css:\(\{([^}]*)\}\)",
+        memo_code,
+    )
+    css_contents = css_block_match.group(1) if css_block_match else ""
+    assert "debounceTimeout" not in css_contents, (
+        "debounceTimeout leaked into the css block — it should only be a "
+        "DebounceInput prop. Reflex routes unknown TextFieldRoot kwargs into "
+        "style, and DebounceInput.create copies child.style verbatim, so the "
+        "timeout ends up duplicated as a no-op CSS key.\n"
+        f"css block: {css_contents!r}\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
