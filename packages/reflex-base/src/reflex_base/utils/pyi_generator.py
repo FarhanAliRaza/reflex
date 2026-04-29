@@ -1768,10 +1768,18 @@ if __name__ == "__main__":
         default=["reflex/components", "reflex/experimental", "reflex/__init__.py"],
         help="Target directories/files to process",
     )
+    parser.add_argument(
+        "--no-update-hashes",
+        dest="update_hashes",
+        action="store_false",
+        help="Do not read or write the workspace pyi_hashes.json. "
+        "Use this from build hooks where parallel package builds would race "
+        "on a single shared hash file.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("blib2to3.pgen2.driver").setLevel(logging.INFO)
 
     gen = PyiGenerator()
-    gen.scan_all(args.targets, None, use_json=True)
+    gen.scan_all(args.targets, None, use_json=args.update_hashes)

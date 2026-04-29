@@ -168,6 +168,32 @@ def test_missing_source_file_drops_entry(tmp_path, monkeypatch):
     assert result == {"pkg/foo.pyi": "FOO_NEW"}
 
 
+def test_use_json_false_does_not_touch_hashes_file(tmp_path, monkeypatch):
+    """With ``use_json=False``, ``pyi_hashes.json`` is neither read nor written.
+
+    Build hooks rely on this so parallel workspace builds don't race on a
+    single shared hash file at the workspace root.
+    """
+    workspace = _make_workspace(tmp_path)
+    monkeypatch.chdir(workspace)
+
+    hashes_path = workspace / "pyi_hashes.json"
+    original = b"\x00not even json\x00"
+    hashes_path.write_bytes(original)
+
+    foo_pyi = (workspace / "pkg" / "foo.py").with_suffix(".pyi").resolve()
+
+    def fake_scan(self, files):
+        self.written_files.append((str(foo_pyi), "FOO"))
+
+    monkeypatch.setattr(PyiGenerator, "_scan_files", fake_scan)
+
+    gen = PyiGenerator()
+    gen.scan_all(["pkg/foo.py"], changed_files=None, use_json=False)
+
+    assert hashes_path.read_bytes() == original
+
+
 def test_incremental_run_merges_into_existing(tmp_path, monkeypatch):
     """An incremental run (``changed_files`` set) merges new hashes into the existing file."""
     workspace = _make_workspace(tmp_path)

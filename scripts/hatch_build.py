@@ -41,7 +41,12 @@ class CustomBuilder(BuildHookInterface):
             file.unlink(missing_ok=True)
 
         subprocess.run(
-            [sys.executable, "-m", "reflex_base.utils.pyi_generator"],
+            [
+                sys.executable,
+                "-m",
+                "reflex_base.utils.pyi_generator",
+                "--no-update-hashes",
+            ],
             check=True,
         )
         self.marker().touch()

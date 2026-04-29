@@ -67,8 +67,17 @@ class ReflexPyiBuildHook(BuildHookInterface):
         # Run from src/ so _path_to_module_name produces valid import names
         # (e.g. "reflex_components_core.core.banner" instead of
         # "packages.reflex-components-core.src.reflex_components_core.core.banner").
+        # --no-update-hashes: parallel workspace builds would race on the shared
+        # pyi_hashes.json; that file is a dev-tooling artifact and isn't needed
+        # at install/wheel-build time.
         subprocess.run(
-            [sys.executable, "-m", "reflex_base.utils.pyi_generator", src_dir.name],
+            [
+                sys.executable,
+                "-m",
+                "reflex_base.utils.pyi_generator",
+                "--no-update-hashes",
+                src_dir.name,
+            ],
             cwd=src_dir.parent,
             check=True,
         )
