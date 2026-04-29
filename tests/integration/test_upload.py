@@ -377,6 +377,33 @@ def poll_for_token(driver: WebDriver, upload_file: AppHarness) -> str:
     return token
 
 
+def expect_upload_in_flight(
+    driver: WebDriver, progress_xpath: str, initial_count: int
+) -> None:
+    """Wait until a new progress event reports 0 < progress < 1.
+
+    Cancelling on a fixed sleep is racy: the browser uploads in a separate
+    process, so under CI load the test process can be preempted while the
+    browser keeps uploading at full throttled speed and the upload may finish
+    before the sleep returns. Observing an in-flight progress event ties the
+    cancel timing to actual upload state.
+
+    Args:
+        driver: WebDriver instance.
+        progress_xpath: XPath of the progress element list to inspect.
+        initial_count: number of pre-existing progress entries to skip.
+    """
+
+    def in_flight():
+        for p in driver.find_elements(By.XPATH, progress_xpath)[initial_count:]:
+            progress = json.loads(p.text).get("progress", 0)
+            if 0 < progress < 1:
+                return True
+        return False
+
+    AppHarness.expect(in_flight)
+
+
 @pytest.mark.parametrize("secondary", [False, True])
 def test_upload_file(
     tmp_path, upload_file: AppHarness, driver: WebDriver, secondary: bool
@@ -569,16 +596,19 @@ async def test_cancel_upload(tmp_path, upload_file: AppHarness, driver: WebDrive
         f.seek(1024 * 1024)  # 1 MB file, should upload in ~8 seconds
         f.write(b"0")
 
+    progress_xpath = "//*[@id='progress_dicts']/p"
+    initial_progress_count = len(driver.find_elements(By.XPATH, progress_xpath))
+
     upload_box.send_keys(str(target_file))
     upload_button.click()
-    await asyncio.sleep(1)
+
+    expect_upload_in_flight(driver, progress_xpath, initial_progress_count)
     cancel_button.click()
 
-    # Wait a bit for the upload to get cancelled.
+    # Wait long enough that the upload would have finished if cancel failed.
     await asyncio.sleep(12)
 
-    # But there should never be a final progress record for a cancelled upload.
-    for p in driver.find_elements(By.XPATH, "//*[@id='progress_dicts']/p"):
+    for p in driver.find_elements(By.XPATH, progress_xpath)[initial_progress_count:]:
         assert json.loads(p.text)["progress"] != 1
 
     assert not (rx.get_upload_dir() / exp_name).exists()
@@ -666,15 +696,18 @@ async def test_cancel_upload_chunk(
         f.seek(2 * 1024 * 1024)
         f.write(b"0")
 
+    progress_xpath = "//*[@id='stream_progress_dicts']/p"
+    initial_progress_count = len(driver.find_elements(By.XPATH, progress_xpath))
+
     upload_box.send_keys(str(target_file))
     upload_button.click()
-    await asyncio.sleep(2)
+
+    expect_upload_in_flight(driver, progress_xpath, initial_progress_count)
     cancel_button.click()
 
     await asyncio.sleep(11)
 
-    # But there should never be a final progress record for a cancelled upload.
-    for p in driver.find_elements(By.XPATH, "//*[@id='stream_progress_dicts']/p"):
+    for p in driver.find_elements(By.XPATH, progress_xpath)[initial_progress_count:]:
         assert json.loads(p.text)["progress"] != 1
 
     assert not (rx.get_upload_dir() / exp_name).exists()
