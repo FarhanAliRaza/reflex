@@ -3,6 +3,7 @@
 import dataclasses
 import re
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -890,7 +891,9 @@ def test_match_stateful_condition_uses_memoized_branch_wrapper_in_memo_body() ->
         experimental_memos=tuple(ctx.auto_memo_components.values()),
     )
     match_memo_code = next(
-        code for path, code in memo_files if path.endswith(f"/{match_wrapper_tag}.jsx")
+        code
+        for path, code in memo_files
+        if Path(path).name == f"{match_wrapper_tag}.jsx"
     )
 
     assert "children?.at?.(0)" in match_memo_code, (
@@ -1001,7 +1004,7 @@ def test_client_state_setter_in_call_function_event_imports_refs() -> None:
         experimental_memos=tuple(ctx.auto_memo_components.values()),
     )
     memo_code = next(
-        code for path, code in memo_files if path.endswith(f"/{wrapper_tag}.jsx")
+        code for path, code in memo_files if Path(path).name == f"{wrapper_tag}.jsx"
     )
 
     assert "refs['_client_state_setCounter'](42)" in memo_code, (
