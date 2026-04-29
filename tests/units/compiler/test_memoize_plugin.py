@@ -963,3 +963,65 @@ def test_memoized_match_wrapper_receives_case_children_in_page_output() -> None:
         "Match wrapper should receive case JSX as positional children in page output.\n"
         f"Output snippet: {output[:2000]}"
     )
+
+
+def test_client_state_setter_in_call_function_event_imports_refs() -> None:
+    """A button whose ``on_click`` calls a global ``ClientStateVar`` setter
+    must memoize and the resulting memo body's imports must include ``refs``
+    from ``$/utils/state``.
+
+    Regression: ``ClientStateVar.set_value`` builds its setter as
+    ``refs['_client_state_<setter>']`` but the returned setter ``Var`` does not
+    carry the ``refs`` import. When the on_click event chain is compiled into
+    the memo body, the body references ``refs['_client_state_<setter>'](42)``
+    with no matching ``import { refs } from "$/utils/state"`` — producing a
+    ``ReferenceError: refs is not defined`` at runtime.
+    """
+    from reflex.compiler.compiler import compile_memo_components
+    from reflex.experimental.client_state import ClientStateVar
+
+    counter = ClientStateVar.create("counter", default=0)
+
+    def page() -> Component:
+        return rx.el.button(
+            "click",
+            on_click=rx.call_function(counter.set_value(42)),
+        )
+
+    ctx, _page_ctx = _compile_single_page(page)
+
+    assert len(ctx.memoize_wrappers) == 1, (
+        "Expected the button with a stateful on_click to be auto-memoized, "
+        f"got wrappers: {list(ctx.memoize_wrappers)}"
+    )
+    wrapper_tag = next(iter(ctx.memoize_wrappers))
+
+    memo_files, _memo_imports = compile_memo_components(
+        components=(),
+        experimental_memos=tuple(ctx.auto_memo_components.values()),
+    )
+    memo_code = next(
+        code for path, code in memo_files if path.endswith(f"/{wrapper_tag}.jsx")
+    )
+
+    assert "refs['_client_state_setCounter'](42)" in memo_code, (
+        "Expected the memo body to call the client-state setter via refs.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+
+    state_import_match = re.search(
+        r'^import\s*\{([^}]*)\}\s*from\s*"\$/utils/state"',
+        memo_code,
+        flags=re.MULTILINE,
+    )
+    assert state_import_match is not None, (
+        "Memo body must import from $/utils/state since the on_click handler "
+        "uses refs['_client_state_setCounter'].\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+    imported_names = {name.strip() for name in state_import_match.group(1).split(",")}
+    assert "refs" in imported_names, (
+        f"Memo body imports {imported_names!r} from $/utils/state but is missing "
+        "'refs' — the on_click handler references refs['_client_state_setCounter'].\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
