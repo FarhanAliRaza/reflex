@@ -4,6 +4,7 @@ import textwrap
 from typing import Any, cast
 
 from reflex_base.components.component import BaseComponent, Component, field
+from reflex_base.components.memoize_helpers import passthrough_children_var
 from reflex_base.components.tags import Tag
 from reflex_base.components.tags.match_tag import MatchTag
 from reflex_base.style import Style
@@ -14,6 +15,7 @@ from reflex_base.vars import VarData
 from reflex_base.vars.base import LiteralVar, Var
 
 from reflex_components_core.base import Fragment
+from reflex_components_core.base.bare import Bare
 
 
 class Match(Component):
@@ -270,15 +272,22 @@ class Match(Component):
         # self.children contains: [case_1_return, case_2_return, ..., default]
         # self.match_cases contains the conditions as Vars.
         num_cases = len(self.match_cases)
-        if len(self.children) != num_cases + 1:
-            msg = (
-                f"Match children count mismatch: expected {num_cases + 1} "
-                f"(cases + default), got {len(self.children)}"
-            )
-            raise ValueError(msg)
+        children_var = passthrough_children_var(self.children)
+        if children_var is not None:
+            # Auto-memo passthrough body: index into the placeholder array so
+            # branch JSX stays on the page side.
+            cases_returns = [Bare.create(children_var[i]) for i in range(num_cases)]
+            default_return = Bare.create(children_var[num_cases])
+        else:
+            if len(self.children) != num_cases + 1:
+                msg = (
+                    f"Match children count mismatch: expected {num_cases + 1} "
+                    f"(cases + default), got {len(self.children)}"
+                )
+                raise ValueError(msg)
 
-        cases_returns = self.children[:num_cases]
-        default_return = self.children[num_cases]
+            cases_returns = self.children[:num_cases]
+            default_return = self.children[num_cases]
 
         return MatchTag(
             cond=str(self.cond),

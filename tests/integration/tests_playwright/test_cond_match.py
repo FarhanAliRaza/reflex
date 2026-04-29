@@ -60,7 +60,9 @@ def CondMatchApp():
 
 
 @pytest.fixture(scope="module")
-def cond_match_app(tmp_path_factory: pytest.TempPathFactory) -> Generator[AppHarness, None, None]:
+def cond_match_app(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[AppHarness, None, None]:
     """Create a harness for the cond/match regression app.
 
     Args:

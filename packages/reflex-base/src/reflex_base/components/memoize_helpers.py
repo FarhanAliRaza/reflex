@@ -23,12 +23,13 @@ import enum
 from hashlib import md5
 from typing import TYPE_CHECKING
 
-from reflex_base.components.component import Component
+from reflex_base.components.component import BaseComponent, Component
 from reflex_base.constants import EventTriggers
 from reflex_base.event import EventChain, EventSpec
 from reflex_base.utils.imports import ImportVar
 from reflex_base.vars import VarData
 from reflex_base.vars.base import LiteralVar, Var
+from reflex_base.vars.sequence import ArrayVar
 
 if TYPE_CHECKING:
     from reflex_base.plugins.compiler import PageContext
@@ -233,6 +234,38 @@ def _has_memoization_snapshot_child(component: Component) -> bool:
     )
 
 
+def passthrough_children_var(
+    children: list[BaseComponent],
+) -> ArrayVar[list[BaseComponent]] | None:
+    """Return the placeholder ``children`` array Var if ``children`` is a memo hole.
+
+    Auto-memo passthrough wrappers replace the wrapped component's children
+    with a single ``Bare(Var[Component](_js_expr="children"))`` placeholder
+    when compiling the memo body. Render-time consumers (notably ``Cond`` and
+    ``Match``) detect this and rewrite branches to index into the placeholder
+    array instead of capturing the original branch JSX in the memo body. The
+    returned Var is retyped to ``list[BaseComponent]`` so callers can index
+    it directly.
+
+    Args:
+        children: The component's children list.
+
+    Returns:
+        The placeholder Var (retyped as a Component list) for indexed access,
+        else ``None``.
+    """
+    from reflex_components_core.base.bare import Bare
+
+    if (
+        len(children) == 1
+        and isinstance(children[0], Bare)
+        and isinstance(children[0].contents, Var)
+        and children[0].contents._js_expr == "children"
+    ):
+        return children[0].contents.to(list[BaseComponent])
+    return None
+
+
 def get_memoization_strategy(component: Component) -> MemoizationStrategy:
     """Get the render strategy for ``component`` if auto-memoization wraps it.
 
@@ -242,14 +275,6 @@ def get_memoization_strategy(component: Component) -> MemoizationStrategy:
     Returns:
         The strategy to use when generating a memo wrapper.
     """
-    from reflex_components_core.core.cond import Cond
-    from reflex_components_core.core.match import Match
-
-    # Cond and Match compile branch returns from explicit ordered children, so
-    # they cannot use a single passthrough {children} hole in memo compilation.
-    if isinstance(component, (Cond, Match)):
-        return MemoizationStrategy.SNAPSHOT
-
     if (
         is_snapshot_boundary(component)
         or _is_structural_memoization_child(component)
@@ -266,4 +291,5 @@ __all__ = [
     "get_memoization_strategy",
     "get_memoized_event_triggers",
     "is_snapshot_boundary",
+    "passthrough_children_var",
 ]

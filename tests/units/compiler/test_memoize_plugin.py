@@ -205,6 +205,7 @@ def test_special_form_memo_wrappers_render_structural_body(
 
 def test_common_memoization_snapshot_helper_classifies_snapshot_cases() -> None:
     """The shared memoization strategy classifies structural render forms."""
+    from reflex_components_core.core.cond import Cond
     from reflex_components_core.core.match import Match
     from reflex_components_core.el.elements.forms import Form, Input
 
@@ -233,10 +234,17 @@ def test_common_memoization_snapshot_helper_classifies_snapshot_cases() -> None:
 
     assert get_memoization_strategy(foreach_parent) is MemoizationStrategy.SNAPSHOT
     assert get_memoization_strategy(cond_fragment) is MemoizationStrategy.PASSTHROUGH
+    # Cond and Match now use passthrough so branch JSX renders on the page side
+    # and the memo body just selects via children[i] indexing.
+    assert isinstance(cond_fragment.children[0], Cond)
+    assert (
+        get_memoization_strategy(cond_fragment.children[0])
+        is MemoizationStrategy.PASSTHROUGH
+    )
     assert isinstance(match_fragment.children[0], Match)
     assert (
         get_memoization_strategy(match_fragment.children[0])
-        is MemoizationStrategy.SNAPSHOT
+        is MemoizationStrategy.PASSTHROUGH
     )
     assert (
         get_memoization_strategy(LeafComponent.create(Plain.create()))
@@ -611,7 +619,8 @@ def test_cond_non_stateful_cond_allows_stateful_children_to_memoize() -> None:
 
 
 def test_cond_and_match_strategy_classification() -> None:
-    """Cond uses passthrough while Match uses snapshot strategy."""
+    """Cond and Match both use passthrough; branches render on the page side."""
+    from reflex_components_core.core.cond import Cond
     from reflex_components_core.core.match import Match
 
     cond_non_stateful = rx.cond(
@@ -635,23 +644,21 @@ def test_cond_and_match_strategy_classification() -> None:
         rx.text("default"),
     )
 
-    components = (
-        cond_non_stateful,
-        cond_stateful,
-    )
-    for comp in components:
+    for comp in (cond_non_stateful, cond_stateful):
         assert isinstance(comp, Component)
         assert get_memoization_strategy(comp) is MemoizationStrategy.PASSTHROUGH
+        assert isinstance(comp.children[0], Cond)
+        assert (
+            get_memoization_strategy(comp.children[0])
+            is MemoizationStrategy.PASSTHROUGH
+        )
 
-    match_components = (
-        match_non_stateful,
-        match_stateful,
-    )
-    for comp in match_components:
+    for comp in (match_non_stateful, match_stateful):
         assert isinstance(comp, Component)
         assert isinstance(comp.children[0], Match)
         assert (
-            get_memoization_strategy(comp.children[0]) is MemoizationStrategy.SNAPSHOT
+            get_memoization_strategy(comp.children[0])
+            is MemoizationStrategy.PASSTHROUGH
         )
 
 
@@ -756,13 +763,13 @@ def test_cond_stateful_branch_component_renders_via_memoized_wrapper() -> None:
 
 
 def test_cond_stateful_condition_renders_branch_logic_in_memo_body() -> None:
-    """Stateful Cond memo body must render both branches, not a children hole.
+    """Stateful Cond memo body must select both branches via ``children`` indexing.
 
-    Regression: component-valued ``rx.cond`` currently returns an outer
-    Fragment, so when the stateful condition is memoized the generated memo
-    body can collapse to ``condition ? children : <empty>``. That drops the
-    false branch entirely and duplicates the true branch via the page-side
-    children payload.
+    Cond is now a passthrough wrapper: branch JSX is rendered on the page side
+    and passed as the ``children`` array. The memo body's ternary must select
+    ``children[0]`` for the true branch and ``children[1]`` for the false
+    branch — neither branch should collapse to a generic ``? children`` hole
+    nor inline the original branch text into the memo body.
     """
     from reflex.compiler.compiler import compile_memo_components
 
@@ -775,7 +782,7 @@ def test_cond_stateful_condition_renders_branch_logic_in_memo_body() -> None:
         assert isinstance(comp, Component)
         return comp
 
-    ctx, _page_ctx = _compile_single_page(page)
+    ctx, page_ctx = _compile_single_page(page)
     assert len(ctx.memoize_wrappers) == 1, (
         f"Expected stateful Cond to produce one memo wrapper, got: {list(ctx.memoize_wrappers)}"
     )
@@ -786,18 +793,31 @@ def test_cond_stateful_condition_renders_branch_logic_in_memo_body() -> None:
     )
     memo_code = "\n".join(code for _, code in memo_files)
 
-    assert '"yes"' in memo_code, (
-        "Cond memo body should render the true branch.\n"
+    assert "children?.at?.(0)" in memo_code, (
+        "Cond memo body should select the true branch via children[0].\n"
         f"Memo code snippet: {memo_code[:2000]}"
     )
-    assert '"no"' in memo_code, (
-        "Cond memo body should render the false branch.\n"
+    assert "children?.at?.(1)" in memo_code, (
+        "Cond memo body should select the false branch via children[1].\n"
         f"Memo code snippet: {memo_code[:2000]}"
     )
-    assert "? children" not in memo_code, (
-        "Cond memo body unexpectedly rendered a generic children hole instead "
-        "of branch-specific JSX.\n"
+    assert '"yes"' not in memo_code, (
+        "Cond memo body unexpectedly inlined the true branch.\n"
         f"Memo code snippet: {memo_code[:2000]}"
+    )
+    assert '"no"' not in memo_code, (
+        "Cond memo body unexpectedly inlined the false branch.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+
+    page_output = page_ctx.output_code or ""
+    assert '"yes"' in page_output, (
+        "Page output should render the true branch as a memo wrapper child.\n"
+        f"Page output snippet: {page_output[:2000]}"
+    )
+    assert '"no"' in page_output, (
+        "Page output should render the false branch as a memo wrapper child.\n"
+        f"Page output snippet: {page_output[:2000]}"
     )
 
 
@@ -833,12 +853,13 @@ def test_match_stateful_branch_component_renders_via_memoized_wrapper() -> None:
 
 
 def test_match_stateful_condition_uses_memoized_branch_wrapper_in_memo_body() -> None:
-    """Stateful Match memo body must call branch wrappers instead of inlining.
+    """Stateful Match passes branch wrappers as page-side children.
 
-    Regression: when both the match condition and a branch are stateful, the
-    Match wrapper itself should be memoized and the branch should be memoized
-    separately. The generated Match memo body must call the branch wrapper in
-    the selected case rather than inlining the original branch component.
+    Match is now a passthrough wrapper: when both the match condition and a
+    branch are stateful, the Match wrapper itself is memoized and the branch
+    is memoized separately. The Match memo body selects via ``children[i]``
+    indexing, and the page output renders the branch wrapper as a child of
+    the Match wrapper (rather than inlining the unwrapped branch component).
     """
     from reflex.compiler.compiler import compile_memo_components
 
@@ -851,7 +872,7 @@ def test_match_stateful_condition_uses_memoized_branch_wrapper_in_memo_body() ->
         assert isinstance(comp, Component)
         return comp
 
-    ctx, _page_ctx = _compile_single_page(page)
+    ctx, page_ctx = _compile_single_page(page)
     assert len(ctx.memoize_wrappers) == 2, (
         "Expected both Match and its stateful branch component to be memoized, "
         f"got wrappers: {list(ctx.memoize_wrappers)}"
@@ -872,19 +893,39 @@ def test_match_stateful_condition_uses_memoized_branch_wrapper_in_memo_body() ->
         code for path, code in memo_files if path.endswith(f"/{match_wrapper_tag}.jsx")
     )
 
-    assert f"jsx({branch_wrapper_tag}," in match_memo_code, (
-        f"Expected Match memo body to reference branch memo wrapper {branch_wrapper_tag!r}.\n"
+    assert "children?.at?.(0)" in match_memo_code, (
+        "Match memo body should select case 0 via children indexing.\n"
         f"Memo code snippet: {match_memo_code[:2000]}"
     )
-    assert 'jsx(WithProp,{label:"value"},);' not in match_memo_code, (
-        "Match memo body unexpectedly inlined the stateful branch component "
-        "instead of using its memo wrapper.\n"
+    assert "children?.at?.(1)" in match_memo_code, (
+        "Match memo body should select the default via children indexing.\n"
+        f"Memo code snippet: {match_memo_code[:2000]}"
+    )
+    assert f"jsx({branch_wrapper_tag}," not in match_memo_code, (
+        "Match memo body should not inline the branch wrapper; the branch "
+        "renders on the page side as a memo wrapper child.\n"
         f"Memo code snippet: {match_memo_code[:2000]}"
     )
 
+    page_output = page_ctx.output_code or ""
+    assert f"jsx({match_wrapper_tag}," in page_output, (
+        f"Page output should render the Match memo wrapper {match_wrapper_tag!r}.\n"
+        f"Output snippet: {page_output[:2000]}"
+    )
+    assert f"jsx({branch_wrapper_tag}," in page_output, (
+        f"Page output should render the branch memo wrapper {branch_wrapper_tag!r} "
+        "as a child of the Match wrapper.\n"
+        f"Output snippet: {page_output[:2000]}"
+    )
 
-def test_memoized_match_wrapper_has_no_page_side_case_children() -> None:
-    """Memoized Match wrapper should not receive case children from page output."""
+
+def test_memoized_match_wrapper_receives_case_children_in_page_output() -> None:
+    """Passthrough Match wrapper receives all case children from the page output.
+
+    With Match handled as a passthrough memo, the page renders each case's JSX
+    as a child of the Match wrapper. The memo body selects which child to mount
+    via ``children[i]`` indexing keyed on the (possibly stateful) condition.
+    """
 
     def page() -> Component:
         comp = rx.match(
@@ -907,19 +948,18 @@ def test_memoized_match_wrapper_has_no_page_side_case_children() -> None:
         f"Memo wrapper {wrapper_tag!r} not found in page output.\n"
         f"Output snippet: {output[:2000]}"
     )
+    # Each case-return JSX, plus the default, must reach the wrapper as a child.
+    for case_text in ('"A"', '"B"', '"default"'):
+        assert case_text in output, (
+            f"Expected case JSX {case_text} in page output as a Match wrapper child.\n"
+            f"Output snippet: {output[:2000]}"
+        )
+    # Match wrapper must be called with three positional children (the cases plus
+    # default), not as an empty-children call.
     assert re.search(
-        rf"jsx\({re.escape(wrapper_tag)},\s*\{{\}},\s*(\[\s*\]|)\s*\)",
+        rf"jsx\({re.escape(wrapper_tag)},\s*\{{\}},\s*jsx\(",
         output,
     ), (
-        "Memoized Match wrapper should be called without rendered match-case "
-        "children in page output.\n"
-        f"Output snippet: {output[:2000]}"
-    )
-    assert not re.search(
-        rf"jsx\({re.escape(wrapper_tag)},\s*\{{\}},\s*(\[\s*)?jsx\(",
-        output,
-    ), (
-        "Memoized Match wrapper unexpectedly received rendered children in page "
-        "output.\n"
+        "Match wrapper should receive case JSX as positional children in page output.\n"
         f"Output snippet: {output[:2000]}"
     )
