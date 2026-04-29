@@ -1,6 +1,7 @@
 """Display the title of the current page."""
 
 from reflex_base.components.component import field
+from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.vars.base import Var
 
 from reflex_components_core.el.elements.base import BaseHTML
@@ -11,6 +12,8 @@ class RawLink(BaseHTML):
 
     tag = "link"
 
+    _memoization_mode = MemoizationMode(recursive=False)
+
     href: Var[str] = field(doc="The href.")
 
     rel: Var[str] = field(doc="The type of link.")
@@ -20,6 +23,8 @@ class ScriptTag(BaseHTML):
     """A script tag with the specified type and source."""
 
     tag = "script"
+
+    _memoization_mode = MemoizationMode(recursive=False)
 
     type_: Var[str] = field(doc="The type of script represented.")
 

@@ -9,6 +9,7 @@ from typing import Any, ClassVar, Literal
 from reflex_base.components.component import field
 from reflex_base.components.tags.tag import Tag
 from reflex_base.constants import Dirs, EventTriggers
+from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.event import (
     FORM_DATA,
     EventChain,
@@ -309,6 +310,8 @@ class BaseInput(BaseHTML):
     """A base class for input elements."""
 
     tag = "input"
+
+    _memoization_mode = MemoizationMode(recursive=False)
 
     accept: Var[str] = field(doc="Accepted types of files when the input is file type")
 
@@ -656,6 +659,8 @@ class Textarea(BaseHTML):
     """Display the textarea element."""
 
     tag = "textarea"
+
+    _memoization_mode = MemoizationMode(recursive=False)
 
     auto_complete: Var[str] = field(
         doc="Whether the form control should have autocomplete enabled"

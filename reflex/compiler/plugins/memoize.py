@@ -71,12 +71,61 @@ def _compute_memo_tag(component: Component) -> str | None:
     ).capitalize()
 
 
+def _subtree_has_reactive_data(
+    component: Component, _seen: set[int] | None = None
+) -> bool:
+    """Whether ``component``'s subtree carries reactive signals worth memoizing.
+
+    No-arg event handlers (``on_click=State.ping``) contribute hooks only via
+    ``event_triggers`` / ``_get_events_hooks``, not as a Var, so the per-Var
+    scan must be paired with an explicit ``event_triggers`` check.
+
+    ``useRef`` from a static ``id`` prop is intentionally ignored — it lives
+    in ``_get_hooks_internal``, not in any Var, so static-id-only elements
+    don't surface here and aren't flagged.
+
+    Args:
+        component: The component whose subtree to inspect.
+        _seen: Internal ``id()`` set to avoid revisiting the same component
+            via overlapping ``var_data.components`` and ``children`` paths.
+
+    Returns:
+        True if the subtree carries event triggers, explicit hooks, or any
+        Var whose merged var_data has ``state`` or ``hooks``.
+    """
+    if _seen is None:
+        _seen = set()
+    if id(component) in _seen:
+        return False
+    _seen.add(id(component))
+
+    if component.event_triggers:
+        return True
+    if component._get_hooks() is not None or component._get_added_hooks():
+        return True
+    for var in component._get_vars(include_children=False):
+        var_data = var._get_all_var_data()
+        if var_data is None:
+            continue
+        if var_data.state or var_data.hooks:
+            return True
+        for comp in var_data.components:
+            if isinstance(comp, Component) and _subtree_has_reactive_data(comp, _seen):
+                return True
+    for child in component.children:
+        if isinstance(child, Component) and _subtree_has_reactive_data(child, _seen):
+            return True
+    return False
+
+
 def _should_memoize(component: Component) -> bool:
     """Decide whether ``component`` is a candidate for auto-memoization.
 
-    Checks for DIRECT triggers only (not walking into descendants): the
-    component's own Vars with var_data, event_triggers, or special child
-    types (Bare/Cond/Foreach/Match) whose probe Var carries var_data.
+    Snapshot boundaries (``recursive=False``) suppress their descendants,
+    so a stateful subtree must trigger wrapping at the boundary itself —
+    otherwise the state read leaks into the page module. Other components
+    are evaluated from their own props/triggers; descendants are visited
+    independently by the walker.
 
     Args:
         component: The candidate component.
@@ -107,10 +156,10 @@ def _should_memoize(component: Component) -> bool:
         if prop_var._get_all_var_data():
             return True
 
-    # Snapshot-strategy non-boundaries (structural forms or their parents)
-    # must memoize so the state-dependent render logic lands inside the memo
-    # body instead of the page.
     if strategy is MemoizationStrategy.SNAPSHOT and not is_snapshot_boundary(component):
+        return True
+
+    if is_snapshot_boundary(component) and _subtree_has_reactive_data(component):
         return True
 
     # Components with event triggers are always memoized (to wrap callbacks).

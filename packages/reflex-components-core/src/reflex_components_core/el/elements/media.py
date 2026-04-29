@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 from reflex_base.components.component import Component, ComponentNamespace, field
 from reflex_base.constants.colors import Color
+from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.vars.base import Var
 
 from reflex_components_core.el.elements.inline import ReferrerPolicy
@@ -15,6 +16,8 @@ class Area(BaseHTML):
     """Display the area element."""
 
     tag = "area"
+
+    _memoization_mode = MemoizationMode(recursive=False)
 
     alt: Var[str] = field(doc="Alternate text for the area, used for accessibility")
 
@@ -83,6 +86,8 @@ class Img(BaseHTML):
 
     tag = "img"
 
+    _memoization_mode = MemoizationMode(recursive=False)
+
     alt: Var[str] = field(doc="Alternative text for the image")
 
     cross_origin: Var[CrossOrigin] = field(
@@ -140,6 +145,8 @@ class Track(BaseHTML):
 
     tag = "track"
 
+    _memoization_mode = MemoizationMode(recursive=False)
+
     default: Var[bool] = field(
         doc="Indicates that the track should be enabled unless the user's preferences indicate otherwise"
     )
@@ -191,6 +198,8 @@ class Embed(BaseHTML):
     """Display the embed element."""
 
     tag = "embed"
+
+    _memoization_mode = MemoizationMode(recursive=False)
 
     src: Var[str] = field(doc="URL of the embedded content")
 
@@ -255,6 +264,8 @@ class Source(BaseHTML):
     """Display the source element."""
 
     tag = "source"
+
+    _memoization_mode = MemoizationMode(recursive=False)
 
     media: Var[str] = field(
         doc="Media query indicating what device the linked resource is optimized for"
@@ -875,11 +886,15 @@ class Desc(BaseHTML):
 
     tag = "desc"
 
+    _memoization_mode = MemoizationMode(recursive=False)
+
 
 class Title(BaseHTML):
     """The SVG title component for titles."""
 
     tag = "title"
+
+    _memoization_mode = MemoizationMode(recursive=False)
 
 
 class Metadata(BaseHTML):
@@ -893,6 +908,8 @@ class Script(BaseHTML):
 
     tag = "script"
 
+    _memoization_mode = MemoizationMode(recursive=False)
+
     type: Var[str] = field(doc="MIME type of the script.")
 
     href: Var[str] = field(doc="URL of external script.")
@@ -904,6 +921,8 @@ class SvgStyle(BaseHTML):
     """The SVG style component for stylesheets."""
 
     tag = "style"
+
+    _memoization_mode = MemoizationMode(recursive=False)
 
     type: Var[str] = field(doc="MIME type of the stylesheet.")
 

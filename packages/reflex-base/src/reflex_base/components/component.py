@@ -1556,15 +1556,14 @@ class Component(BaseComponent, ABC):
                     vars.append(var)
 
         if include_children:
+            yield from vars
             for child in self.children:
                 if not isinstance(child, Component) or id(child) in ignore_ids:
                     continue
                 ignore_ids.add(id(child))
-                child_vars = child._get_vars(
+                yield from child._get_vars(
                     include_children=include_children, ignore_ids=ignore_ids
                 )
-                vars.extend(child_vars)
-            yield from vars
             return
 
         # Freeze and cache the default-args result.

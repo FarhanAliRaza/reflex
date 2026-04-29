@@ -257,21 +257,25 @@ def test_common_memoization_snapshot_helper_classifies_snapshot_cases() -> None:
 
 
 def test_memoization_leaf_suppresses_descendant_wrapping() -> None:
-    """A MemoizationLeaf suppresses independent wrappers for its descendants.
+    """A snapshot boundary owns its subtree: descendants never wrap independently.
 
-    Even when a descendant (``Plain(STATE_VAR)``) would otherwise be wrapped,
-    being inside a leaf's subtree suppresses that wrapping. Whether or not the
-    leaf itself gets wrapped, descendants do not produce their own wrappers.
+    The boundary itself wraps once because its subtree is stateful (see
+    ``test_snapshot_boundary_wraps_subtree_once_when_descendant_is_stateful``).
+    The point of this test is the suppression invariant — only one wrapper
+    exists and it covers the boundary, never a separate wrapper for the
+    inner ``Plain(STATE_VAR)``.
     """
     ctx, _page_ctx = _compile_single_page(
         lambda: LeafComponent.create(
             Plain.create(STATE_VAR),  # would otherwise be independently memoized
         )
     )
-    # The inner Plain(STATE_VAR) is suppressed because it's inside the leaf's
-    # subtree. The leaf itself has no direct state dependency so no wrapper
-    # is emitted for it either.
-    assert len(ctx.memoize_wrappers) == 0
+    assert len(ctx.memoize_wrappers) == 1
+    wrapper_tag = next(iter(ctx.memoize_wrappers))
+    assert "leafcomponent" in wrapper_tag.lower(), (
+        f"The single wrapper should cover the leaf, not its descendant. "
+        f"Got: {wrapper_tag!r}"
+    )
 
 
 def test_generated_memo_component_is_not_itself_memoized() -> None:
@@ -1124,4 +1128,842 @@ def test_debounce_input_memo_renders_react_debounce_wrapper() -> None:
         "timeout ends up duplicated as a no-op CSS key.\n"
         f"css block: {css_contents!r}\n"
         f"Memo code snippet: {memo_code[:2000]}"
+    )
+
+
+def test_should_memoize_snapshot_boundary_with_stateful_descendant() -> None:
+    """A snapshot boundary memoizes when its subtree contains state-derived hooks.
+
+    ``LeafComponent`` mirrors the Radix-primitive shape: ``recursive=False``
+    set directly without inheriting from ``MemoizationLeaf``.
+    """
+    boundary = LeafComponent.create(Plain.create(STATE_VAR))
+    assert _should_memoize(boundary)
+
+
+def test_snapshot_boundary_wraps_subtree_once_when_descendant_is_stateful() -> None:
+    """A snapshot boundary with a stateful descendant produces exactly one wrapper.
+
+    The boundary owns its subtree; descendants must remain suppressed. End
+    result: one snapshot wrapper covering the boundary, no independent wrapper
+    for the stateful descendant.
+    """
+    ctx, page_ctx = _compile_single_page(
+        lambda: LeafComponent.create(Plain.create(STATE_VAR))
+    )
+    assert len(ctx.memoize_wrappers) == 1, (
+        "Expected exactly one snapshot wrapper covering the leaf and its "
+        f"stateful descendant. Got: {list(ctx.memoize_wrappers)}"
+    )
+    wrapper_tag = next(iter(ctx.memoize_wrappers))
+    assert "leafcomponent" in wrapper_tag.lower(), (
+        f"Wrapper should be derived from LeafComponent, got: {wrapper_tag!r}"
+    )
+    output = page_ctx.output_code or ""
+    assert f"jsx({wrapper_tag}," in output
+
+
+def test_snapshot_boundary_with_static_subtree_is_not_wrapped() -> None:
+    """A snapshot boundary with no stateful descendant emits no wrapper.
+
+    Sanity check: the new rule fires on subtree state, not on the boundary
+    flag alone. Static leaves stay on the page as before.
+    """
+    ctx, _page_ctx = _compile_single_page(
+        lambda: LeafComponent.create(Plain.create(LiteralVar.create("static")))
+    )
+    assert len(ctx.memoize_wrappers) == 0, (
+        f"Expected no wrapper for a fully static boundary; got: {list(ctx.memoize_wrappers)}"
+    )
+
+
+def test_snapshot_boundary_with_event_trigger_descendant_is_wrapped() -> None:
+    """A snapshot boundary with a stateful event-trigger descendant must wrap."""
+    from reflex_base.event import EventChain
+
+    event_var = Var(_js_expr="test_event")._replace(
+        _var_type=EventChain,
+        merge_var_data=VarData(state="TestState", hooks={"useTestState": None}),
+    )
+    inner = Plain.create()
+    inner.event_triggers["on_click"] = event_var
+    boundary = LeafComponent.create(inner)
+    assert _should_memoize(boundary), (
+        "Snapshot boundary with a stateful event-trigger descendant must memoize."
+    )
+
+
+def test_snapshot_boundary_with_no_arg_event_handler_descendant_is_wrapped() -> None:
+    """A boundary whose descendant has on_click without arg vars still wraps.
+
+    No-arg handlers (``on_click=State.ping``) contribute to the page only
+    via the descendant's ``event_triggers`` and ``_get_events_hooks`` — the
+    per-Var subtree scan misses them. The reactive-data check must also
+    inspect ``event_triggers`` directly so the boundary wraps and the
+    callback's ``useCallback`` lands inside the snapshot body.
+    """
+    inner = Plain.create()
+    inner.event_triggers["on_click"] = Var(_js_expr="evt")
+    boundary = LeafComponent.create(inner)
+    assert _should_memoize(boundary)
+
+
+def test_title_with_stateful_var_child_does_not_wrap_bare_independently() -> None:
+    """``rx.el.title(state_var)`` must not produce a Bare component child.
+
+    ``<title>`` is RCDATA — text content only. Wrapping the inner Bare as an
+    independent memo wrapper renders ``jsx("title", {}, jsx(Bare_xxx, {}))``
+    which React refuses to interpolate as text. Marking ``Title`` as a
+    snapshot boundary keeps the Bare inside the title's snapshot, where it
+    renders as a text interpolation.
+    """
+    from reflex_components_core.el.elements.metadata import Title
+
+    title = Title.create(STATE_VAR)
+    ctx, page_ctx = _compile_single_page(lambda: title)
+
+    assert len(ctx.memoize_wrappers) == 1, (
+        "Expected exactly one snapshot wrapper for the title; got: "
+        f"{list(ctx.memoize_wrappers)}"
+    )
+    wrapper_tag = next(iter(ctx.memoize_wrappers))
+    assert wrapper_tag.lower().startswith("title_"), (
+        f"Wrapper should be derived from Title, got: {wrapper_tag!r}"
+    )
+    output = page_ctx.output_code or ""
+    assert "Bare_comp" not in output, (
+        "Bare must not be independently memoized as a child of <title>. "
+        "It needs to remain a text interpolation inside the title's snapshot.\n"
+        f"Page output snippet: {output[:2000]}"
+    )
+
+
+def test_meta_with_stateful_var_child_does_not_wrap_bare_independently() -> None:
+    """``rx.el.meta(state_var)`` must not produce a Bare component child.
+
+    ``<meta>`` is a void element — it forbids any children at all. Memoizing
+    the Bare independently produces ``jsx("meta", {}, jsx(Bare_xxx, {}))``
+    which is invalid HTML.
+    """
+    from reflex_components_core.el.elements.metadata import Meta
+
+    meta = Meta.create(STATE_VAR)
+    ctx, page_ctx = _compile_single_page(lambda: meta)
+
+    assert len(ctx.memoize_wrappers) == 1, (
+        "Expected exactly one snapshot wrapper for the meta; got: "
+        f"{list(ctx.memoize_wrappers)}"
+    )
+    output = page_ctx.output_code or ""
+    assert "Bare_comp" not in output, (
+        "Bare must not be independently memoized as a child of <meta>.\n"
+        f"Page output snippet: {output[:2000]}"
+    )
+
+
+def _text_only_classes() -> list:
+    from reflex_components_core.el.elements.forms import Textarea
+    from reflex_components_core.el.elements.metadata import StyleEl
+    from reflex_components_core.el.elements.scripts import Script
+
+    return [
+        pytest.param(StyleEl, id="style"),
+        pytest.param(Textarea, id="textarea"),
+        pytest.param(Script, id="script"),
+    ]
+
+
+@pytest.mark.parametrize("cls", _text_only_classes())
+def test_text_only_element_with_stateful_var_child_does_not_wrap_bare(
+    cls: type[Component],
+) -> None:
+    """Text-only HTML elements must not wrap stateful Bare children as components.
+
+    ``<style>``/``<textarea>``/``<script>`` all have raw-text content models.
+    A JSX component child renders as a stringified ``[object Object]`` — the
+    text interpolation needs to land inside the element's snapshot body.
+    """
+    component = cls.create(STATE_VAR)
+    ctx, page_ctx = _compile_single_page(lambda: component)
+
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Expected exactly one snapshot wrapper; got: {list(ctx.memoize_wrappers)}"
+    )
+    output = page_ctx.output_code or ""
+    assert "Bare_comp" not in output, (
+        "Bare must not be independently memoized as a child of a raw-text "
+        f"element.\nPage output snippet: {output[:2000]}"
+    )
+
+
+def test_accordion_trigger_with_stateful_cond_is_memoized() -> None:
+    """AccordionTrigger holding a stateful cond wraps as a single snapshot.
+
+    AccordionTrigger sets ``recursive=False`` without inheriting from
+    ``MemoizationLeaf``; the boundary itself must memoize so the cond's
+    state read lands inside the snapshot rather than the page module.
+    """
+    from reflex_components_radix.primitives.accordion import AccordionTrigger
+
+    trigger = AccordionTrigger.create(
+        rx.cond(
+            SpecialFormMemoState.flag,
+            rx.text("Hide"),
+            rx.text("Show"),
+        )
+    )
+    ctx, page_ctx = _compile_single_page(lambda: trigger)
+
+    wrapper_tags = list(ctx.memoize_wrappers)
+    trigger_wrappers = [t for t in wrapper_tags if "trigger" in t.lower()]
+    assert trigger_wrappers, (
+        "AccordionTrigger with a stateful cond must produce its own snapshot "
+        f"wrapper. Got wrappers: {wrapper_tags}"
+    )
+
+    output = page_ctx.output_code or ""
+    assert "useContext(StateContexts" not in output, (
+        "State read leaked into the page module — the trigger's stateful cond "
+        "should be captured inside the snapshot wrapper instead.\n"
+        f"Page output snippet: {output[:2000]}"
+    )
+
+
+def _restricted_content_components() -> list:
+    """Build factories for all components flagged ``recursive=False`` in this PR.
+
+    Returns:
+        Parameterized factories yielding ``Component`` instances when called
+        with ``STATE_VAR`` as a child.
+    """
+    from reflex_components_core.base.link import RawLink, ScriptTag
+    from reflex_components_core.el.elements.forms import BaseInput, Textarea
+    from reflex_components_core.el.elements.inline import Br, Wbr
+    from reflex_components_core.el.elements.media import (
+        Area,
+        Desc,
+        Embed,
+        Img,
+        Source,
+        SvgStyle,
+        Track,
+    )
+    from reflex_components_core.el.elements.media import Script as SvgScript
+    from reflex_components_core.el.elements.media import Title as SvgTitle
+    from reflex_components_core.el.elements.metadata import (
+        Base,
+        Link,
+        Meta,
+        StyleEl,
+        Title,
+    )
+    from reflex_components_core.el.elements.scripts import Noscript, Script
+    from reflex_components_core.el.elements.tables import Col
+    from reflex_components_core.el.elements.typography import Hr
+
+    cases: list[tuple[str, type]] = [
+        # text-only (RCDATA / raw text)
+        ("title", Title),
+        ("style", StyleEl),
+        ("textarea", Textarea),
+        ("script", Script),
+        ("noscript", Noscript),
+        ("script_tag", ScriptTag),
+        # void HTML elements
+        ("meta", Meta),
+        ("base", Base),
+        ("link", Link),
+        ("raw_link", RawLink),
+        ("input", BaseInput),
+        ("br", Br),
+        ("wbr", Wbr),
+        ("col", Col),
+        ("hr", Hr),
+        ("area", Area),
+        ("img", Img),
+        ("track", Track),
+        ("embed", Embed),
+        ("source", Source),
+        # SVG raw-text equivalents
+        ("svg_desc", Desc),
+        ("svg_title", SvgTitle),
+        ("svg_script", SvgScript),
+        ("svg_style", SvgStyle),
+    ]
+    return [pytest.param(cls, id=name) for name, cls in cases]
+
+
+@pytest.mark.parametrize("component_cls", _restricted_content_components())
+def test_restricted_content_element_isolates_stateful_bare_via_snapshot(
+    component_cls: type[Component],
+) -> None:
+    """Restricted-content elements snapshot-wrap and never expose a Bare child.
+
+    Asserts both the classification (the element opts into SNAPSHOT) and the
+    invariant (a stateful Bare child stays inside the snapshot rather than
+    being independently wrapped as a JSX component child of an element whose
+    content model rejects components).
+    """
+    from reflex_base.components.memoize_helpers import is_snapshot_boundary
+
+    instance = component_cls.create()
+    assert is_snapshot_boundary(instance), (
+        f"{component_cls.__qualname__} should be classified as a snapshot boundary."
+    )
+    assert get_memoization_strategy(instance) is MemoizationStrategy.SNAPSHOT, (
+        f"{component_cls.__qualname__} should use SNAPSHOT strategy"
+    )
+
+    ctx, page_ctx = _compile_single_page(lambda: component_cls.create(STATE_VAR))
+    output = page_ctx.output_code or ""
+
+    assert "Bare_comp" not in output, (
+        f"Stateful Bare child of <{getattr(component_cls, 'tag', '?')}> "
+        f"({component_cls.__qualname__}) was independently wrapped. The "
+        "element's snapshot must capture the Bare inline.\n"
+        f"Page output snippet: {output[:2000]}"
+    )
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Expected exactly one snapshot wrapper for {component_cls.__qualname__}, "
+        f"got: {list(ctx.memoize_wrappers)}"
+    )
+
+
+def _compile_memo_module_text(ctx: CompileContext) -> str:
+    """Compile the auto-memo definitions and return the concatenated JSX text.
+
+    Args:
+        ctx: The compile context produced by ``_compile_single_page``.
+
+    Returns:
+        The full memo module source code joined by newlines.
+    """
+    from reflex.compiler.compiler import compile_memo_components
+
+    memo_files, _imports = compile_memo_components(
+        components=(),
+        experimental_memos=tuple(ctx.auto_memo_components.values()),
+    )
+    return "\n".join(code for _, code in memo_files)
+
+
+def test_title_memo_body_renders_text_interpolation_not_bare_component() -> None:
+    """The title's memo body must interpolate the state Var as text.
+
+    Concretely: the body should reference the stateful identifier (e.g.
+    ``"value"``-bearing context wiring) inside a ``jsx("title", {}, …)`` call,
+    and must not contain ``jsx(Bare_comp_…``. Combined with the page-side
+    "no Bare_comp" assertion, this proves the snapshot keeps the Bare inline.
+    """
+    from reflex_components_core.el.elements.metadata import Title
+
+    ctx, page_ctx = _compile_single_page(lambda: Title.create(STATE_VAR))
+    memo_code = _compile_memo_module_text(ctx)
+
+    assert 'jsx("title"' in memo_code, (
+        f'Title snapshot body should contain a literal ``jsx("title", …)`` '
+        f"call. Memo code:\n{memo_code[:2000]}"
+    )
+    assert "Bare_comp" not in memo_code, (
+        "Title memo body should not nest an independently-memoized Bare "
+        f"component.\nMemo code:\n{memo_code[:2000]}"
+    )
+
+    page_output = page_ctx.output_code or ""
+    assert "Bare_comp" not in page_output
+
+
+def test_meta_memo_body_renders_void_element_inline() -> None:
+    """Meta's snapshot body should call ``jsx("meta", …)`` with no nested Bare."""
+    from reflex_components_core.el.elements.metadata import Meta
+
+    ctx, _page_ctx = _compile_single_page(lambda: Meta.create(STATE_VAR))
+    memo_code = _compile_memo_module_text(ctx)
+
+    assert 'jsx("meta"' in memo_code
+    assert "Bare_comp" not in memo_code
+
+
+def test_snapshot_boundary_memo_body_subscribes_state_in_body_not_page() -> None:
+    """State subscription wiring lives in the memo body, not in the page module.
+
+    The whole point of memoization is to isolate state reads from the page.
+    This asserts that ``useContext(StateContexts…)`` (state subscription)
+    appears in the memo module and NOT in the page output, confirming the
+    state read landed inside the snapshot wrapper.
+    """
+    from reflex_components_radix.primitives.accordion import AccordionTrigger
+
+    trigger = AccordionTrigger.create(
+        rx.cond(
+            SpecialFormMemoState.flag,
+            rx.text("Hide"),
+            rx.text("Show"),
+        )
+    )
+    ctx, page_ctx = _compile_single_page(lambda: trigger)
+    memo_code = _compile_memo_module_text(ctx)
+
+    assert "useContext(StateContexts" in memo_code, (
+        "Snapshot wrapper should subscribe to state inside the memo body."
+    )
+    page_output = page_ctx.output_code or ""
+    assert "useContext(StateContexts" not in page_output, (
+        "State subscription should NOT appear in the page module — it must be "
+        "isolated inside the snapshot wrapper.\n"
+        f"Page output:\n{page_output[:2000]}"
+    )
+
+
+def test_nested_snapshot_boundaries_produce_one_outer_wrapper() -> None:
+    """A snapshot boundary inside another snapshot boundary produces ONE wrapper.
+
+    The outer boundary's suppressor stack must absorb the inner boundary into
+    its own snapshot. Two nested wrappers would both duplicate the inner
+    component AND defeat the boundary's "I own my subtree" contract.
+    """
+    inner = LeafComponent.create(Plain.create(STATE_VAR))
+    outer = LeafComponent.create(inner)
+    ctx, _page_ctx = _compile_single_page(lambda: outer)
+
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Nested snapshot boundaries must collapse to one outer wrapper; got "
+        f"{list(ctx.memoize_wrappers)}"
+    )
+
+
+def test_memoization_leaf_subclass_and_raw_recursive_false_behave_identically() -> None:
+    """Both ways to opt into recursive=False produce one snapshot wrapper.
+
+    ``MemoizationLeaf`` subclasses and components that simply set
+    ``_memoization_mode = MemoizationMode(recursive=False)`` are handled
+    equivalently by the compiler.
+    """
+    from reflex_base.components.component import MemoizationLeaf
+
+    class LeafSubclass(MemoizationLeaf):
+        tag = "LeafSubclass"
+        library = "leaf-subclass-lib"
+
+    leaf_subclass = LeafSubclass.create(Plain.create(STATE_VAR))
+    raw_leaf = LeafComponent.create(Plain.create(STATE_VAR))
+
+    ctx_a, _ = _compile_single_page(lambda: leaf_subclass)
+    ctx_b, _ = _compile_single_page(lambda: raw_leaf)
+
+    assert len(ctx_a.memoize_wrappers) == 1
+    assert len(ctx_b.memoize_wrappers) == 1
+
+
+def test_snapshot_boundary_with_multiple_stateful_descendants_emits_one_wrapper() -> (
+    None
+):
+    """One boundary + many stateful descendants = one wrapper (not one per descendant).
+
+    Without this invariant, a Radix primitive wrapping several stateful
+    children would balloon the page with one wrapper per child even though
+    the boundary already owns the subtree.
+    """
+    boundary = LeafComponent.create(
+        Plain.create(STATE_VAR),
+        Plain.create(STATE_VAR),
+        WithProp.create(label=STATE_VAR),
+    )
+    ctx, _page_ctx = _compile_single_page(lambda: boundary)
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Multiple stateful descendants must share the boundary's wrapper; got "
+        f"{list(ctx.memoize_wrappers)}"
+    )
+
+
+def test_repeated_snapshot_boundary_subtrees_dedupe_to_one_definition() -> None:
+    """Two identical boundary subtrees collapse to one memo definition.
+
+    Memo definitions are keyed on the rendered subtree shape, so two
+    identical boundaries should share a wrapper tag (even though they appear
+    twice on the page).
+    """
+    ctx, page_ctx = _compile_single_page(
+        lambda: Fragment.create(
+            LeafComponent.create(Plain.create(STATE_VAR)),
+            LeafComponent.create(Plain.create(STATE_VAR)),
+        )
+    )
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Identical boundary subtrees should share one wrapper; got "
+        f"{list(ctx.memoize_wrappers)}"
+    )
+    wrapper_tag = next(iter(ctx.memoize_wrappers))
+    assert (page_ctx.output_code or "").count(f"jsx({wrapper_tag},") == 2
+
+
+def test_passthrough_wrapper_inside_snapshot_boundary_is_suppressed() -> None:
+    """Passthrough-eligible descendants of a snapshot boundary are suppressed.
+
+    Without suppression, the descendant would emit its own wrapper that the
+    boundary's snapshot then references — which works visually but defeats
+    the "boundary owns the subtree" contract and pollutes the wrapper list.
+    """
+    # Plain.create(STATE_VAR) on its own is a passthrough memo candidate.
+    boundary = LeafComponent.create(Plain.create(STATE_VAR))
+    ctx, _page_ctx = _compile_single_page(lambda: boundary)
+    assert len(ctx.memoize_wrappers) == 1
+    wrapper_tag = next(iter(ctx.memoize_wrappers))
+    assert "leafcomponent" in wrapper_tag.lower(), (
+        "The single wrapper should be the boundary's, not a separate "
+        f"passthrough wrapper for the descendant. Got: {wrapper_tag!r}"
+    )
+
+
+def test_snapshot_boundary_with_stateful_prop_and_descendant_emits_one_wrapper() -> (
+    None
+):
+    """A boundary with both stateful props and stateful descendants memoizes once."""
+    from reflex_components_core.el.elements.metadata import Title
+
+    title = Title.create(
+        STATE_VAR,  # stateful child Bare
+        class_name=STATE_VAR.to(str),  # stateful prop
+    )
+    ctx, _page_ctx = _compile_single_page(lambda: title)
+    assert len(ctx.memoize_wrappers) == 1
+
+
+def test_disposition_never_overrides_snapshot_boundary_subtree_check() -> None:
+    """``MemoizationDisposition.NEVER`` wins even with a stateful subtree.
+
+    Snapshot boundaries that explicitly opt out via NEVER must stay
+    unwrapped — useful for components that do their own memoization
+    elsewhere or shouldn't be memoized for correctness reasons.
+    """
+    boundary = LeafComponent.create(Plain.create(STATE_VAR))
+    object.__setattr__(
+        boundary,
+        "_memoization_mode",
+        dataclasses.replace(
+            boundary._memoization_mode,
+            disposition=MemoizationDisposition.NEVER,
+        ),
+    )
+    assert not _should_memoize(boundary)
+
+
+def test_static_subtree_inside_passthrough_no_memo_at_all() -> None:
+    """Sanity: a fully static page produces no memo wrappers.
+
+    Guards against a regression where the new branch incorrectly fires for
+    components without state hooks.
+    """
+    ctx, _page_ctx = _compile_single_page(
+        lambda: rx.box(rx.text("static"), rx.text("also static"))
+    )
+    assert len(ctx.memoize_wrappers) == 0, (
+        f"No state, no wrappers expected. Got: {list(ctx.memoize_wrappers)}"
+    )
+
+
+def test_void_element_with_only_stateful_prop_memoizes_via_snapshot() -> None:
+    """A void element with only a stateful prop still snapshot-wraps cleanly.
+
+    Verifies that even without children, stateful props on void elements go
+    through the boundary's snapshot wrapper rather than degrading to a
+    passthrough that re-reads state on the page.
+    """
+    from reflex_components_core.el.elements.media import Img
+
+    img = Img.create(src=STATE_VAR.to(str))
+    ctx, page_ctx = _compile_single_page(lambda: img)
+    assert len(ctx.memoize_wrappers) == 1
+    assert "useContext(StateContexts" not in (page_ctx.output_code or "")
+
+
+def _static_id_only_factories() -> list:
+    from reflex_components_core.el.elements.forms import BaseInput
+    from reflex_components_core.el.elements.inline import Br
+    from reflex_components_core.el.elements.media import Img
+    from reflex_components_core.el.elements.metadata import Meta, Title
+
+    return [
+        pytest.param(lambda: Title.create("hello", id="t"), id="title_with_id"),
+        pytest.param(lambda: Img.create(src="/x.png", id="logo"), id="img_with_id"),
+        pytest.param(lambda: Br.create(id="br"), id="br_with_id"),
+        pytest.param(lambda: BaseInput.create(id="i"), id="input_with_id"),
+        pytest.param(
+            lambda: Meta.create(name="description", id="m"), id="meta_with_id"
+        ),
+    ]
+
+
+@pytest.mark.parametrize("factory", _static_id_only_factories())
+def test_static_restricted_element_with_id_only_does_not_memoize(
+    factory: Callable[[], Component],
+) -> None:
+    """Restricted-content elements with only an ``id`` ref and no state stay unwrapped.
+
+    The subtree scan filters on state/hooks-bearing var_data so ``useRef``
+    lines from ``id`` props alone do not trigger wrapping.
+    """
+    component = factory()
+    ctx, _page_ctx = _compile_single_page(lambda: component)
+    assert len(ctx.memoize_wrappers) == 0, (
+        f"Static restricted element with only an id ref should not memoize. "
+        f"Got wrappers: {list(ctx.memoize_wrappers)}"
+    )
+
+
+def test_static_restricted_element_no_id_no_children_does_not_memoize() -> None:
+    """Sanity: a fully static restricted element with no props/children stays unwrapped."""
+    from reflex_components_core.el.elements.metadata import Title
+
+    ctx, _page_ctx = _compile_single_page(lambda: Title.create("static-string"))
+    assert len(ctx.memoize_wrappers) == 0, (
+        f"Static title should not memoize. Got: {list(ctx.memoize_wrappers)}"
+    )
+
+
+def test_client_state_value_inside_snapshot_boundary_is_memoized() -> None:
+    """Client-state Vars are reactive and must trigger boundary memoization.
+
+    A ``client_state`` Var contributes its ``useState``/``useId`` hooks via
+    ``var_data.hooks`` without setting ``var_data.state``. The reactive-Var
+    walk must catch the hooks-only case so client-state-driven content
+    inside a snapshot boundary lands in the memo body.
+    """
+    from reflex_components_core.el.elements.metadata import Title
+
+    from reflex.experimental.client_state import ClientStateVar
+
+    cs_var = ClientStateVar.create("titletest", default="hi", global_ref=False)
+    title = Title.create(cs_var.value)
+    ctx, page_ctx = _compile_single_page(lambda: title)
+    assert len(ctx.memoize_wrappers) == 1, (
+        "Client-state-driven title content must memoize. Got: "
+        f"{list(ctx.memoize_wrappers)}"
+    )
+    page_output = page_ctx.output_code or ""
+    assert "useState" not in page_output, (
+        "Client-state hooks should be inside the memo body, not the page.\n"
+        f"Page output snippet: {page_output[:2000]}"
+    )
+
+
+def test_hooks_only_var_data_descendant_inside_snapshot_boundary_is_memoized() -> None:
+    """Hook-bearing VarData without ``state`` still triggers snapshot memoization.
+
+    Some frontend-only Vars contribute React hooks but do not carry a backend
+    state name. The snapshot-boundary subtree scan must catch those hooks-only
+    Vars so their hook lines land in the memo body instead of being suppressed
+    with the descendant.
+    """
+    hook_var = Var(_js_expr="hookOnlyProbe")._replace(
+        merge_var_data=VarData(hooks={"const hookOnlyProbe = useHookOnly();": None})
+    )
+    child = Plain.create()
+    child.special_props = [hook_var]
+    boundary = LeafComponent.create(child)
+
+    ctx, page_ctx = _compile_single_page(lambda: boundary)
+    memo_code = _compile_memo_module_text(ctx)
+
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Hooks-only descendant should produce one boundary wrapper, got: "
+        f"{list(ctx.memoize_wrappers)}"
+    )
+    assert "useHookOnly" in memo_code, (
+        "Hooks-only VarData should be emitted in the memo body.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+    assert "useHookOnly" not in (page_ctx.output_code or ""), (
+        "Hooks-only VarData leaked into the page module.\n"
+        f"Page output snippet: {(page_ctx.output_code or '')[:2000]}"
+    )
+
+
+def test_added_hook_descendant_inside_snapshot_boundary_is_memoized() -> None:
+    """Hooks from ``add_hooks`` descendants trigger snapshot memoization.
+
+    ``add_hooks`` output does not necessarily appear in any Var or event
+    trigger. Snapshot boundaries must still wrap so the walker skips the
+    descendant and the hook lands in the memo body, matching the signal used
+    by ``MemoizationLeaf.create``.
+    """
+
+    class HookOnlyChild(Component):
+        tag = "HookOnlyChild"
+        library = "hook-only-child-lib"
+
+        def add_hooks(self) -> list[str]:
+            """Add a hook line for the regression test.
+
+            Returns:
+                The hook lines this component contributes.
+            """
+            return ["const hookOnlyChild = useHookOnlyChild();"]
+
+    boundary = LeafComponent.create(HookOnlyChild.create())
+    assert _should_memoize(boundary)
+
+    ctx, page_ctx = _compile_single_page(lambda: boundary)
+    memo_code = _compile_memo_module_text(ctx)
+
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Added-hook descendant should produce one boundary wrapper, got: "
+        f"{list(ctx.memoize_wrappers)}"
+    )
+    assert "useHookOnlyChild" in memo_code, (
+        "add_hooks output should be emitted in the memo body.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+    assert "useHookOnlyChild" not in (page_ctx.output_code or ""), (
+        "add_hooks output leaked into the page module.\n"
+        f"Page output snippet: {(page_ctx.output_code or '')[:2000]}"
+    )
+
+
+def _restricted_stateful_attr_factories() -> list:
+    from reflex_components_core.el.elements.forms import BaseInput, Textarea
+    from reflex_components_core.el.elements.media import SvgStyle
+    from reflex_components_core.el.elements.metadata import Base, Link, Meta
+    from reflex_components_core.el.elements.scripts import Script
+
+    return [
+        pytest.param(lambda: Meta.create(content=STATE_VAR), id="meta_content"),
+        pytest.param(lambda: Base.create(href=STATE_VAR), id="base_href"),
+        pytest.param(lambda: Link.create(href=STATE_VAR), id="link_href"),
+        pytest.param(lambda: Script.create(src=STATE_VAR), id="script_src"),
+        pytest.param(lambda: BaseInput.create(value=STATE_VAR), id="input_value"),
+        pytest.param(lambda: Textarea.create(value=STATE_VAR), id="textarea_value"),
+        pytest.param(lambda: SvgStyle.create(media=STATE_VAR), id="svg_style_media"),
+    ]
+
+
+@pytest.mark.parametrize("factory", _restricted_stateful_attr_factories())
+def test_restricted_content_element_with_stateful_attribute_uses_snapshot(
+    factory: Callable[[], Component],
+) -> None:
+    """Stateful attrs on restricted-content elements are isolated in snapshots."""
+    ctx, page_ctx = _compile_single_page(factory)
+    memo_code = _compile_memo_module_text(ctx)
+
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Expected one snapshot wrapper for a stateful restricted attr, got: "
+        f"{list(ctx.memoize_wrappers)}"
+    )
+    assert "useTestState" not in (page_ctx.output_code or ""), (
+        "Reactive hook marker for restricted attr should not leak to page output.\n"
+        f"Page output snippet: {(page_ctx.output_code or '')[:2000]}"
+    )
+    assert "useTestState" in memo_code, (
+        "Reactive hook marker for restricted attr should live in the memo body.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+
+
+def _real_recursive_false_factories() -> list:
+    from reflex_components_radix.primitives.dialog import DialogTrigger
+    from reflex_components_radix.primitives.drawer import DrawerTrigger
+    from reflex_components_radix.themes.components.popover import PopoverTrigger
+    from reflex_components_radix.themes.components.tabs import TabsTrigger
+    from reflex_components_radix.themes.components.tooltip import Tooltip
+
+    return [
+        pytest.param(
+            lambda: DialogTrigger.create(rx.text(STATE_VAR)),
+            id="primitive_dialog_trigger",
+        ),
+        pytest.param(
+            lambda: DrawerTrigger.create(rx.text(STATE_VAR)),
+            id="primitive_drawer_trigger",
+        ),
+        pytest.param(
+            lambda: PopoverTrigger.create(rx.text(STATE_VAR)),
+            id="themes_popover_trigger",
+        ),
+        pytest.param(
+            lambda: TabsTrigger.create(rx.text(STATE_VAR), value="tab-1"),
+            id="themes_tabs_trigger",
+        ),
+        pytest.param(
+            lambda: Tooltip.create(rx.text(STATE_VAR), content="tip"),
+            id="themes_tooltip",
+        ),
+    ]
+
+
+@pytest.mark.parametrize("factory", _real_recursive_false_factories())
+def test_real_recursive_false_components_with_stateful_descendants_snapshot_wrap(
+    factory: Callable[[], Component],
+) -> None:
+    """Several real ``recursive=False`` components share the boundary behavior."""
+    component = factory()
+    ctx, page_ctx = _compile_single_page(lambda: component)
+
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Expected one wrapper for {type(component).__qualname__}, got: "
+        f"{list(ctx.memoize_wrappers)}"
+    )
+    wrapper_tag = next(iter(ctx.memoize_wrappers))
+    assert type(component).__name__.lower() in wrapper_tag.lower(), (
+        f"Wrapper {wrapper_tag!r} should be derived from {type(component).__name__}."
+    )
+    assert "useContext(StateContexts" not in (page_ctx.output_code or ""), (
+        "Stateful descendant under a real snapshot boundary leaked to page output.\n"
+        f"Page output snippet: {(page_ctx.output_code or '')[:2000]}"
+    )
+
+
+def test_restricted_content_element_with_id_and_stateful_child_still_memoizes() -> None:
+    """Static ref filtering must not suppress real stateful content."""
+    from reflex_components_core.el.elements.metadata import Title
+
+    title = Title.create(STATE_VAR, id="stateful-title")
+    ctx, page_ctx = _compile_single_page(lambda: title)
+    memo_code = _compile_memo_module_text(ctx)
+
+    assert len(ctx.memoize_wrappers) == 1, (
+        f"Stateful title with id should still memoize, got: {list(ctx.memoize_wrappers)}"
+    )
+    assert "ref_stateful_title" not in (page_ctx.output_code or ""), (
+        "The title ref should move with the snapshot body, not stay on the page.\n"
+        f"Page output snippet: {(page_ctx.output_code or '')[:2000]}"
+    )
+    assert "ref_stateful_title" in memo_code, (
+        "The title ref should be emitted inside the snapshot memo body.\n"
+        f"Memo code snippet: {memo_code[:2000]}"
+    )
+
+
+def test_each_memo_wrapper_emits_one_component_module_file() -> None:
+    """Every wrapper tag corresponds to exactly one ``components/{tag}.jsx`` file.
+
+    Locks the per-wrapper file invariant: ``compile_memo_components`` must
+    emit one module per wrapper (plus the shared index), so that React can
+    code-split per wrapper. A wrapper without a file (or a file without a
+    wrapper) would mean broken imports at runtime.
+    """
+    from reflex.compiler.compiler import compile_memo_components
+
+    ctx, _page_ctx = _compile_single_page(
+        lambda: Fragment.create(
+            Plain.create(STATE_VAR),
+            WithProp.create(label=STATE_VAR),
+            LeafComponent.create(Plain.create(STATE_VAR)),
+        )
+    )
+    memo_files, _imports = compile_memo_components(
+        components=(),
+        experimental_memos=tuple(ctx.auto_memo_components.values()),
+    )
+    component_module_names = {
+        Path(path).name
+        for path, _ in memo_files
+        if Path(path).parent.name == "components"
+    }
+    expected = {f"{tag}.jsx" for tag in ctx.memoize_wrappers}
+    assert component_module_names == expected, (
+        f"Per-wrapper file invariant broken. wrappers={sorted(ctx.memoize_wrappers)} "
+        f"files={sorted(component_module_names)}"
+    )
+    assert len(ctx.memoize_wrappers) >= 2, (
+        "Test should exercise multi-wrapper case to be meaningful."
     )

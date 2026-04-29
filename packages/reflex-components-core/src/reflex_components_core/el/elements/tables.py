@@ -3,6 +3,7 @@
 from typing import Literal
 
 from reflex_base.components.component import field
+from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.vars.base import Var
 
 from .base import BaseHTML
@@ -18,6 +19,8 @@ class Col(BaseHTML):
     """Display the col element."""
 
     tag = "col"
+
+    _memoization_mode = MemoizationMode(recursive=False)
 
     span: Var[int] = field(doc="Number of columns the col element spans")
 

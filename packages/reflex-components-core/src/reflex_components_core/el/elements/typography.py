@@ -3,6 +3,7 @@
 from typing import ClassVar, Literal
 
 from reflex_base.components.component import field
+from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.vars.base import Var
 
 from .base import BaseHTML
@@ -56,6 +57,8 @@ class Hr(BaseHTML):
     """Display the hr element."""
 
     tag = "hr"
+
+    _memoization_mode = MemoizationMode(recursive=False)
 
 
 class Li(BaseHTML):
