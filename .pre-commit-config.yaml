@@ -31,6 +31,7 @@ repos:
     entry: python3 scripts/make_pyi.py
     language: system
     always_run: true
+    pass_filenames: false
     require_serial: true
 - repo: local
   hooks:

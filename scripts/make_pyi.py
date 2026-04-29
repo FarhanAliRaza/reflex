@@ -1,17 +1,34 @@
-"""The pyi generator module."""
+"""The pyi generator module.
 
+The last commit that touched ``pyi_hashes.json`` is used as the baseline of
+"last successful regeneration". Sources changed since that commit (committed,
+staged, unstaged, untracked) drive an incremental run; the change set is
+expanded along the import graph so modifying a parent class also regenerates
+the stubs of every subclass that inherits from it.
+
+A full regeneration is forced when ``pyi_hashes.json`` is absent, or when the
+generator's own files (``scripts/make_pyi.py`` or the ``PyiGenerator``
+library) appear in the change set.
+"""
+
+import ast
 import logging
 import subprocess
 import sys
+from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
 
-from reflex_base.utils.pyi_generator import PyiGenerator, _relative_to_pwd
+from reflex_base.utils.pyi_generator import PyiGenerator
 
 logger = logging.getLogger("pyi_generator")
 
-LAST_RUN_COMMIT_SHA_FILE = Path(".pyi_generator_last_run").resolve()
-GENERATOR_FILE = Path(__file__).resolve()
-GENERATOR_DIFF_FILE = Path(".pyi_generator_diff").resolve()
+PYI_HASHES = Path("pyi_hashes.json")
+GENERATOR_PATHS = frozenset({
+    "scripts/make_pyi.py",
+    "packages/reflex-base/src/reflex_base/utils/pyi_generator.py",
+})
+
 DEFAULT_TARGETS = [
     "reflex/components",
     "reflex/experimental",
@@ -31,75 +48,219 @@ DEFAULT_TARGETS = [
 ]
 
 
-def _git_diff(args: list[str]) -> str:
-    """Run a git diff command.
+def _git(*args: str) -> list[str]:
+    """Run ``git`` with `args` and return non-empty stdout lines.
 
     Args:
-        args: The args to pass to git diff.
+        *args: Arguments forwarded to ``git``.
 
     Returns:
-        The output of the git diff command.
+        Non-empty lines of standard output, with trailing newlines stripped.
     """
-    cmd = ["git", "diff", "--no-color", *args]
-    return subprocess.run(cmd, capture_output=True, encoding="utf-8").stdout
+    result = subprocess.run(["git", *args], capture_output=True, text=True, check=False)
+    return [line for line in result.stdout.splitlines() if line]
 
 
-def _git_changed_files(args: list[str] | None = None) -> list[Path]:
-    """Get the list of changed files for a git diff command.
-
-    Args:
-        args: The args to pass to git diff.
+def _last_regen_sha() -> str | None:
+    """Return the SHA of the last commit that touched ``pyi_hashes.json``.
 
     Returns:
-        The list of changed files.
+        The commit SHA, or ``None`` if the file is missing or has no history.
     """
-    if not args:
-        args = []
-
-    if "--name-only" not in args:
-        args.insert(0, "--name-only")
-
-    diff = _git_diff(args).splitlines()
-    return [Path(file.strip()) for file in diff]
-
-
-def _get_changed_files() -> list[Path] | None:
-    """Get the list of changed files since the last run of the generator.
-
-    Returns:
-        The list of changed files, or None if all files should be regenerated.
-    """
-    try:
-        last_run_commit_sha = LAST_RUN_COMMIT_SHA_FILE.read_text().strip()
-    except FileNotFoundError:
-        logger.info(
-            "make_pyi.py last run could not be determined, regenerating all .pyi files"
-        )
+    if not PYI_HASHES.exists():
         return None
-    changed_files = _git_changed_files([f"{last_run_commit_sha}..HEAD"])
-    # get all unstaged changes
-    changed_files.extend(_git_changed_files())
-    if _relative_to_pwd(GENERATOR_FILE) not in changed_files:
-        return changed_files
-    logger.info("make_pyi.py has changed, checking diff now")
-    diff = "".join(_git_diff([GENERATOR_FILE.as_posix()]).splitlines()[2:])
+    out = _git("log", "-1", "--format=%H", "--", str(PYI_HASHES))
+    return out[0] if out else None
 
+
+def _changed_python_paths(sha: str) -> set[str]:
+    """All ``.py`` paths changed since `sha`.
+
+    A single ``git diff <sha>`` covers committed, staged, and unstaged changes
+    (it diffs the working tree against the commit). Brand-new untracked files
+    aren't included; ``git add`` them first to bring them into scope.
+
+    Args:
+        sha: The baseline commit SHA.
+
+    Returns:
+        Repo-relative paths of every ``.py`` file changed since `sha`.
+    """
+    return {p for p in _git("diff", "--name-only", sha) if p.endswith(".py")}
+
+
+def _key(path: Path) -> str:
+    """POSIX-style repo-relative string key for `path`.
+
+    Args:
+        path: The absolute path to convert.
+
+    Returns:
+        Repo-relative POSIX path string.
+    """
+    return path.relative_to(Path.cwd()).as_posix()
+
+
+def _gather_sources(targets: list[str]) -> list[Path]:
+    """Resolve every ``.py`` file reachable from `targets`.
+
+    Args:
+        targets: User-provided target list (files or directories).
+
+    Returns:
+        Sorted list of absolute paths to ``.py`` files under `targets`.
+    """
+    seen: set[Path] = set()
+    for target in targets:
+        p = Path(target).resolve()
+        if p.is_file() and p.suffix == ".py":
+            seen.add(p)
+        elif p.is_dir():
+            seen.update(p.rglob("*.py"))
+    return sorted(seen)
+
+
+def _package_parts(path: Path) -> list[str]:
+    """Dotted parts of the package containing `path`.
+
+    For ``pkg/foo/bar.py`` and for ``pkg/foo/__init__.py`` this returns
+    ``["pkg", "foo"]`` — i.e. the package the module participates in, not the
+    module itself.
+
+    Args:
+        path: Absolute path to a ``.py`` file.
+
+    Returns:
+        Package parts in import order (top-level first), or ``[]`` if `path`
+        is not inside a package.
+    """
+    parts: list[str] = []
+    parent = path.parent
+    while (parent / "__init__.py").exists() and parent != parent.parent:
+        parts.append(parent.name)
+        parent = parent.parent
+    return list(reversed(parts))
+
+
+def _module_aliases(path: Path) -> set[str]:
+    """Dotted module names that an ``import`` could resolve to `path`.
+
+    Walks upward while parent directories contain ``__init__.py`` to recover
+    the top-level package. For ``__init__.py`` files, also emits the package
+    name on its own (``import pkg`` reaches ``pkg/__init__.py``).
+
+    Args:
+        path: Absolute path to a ``.py`` file.
+
+    Returns:
+        Set of dotted module names that could refer to `path`.
+    """
+    pkg = _package_parts(path)
+    if path.stem == "__init__":
+        full = ".".join([*pkg, "__init__"])
+        aliases = {full}
+        if pkg:
+            aliases.add(".".join(pkg))
+        return aliases
+    return {".".join([*pkg, path.stem])} if pkg else {path.stem}
+
+
+def _iter_import_nodes(
+    nodes: Iterable[ast.AST],
+) -> Iterable[ast.Import | ast.ImportFrom]:
+    """Yield import nodes reachable without entering function or class bodies.
+
+    Imports live at module top level or inside ``if TYPE_CHECKING:`` /
+    ``try/except ImportError`` / ``with`` blocks. Walking function and class
+    bodies wastes time and never finds anything that shapes the import graph.
+
+    Args:
+        nodes: AST nodes to scan (typically ``tree.body``).
+
+    Yields:
+        Each ``ast.Import`` / ``ast.ImportFrom`` node encountered.
+    """
+    for node in nodes:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            yield node
+        elif isinstance(node, ast.If):
+            yield from _iter_import_nodes(node.body)
+            yield from _iter_import_nodes(node.orelse)
+        elif isinstance(node, ast.Try):
+            yield from _iter_import_nodes(node.body)
+            yield from _iter_import_nodes(node.orelse)
+            yield from _iter_import_nodes(node.finalbody)
+            for handler in node.handlers:
+                yield from _iter_import_nodes(handler.body)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            yield from _iter_import_nodes(node.body)
+
+
+def _imports_in(path: Path) -> set[str]:
+    """Absolute module names imported by `path`.
+
+    For ``from pkg import name`` we emit both ``pkg`` and ``pkg.name`` so the
+    graph captures dependencies on either the package or one of its submodules.
+    Relative imports (``from .base import X``, ``from ..util import Y``) are
+    resolved against `path`'s own package so they participate in the graph.
+
+    Args:
+        path: Absolute path to a ``.py`` file.
+
+    Returns:
+        Dotted module names referenced by imports in `path`.
+    """
     try:
-        last_diff = GENERATOR_DIFF_FILE.read_text()
-        if diff != last_diff:
-            logger.info("make_pyi.py has changed, regenerating all .pyi files")
-            changed_files = None
-        else:
-            logger.info("make_pyi.py has not changed, only regenerating changed files")
-    except FileNotFoundError:
-        logger.info(
-            "make_pyi.py diff could not be determined, regenerating all .pyi files"
-        )
-        changed_files = None
+        tree = ast.parse(path.read_bytes(), filename=str(path))
+    except (OSError, SyntaxError):
+        return set()
+    imports: set[str] = set()
+    pkg = _package_parts(path)
+    for node in _iter_import_nodes(tree.body):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+            continue
+        if node.level == 0:
+            if node.module:
+                imports.add(node.module)
+                imports.update(f"{node.module}.{alias.name}" for alias in node.names)
+            continue
+        if node.level > len(pkg):
+            continue
+        base = pkg[: len(pkg) - (node.level - 1)]
+        if not base:
+            continue
+        target = ".".join([*base, node.module]) if node.module else ".".join(base)
+        imports.add(target)
+        imports.update(f"{target}.{alias.name}" for alias in node.names)
+    return imports
 
-    GENERATOR_DIFF_FILE.write_text(diff)
 
-    return changed_files
+def _expand_with_dependents(changed: set[Path], sources: list[Path]) -> set[Path]:
+    """Add every source that transitively imports a changed source.
+
+    Args:
+        changed: Sources detected as directly modified.
+        sources: All sources reachable from the targets.
+
+    Returns:
+        `changed` union all sources whose import graph reaches a changed source.
+    """
+    importers: dict[str, set[Path]] = defaultdict(set)
+    for src in sources:
+        for mod in _imports_in(src):
+            importers[mod].add(src)
+
+    seen = set(changed)
+    queue = list(changed)
+    while queue:
+        current = queue.pop()
+        for alias in _module_aliases(current):
+            for dependent in importers.get(alias, ()):
+                if dependent not in seen:
+                    seen.add(dependent)
+                    queue.append(dependent)
+    return seen
 
 
 if __name__ == "__main__":
@@ -111,8 +272,6 @@ if __name__ == "__main__":
         if len(sys.argv) > 1
         else DEFAULT_TARGETS
     )
-
-    # Only include targets that have a prefix in the default target list
     targets = [
         target
         for target in targets
@@ -121,16 +280,31 @@ if __name__ == "__main__":
 
     logger.info(f"Running .pyi generator for {targets}")
 
-    changed_files = _get_changed_files()
-    if changed_files is None:
-        logger.info("Changed files could not be detected, regenerating all .pyi files")
+    sha = _last_regen_sha()
+    if sha is None:
+        logger.info("No pyi_hashes.json baseline in git, regenerating all .pyi files")
+        changed_files: list[Path] | None = None
     else:
-        logger.info(f"Detected changed files: {changed_files}")
+        changed = _changed_python_paths(sha)
+        if changed & GENERATOR_PATHS:
+            logger.info("Generator changed, regenerating all .pyi files")
+            changed_files = None
+        else:
+            sources = _gather_sources(targets)
+            sources_by_key = {_key(p): p for p in sources}
+            directly_changed = {
+                sources_by_key[p] for p in changed if p in sources_by_key
+            }
+            if not directly_changed:
+                logger.info("No source files changed since last regeneration")
+                changed_files = []
+            else:
+                expanded = _expand_with_dependents(directly_changed, sources)
+                logger.info(
+                    f"Detected {len(directly_changed)} direct change(s), "
+                    f"{len(expanded)} after transitive expansion"
+                )
+                changed_files = [Path(_key(p)) for p in expanded]
 
     gen = PyiGenerator()
     gen.scan_all(targets, changed_files, use_json=True)
-
-    current_commit_sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], capture_output=True, encoding="utf-8"
-    ).stdout.strip()
-    LAST_RUN_COMMIT_SHA_FILE.write_text(current_commit_sha)

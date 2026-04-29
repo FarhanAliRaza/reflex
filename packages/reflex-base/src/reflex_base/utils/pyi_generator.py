@@ -1607,7 +1607,10 @@ class PyiGenerator:
     modules: list = []
     root: str = ""
     current_module: Any = {}
-    written_files: list[tuple[str, str]] = []
+
+    def __init__(self) -> None:
+        """Initialize per-instance scan state."""
+        self.written_files: list[tuple[str, str]] = []
 
     def _scan_files(self, files: list[Path]):
         max_workers = min(multiprocessing.cpu_count() or 1, len(files), 8)
@@ -1673,7 +1676,7 @@ class PyiGenerator:
                 and target_path.suffix == ".py"
                 and target_path.name not in EXCLUDED_FILES
             ):
-                file_targets.append(target_path)
+                file_targets.append(target_path.resolve())
                 continue
             if not target_path.is_dir():
                 continue
@@ -1712,69 +1715,47 @@ class PyiGenerator:
             subprocess.run(["ruff", "format", *file_paths])
             subprocess.run(["ruff", "check", "--fix", *file_paths])
 
-        if use_json:
-            if file_paths and changed_files is None:
-                file_paths = list(map(Path, file_paths))
-                top_dir = file_paths[0].parent
-                for file_path in file_paths:
-                    file_parent = file_path.parent
-                    while len(file_parent.parts) > len(top_dir.parts):
-                        file_parent = file_parent.parent
-                    while len(top_dir.parts) > len(file_parent.parts):
-                        top_dir = top_dir.parent
-                    while not file_parent.samefile(top_dir):
-                        file_parent = file_parent.parent
-                        top_dir = top_dir.parent
+        if use_json and (file_paths or file_targets):
+            file_paths = list(map(Path, file_paths))
+            anchor = (
+                file_paths[0].parent if file_paths else file_targets[0].resolve().parent
+            )
+            pyi_hashes_parent = anchor
+            while (
+                pyi_hashes_parent != pyi_hashes_parent.parent
+                and not (pyi_hashes_parent / PYI_HASHES).exists()
+            ):
+                pyi_hashes_parent = pyi_hashes_parent.parent
 
-                while (
-                    not top_dir.samefile(top_dir.parent)
-                    and not (top_dir / PYI_HASHES).exists()
-                ):
-                    top_dir = top_dir.parent
+            pyi_hashes_file = pyi_hashes_parent / PYI_HASHES
+            if pyi_hashes_file.exists():
+                existing = json.loads(pyi_hashes_file.read_text())
+            else:
+                pyi_hashes_file = (Path.cwd() / PYI_HASHES).resolve()
+                pyi_hashes_parent = pyi_hashes_file.parent
+                existing = {}
 
-                pyi_hashes_file = top_dir / PYI_HASHES
+            produced = {
+                f.relative_to(pyi_hashes_parent).as_posix(): h
+                for f, h in zip(file_paths, hashes, strict=True)
+            }
+            scanned: set[str] = set()
+            for source in file_targets:
+                pyi_path = source.with_suffix(".pyi")
+                if pyi_path.is_relative_to(pyi_hashes_parent):
+                    scanned.add(pyi_path.relative_to(pyi_hashes_parent).as_posix())
+            pyi_hashes = {
+                entry: produced.get(entry, current)
+                for entry, current in existing.items()
+                if (entry in produced or entry not in scanned)
+                and (pyi_hashes_parent / entry).with_suffix(".py").exists()
+            }
+            for entry, hashed in produced.items():
+                pyi_hashes.setdefault(entry, hashed)
 
-                if pyi_hashes_file.exists():
-                    pyi_hashes_file.write_text(
-                        json.dumps(
-                            dict(
-                                zip(
-                                    [
-                                        f.relative_to(pyi_hashes_file.parent).as_posix()
-                                        for f in file_paths
-                                    ],
-                                    hashes,
-                                    strict=True,
-                                )
-                            ),
-                            indent=2,
-                            sort_keys=True,
-                        )
-                        + "\n",
-                    )
-            elif file_paths:
-                file_paths = list(map(Path, file_paths))
-                pyi_hashes_parent = file_paths[0].parent
-                while (
-                    not pyi_hashes_parent.samefile(pyi_hashes_parent.parent)
-                    and not (pyi_hashes_parent / PYI_HASHES).exists()
-                ):
-                    pyi_hashes_parent = pyi_hashes_parent.parent
-
-                pyi_hashes_file = pyi_hashes_parent / PYI_HASHES
-                if pyi_hashes_file.exists():
-                    pyi_hashes = json.loads(pyi_hashes_file.read_text())
-                    for file_path, hashed_content in zip(
-                        file_paths, hashes, strict=False
-                    ):
-                        formatted_path = file_path.relative_to(
-                            pyi_hashes_parent
-                        ).as_posix()
-                        pyi_hashes[formatted_path] = hashed_content
-
-                    pyi_hashes_file.write_text(
-                        json.dumps(pyi_hashes, indent=2, sort_keys=True) + "\n"
-                    )
+            pyi_hashes_file.write_text(
+                json.dumps(pyi_hashes, indent=2, sort_keys=True) + "\n"
+            )
 
 
 if __name__ == "__main__":

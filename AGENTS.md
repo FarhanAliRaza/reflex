@@ -85,7 +85,7 @@ Playwright tests use the `page` fixture and navigate to `harness.frontend_url`. 
 
 ## .pyi stubs
 
-When adding/modifying components: `uv run python scripts/make_pyi.py`. Commit `pyi_hashes.json` (not `.pyi` files). If the diff removes many modules, run `uv sync`, delete `.pyi_generator_last_run`, and regenerate.
+When components change, run `uv run python scripts/make_pyi.py` and commit only `pyi_hashes.json`. It incrementally regenerates changed stubs and dependent subclasses.
 
 ## Breaking changes and deprecation
 
