@@ -10,3 +10,8 @@ def test_code_light_dark_theme(theme, expected):
     code_block = CodeBlock.create(theme=theme)
 
     assert code_block.theme._js_expr == expected  # pyright: ignore [reportAttributeAccessIssue]
+
+
+def test_code_block_rejects_string_theme():
+    with pytest.raises(TypeError, match=r"CodeBlock\.theme"):
+        CodeBlock.create("print('Hello')", theme="one_dark")  # pyright: ignore[reportArgumentType]
