@@ -72,7 +72,7 @@ def _compute_memo_tag(component: Component) -> str | None:
 
 
 def _subtree_has_reactive_data(
-    component: Component, _seen: set[int] | None = None
+    component: Component, _cache: dict[int, bool] | None = None
 ) -> bool:
     """Whether ``component``'s subtree carries reactive signals worth memoizing.
 
@@ -86,21 +86,54 @@ def _subtree_has_reactive_data(
 
     Args:
         component: The component whose subtree to inspect.
-        _seen: Internal ``id()`` set to avoid revisiting the same component
-            via overlapping ``var_data.components`` and ``children`` paths.
+        _cache: Internal ``id()``-keyed cache of per-subtree results so
+            components reachable via overlapping ``var_data.components`` and
+            ``children`` paths are evaluated once. ``False`` is also used as
+            a transient placeholder while a subtree is being computed to
+            break cycles.
 
     Returns:
         True if the subtree carries event triggers, explicit hooks, or any
         Var whose merged var_data has ``state`` or ``hooks``.
     """
-    if _seen is None:
-        _seen = set()
-    if id(component) in _seen:
-        return False
-    _seen.add(id(component))
+    if _cache is None:
+        _cache = {}
+    key = id(component)
+    cached = _cache.get(key)
+    if cached is not None:
+        return cached
+    # Placeholder breaks cycles: a subtree that references itself is
+    # treated as non-reactive on the recursive arm; the real result for
+    # this node is written back below.
+    _cache[key] = False
+    result = _component_subtree_is_reactive(component, _cache)
+    _cache[key] = result
+    return result
 
-    if component.event_triggers:
-        return True
+
+def _component_subtree_is_reactive(
+    component: Component, _cache: dict[int, bool]
+) -> bool:
+    """Inner walk for :func:`_subtree_has_reactive_data` (uncached node check).
+
+    Internal hooks (``_get_hooks_internal``) cover event-trigger callbacks,
+    lifecycle hooks (``on_mount``/``on_unmount``), and Var-derived hooks
+    (state context, client state, custom). The static ``id`` ref hook is
+    explicitly subtracted so an id-only element does not flag as reactive.
+
+    Args:
+        component: The component to inspect.
+        _cache: Shared cache passed through recursive calls.
+
+    Returns:
+        True if ``component`` itself or any reachable descendant carries
+        reactive signals.
+    """
+    ref_hook = component._get_ref_hook()
+    ref_hook_key = str(ref_hook) if ref_hook is not None else None
+    for hook_key in component._get_hooks_internal():
+        if hook_key != ref_hook_key:
+            return True
     if component._get_hooks() is not None or component._get_added_hooks():
         return True
     for var in component._get_vars(include_children=False):
@@ -110,10 +143,10 @@ def _subtree_has_reactive_data(
         if var_data.state or var_data.hooks:
             return True
         for comp in var_data.components:
-            if isinstance(comp, Component) and _subtree_has_reactive_data(comp, _seen):
+            if isinstance(comp, Component) and _subtree_has_reactive_data(comp, _cache):
                 return True
     for child in component.children:
-        if isinstance(child, Component) and _subtree_has_reactive_data(child, _seen):
+        if isinstance(child, Component) and _subtree_has_reactive_data(child, _cache):
             return True
     return False
 

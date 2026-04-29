@@ -1,22 +1,19 @@
 """Metadata classes."""
 
-from reflex_base.components.component import field
-from reflex_base.constants.compiler import MemoizationMode
+from reflex_base.components.component import MemoizationLeaf, field
 from reflex_base.vars.base import Var
 
 from reflex_components_core.el.element import Element
 from reflex_components_core.el.elements.inline import ReferrerPolicy
 from reflex_components_core.el.elements.media import CrossOrigin
 
-from .base import BaseHTML
+from .base import BaseHTML, VoidBaseHTML
 
 
-class Base(BaseHTML):
+class Base(VoidBaseHTML):
     """Display the base element."""
 
     tag = "base"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
     href: Var[str]
     target: Var[str]
@@ -28,12 +25,10 @@ class Head(BaseHTML):
     tag = "head"
 
 
-class Link(BaseHTML):
+class Link(VoidBaseHTML):
     """Display the link element."""
 
     tag = "link"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
     cross_origin: Var[CrossOrigin] = field(
         doc="Specifies the CORS settings for the linked resource"
@@ -66,12 +61,10 @@ class Link(BaseHTML):
     type: Var[str] = field(doc="Specifies the MIME type of the linked document")
 
 
-class Meta(BaseHTML):  # Inherits common attributes from BaseHTML
+class Meta(VoidBaseHTML):  # Inherits common attributes from BaseHTML
     """Display the meta element."""
 
     tag = "meta"  # The HTML tag for this element is <meta>
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
     char_set: Var[str] = field(
         doc="Specifies the character encoding for the HTML document"
@@ -88,16 +81,14 @@ class Meta(BaseHTML):  # Inherits common attributes from BaseHTML
     property: Var[str] = field(doc="The type of metadata value.")
 
 
-class Title(Element):
+class Title(MemoizationLeaf, Element):
     """Display the title element."""
 
     tag = "title"
 
-    _memoization_mode = MemoizationMode(recursive=False)
-
 
 # Had to be named with an underscore so it doesn't conflict with reflex.style Style in pyi
-class StyleEl(Element):
+class StyleEl(MemoizationLeaf, Element):
     """Display the style element."""
 
     tag = "style"
@@ -105,8 +96,6 @@ class StyleEl(Element):
     media: Var[str]
 
     suppress_hydration_warning: Var[bool] = Var.create(True)
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
 
 base = Base.create

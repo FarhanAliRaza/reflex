@@ -4,20 +4,17 @@ from typing import Any, Literal
 
 from reflex_base.components.component import Component, ComponentNamespace, field
 from reflex_base.constants.colors import Color
-from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.vars.base import Var
 
 from reflex_components_core.el.elements.inline import ReferrerPolicy
 
-from .base import BaseHTML
+from .base import BaseHTML, RawTextBaseHTML, VoidBaseHTML
 
 
-class Area(BaseHTML):
+class Area(VoidBaseHTML):
     """Display the area element."""
 
     tag = "area"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
     alt: Var[str] = field(doc="Alternate text for the area, used for accessibility")
 
@@ -81,12 +78,10 @@ ImageDecoding = Literal["async", "auto", "sync"]
 ImageLoading = Literal["eager", "lazy"]
 
 
-class Img(BaseHTML):
+class Img(VoidBaseHTML):
     """Display the img element."""
 
     tag = "img"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
     alt: Var[str] = field(doc="Alternative text for the image")
 
@@ -140,12 +135,10 @@ class Map(BaseHTML):
     )
 
 
-class Track(BaseHTML):
+class Track(VoidBaseHTML):
     """Display the track element."""
 
     tag = "track"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
     default: Var[bool] = field(
         doc="Indicates that the track should be enabled unless the user's preferences indicate otherwise"
@@ -194,12 +187,10 @@ class Video(BaseHTML):
     src: Var[str] = field(doc="URL of the video to play")
 
 
-class Embed(BaseHTML):
+class Embed(VoidBaseHTML):
     """Display the embed element."""
 
     tag = "embed"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
     src: Var[str] = field(doc="URL of the embedded content")
 
@@ -260,12 +251,10 @@ class Portal(BaseHTML):
     tag = "portal"
 
 
-class Source(BaseHTML):
+class Source(VoidBaseHTML):
     """Display the source element."""
 
     tag = "source"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
     media: Var[str] = field(
         doc="Media query indicating what device the linked resource is optimized for"
@@ -881,20 +870,16 @@ class MPath(BaseHTML):
     href: Var[str] = field(doc="Reference to a path element.")
 
 
-class Desc(BaseHTML):
+class Desc(RawTextBaseHTML):
     """The SVG desc component for descriptions."""
 
     tag = "desc"
 
-    _memoization_mode = MemoizationMode(recursive=False)
 
-
-class Title(BaseHTML):
+class Title(RawTextBaseHTML):
     """The SVG title component for titles."""
 
     tag = "title"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
 
 class Metadata(BaseHTML):
@@ -903,12 +888,10 @@ class Metadata(BaseHTML):
     tag = "metadata"
 
 
-class Script(BaseHTML):
+class Script(RawTextBaseHTML):
     """The SVG script component for scripts."""
 
     tag = "script"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
     type: Var[str] = field(doc="MIME type of the script.")
 
@@ -917,12 +900,10 @@ class Script(BaseHTML):
     crossorigin: Var[str] = field(doc="CORS settings for the script.")
 
 
-class SvgStyle(BaseHTML):
+class SvgStyle(RawTextBaseHTML):
     """The SVG style component for stylesheets."""
 
     tag = "style"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
     type: Var[str] = field(doc="MIME type of the stylesheet.")
 

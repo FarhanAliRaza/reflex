@@ -25,14 +25,7 @@ from reflex_base.breakpoints import Breakpoints
 from reflex_base.components.dynamic import load_dynamic_serializer
 from reflex_base.components.field import BaseField, FieldBasedMeta
 from reflex_base.components.tags import Tag
-from reflex_base.constants import (
-    Dirs,
-    EventTriggers,
-    Hooks,
-    Imports,
-    MemoizationDisposition,
-    MemoizationMode,
-)
+from reflex_base.constants import Dirs, EventTriggers, Hooks, Imports, MemoizationMode
 from reflex_base.constants.compiler import SpecialAttributes
 from reflex_base.constants.state import CAMEL_CASE_MEMO_MARKER
 from reflex_base.event import (
@@ -2459,29 +2452,14 @@ class MemoizationLeaf(Component):
     components within it, should be a memoization leaf so the compiler
     does not replace the provided child tags with memoized tags.
 
-    During creation, a memoization leaf will mark itself as wanting to be
-    memoized if any of its children return any hooks.
+    Whether the leaf is wrapped in a memo definition is decided by the
+    compiler's snapshot-boundary subtree scan, not by a class-local
+    disposition override — so leaves and components that explicitly set
+    ``_memoization_mode = MemoizationMode(recursive=False)`` are handled
+    identically.
     """
 
     _memoization_mode = MemoizationMode(recursive=False)
-
-    @classmethod
-    def create(cls, *children, **props) -> Component:
-        """Create a new memoization leaf component.
-
-        Args:
-            *children: The children of the component.
-            **props: The props of the component.
-
-        Returns:
-            The memoization leaf
-        """
-        comp = super().create(*children, **props)
-        if comp._get_all_hooks():
-            comp._memoization_mode = dataclasses.replace(
-                comp._memoization_mode, disposition=MemoizationDisposition.ALWAYS
-            )
-        return comp
 
 
 load_dynamic_serializer()

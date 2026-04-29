@@ -1,13 +1,12 @@
 """Scripts classes."""
 
 from reflex_base.components.component import field
-from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.vars.base import Var
 
 from reflex_components_core.el.elements.inline import ReferrerPolicy
 from reflex_components_core.el.elements.media import CrossOrigin
 
-from .base import BaseHTML
+from .base import BaseHTML, RawTextBaseHTML
 
 
 class Canvas(BaseHTML):
@@ -16,20 +15,16 @@ class Canvas(BaseHTML):
     tag = "canvas"
 
 
-class Noscript(BaseHTML):
+class Noscript(RawTextBaseHTML):
     """Display the noscript element."""
 
     tag = "noscript"
 
-    _memoization_mode = MemoizationMode(recursive=False)
 
-
-class Script(BaseHTML):
+class Script(RawTextBaseHTML):
     """Display the script element."""
 
     tag = "script"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
     async_: Var[bool] = field(
         doc="Indicates that the script should be executed asynchronously"

@@ -3,10 +3,9 @@
 from typing import ClassVar, Literal
 
 from reflex_base.components.component import field
-from reflex_base.constants.compiler import MemoizationMode
 from reflex_base.vars.base import Var
 
-from .base import BaseHTML
+from .base import BaseHTML, VoidBaseHTML
 
 ReferrerPolicy = Literal[
     "",
@@ -81,12 +80,10 @@ class Bdo(BaseHTML):
     tag = "bdo"
 
 
-class Br(BaseHTML):
+class Br(VoidBaseHTML):
     """Display the br element."""
 
     tag = "br"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
 
 class Cite(BaseHTML):
@@ -223,12 +220,10 @@ class U(BaseHTML):
     tag = "u"
 
 
-class Wbr(BaseHTML):
+class Wbr(VoidBaseHTML):
     """Display the wbr element."""
 
     tag = "wbr"
-
-    _memoization_mode = MemoizationMode(recursive=False)
 
 
 a = A.create

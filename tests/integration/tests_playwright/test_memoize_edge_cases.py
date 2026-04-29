@@ -14,9 +14,9 @@ These exercise components whose memoization needs special care:
   inside the parent's body.
 
 Test design notes:
-- ``document.title`` is not a reliable signal: React Router writes a
-  metadata title alongside any user-rendered ``<title>``. Tests inspect the
-  ``<title>`` element directly rather than ``document.title``.
+- The page title is supplied via ``app.add_page(..., title=MemoState.title_marker)``
+  so the dynamic value flows through the standard React Router metadata path
+  and shows up in ``document.title``.
 - Style content is matched on a unique marker substring rather than common
   selectors like ``body`` (which conflicts with Emotion/Sonner stylesheets).
 - ``<textarea>``'s runtime value semantics belong to React (children are
@@ -60,7 +60,6 @@ def MemoEdgeCasesApp():
 
     def index():
         return rx.box(
-            rx.el.title(MemoState.title_marker),
             rx.el.style("body { --memo-marker: " + MemoState.css_marker + "; }"),
             rx.box(
                 rx.button("toggle", on_click=MemoState.toggle_open, id="toggle"),
@@ -88,7 +87,7 @@ def MemoEdgeCasesApp():
         )
 
     app = rx.App()
-    app.add_page(index)
+    app.add_page(index, title=MemoState.title_marker)
 
 
 @pytest.fixture(scope="module")
@@ -138,36 +137,34 @@ def test_accordion_trigger_with_stateful_cond_updates(
     expect(page.locator("#trigger-show")).to_have_text("Show")
 
 
-def _document_contains(page: Page, marker: str) -> bool:
-    """Whether any ``<title>`` or ``<style>`` element contains ``marker``.
+def _document_contains_style(page: Page, marker: str) -> bool:
+    """Whether any ``<style>`` element's text content contains ``marker``.
 
-    ``<title>``/``<style>`` content is metadata, not "visible" text, so the
-    Locator ``has_text`` filter skips them. Inspect text content via JS.
+    ``<style>`` content is not "visible" text, so the Locator ``has_text``
+    filter skips it. Inspect text content via JS instead.
 
     Args:
         page: Playwright page.
-        marker: Substring to look for in title/style element text content.
+        marker: Substring to look for in style element text content.
 
     Returns:
-        True if any title/style element's textContent contains the marker.
+        True if any ``<style>`` element's textContent contains the marker.
     """
     return page.evaluate(
         """(marker) => {
-            const els = document.querySelectorAll('title, style');
+            const els = document.querySelectorAll('style');
             return Array.from(els).some(el => (el.textContent || '').includes(marker));
         }""",
         marker,
     )
 
 
-def test_title_element_renders_stateful_var_as_text(
-    memo_app: AppHarness, page: Page
-) -> None:
-    """``rx.el.title(state_var)`` writes the state value as the title's text.
+def test_page_title_updates_with_state(memo_app: AppHarness, page: Page) -> None:
+    """The page title (passed to ``add_page(title=...)``) tracks state.
 
-    Verified by reading the title element's textContent directly. A passing
-    test means the state value lands as the title's text node, not a JSX
-    component child that would be stringified.
+    Verifying via ``document.title`` proves the state value flows through the
+    standard page-metadata path and lands as the title's text node, not as a
+    stringified JSX component child.
 
     Args:
         memo_app: Running app harness.
@@ -177,17 +174,10 @@ def test_title_element_renders_stateful_var_as_text(
     page.goto(memo_app.frontend_url)
     page.wait_for_selector("#trigger-show")
 
-    assert _document_contains(page, "memo-title-home")
-    assert not _document_contains(page, "memo-title-about")
+    expect(page).to_have_title("memo-title-home")
 
     page.click("#set-title")
-    page.wait_for_function(
-        """() => Array.from(document.querySelectorAll('title'))
-            .some(el => (el.textContent || '').includes('memo-title-about'))""",
-        timeout=5000,
-    )
-    assert _document_contains(page, "memo-title-about")
-    assert not _document_contains(page, "memo-title-home")
+    expect(page).to_have_title("memo-title-about")
 
 
 def test_style_element_renders_stateful_css_as_text(
@@ -206,8 +196,8 @@ def test_style_element_renders_stateful_css_as_text(
     page.goto(memo_app.frontend_url)
     page.wait_for_selector("#trigger-show")
 
-    assert _document_contains(page, "memo-css-light")
-    assert not _document_contains(page, "memo-css-dark")
+    assert _document_contains_style(page, "memo-css-light")
+    assert not _document_contains_style(page, "memo-css-dark")
 
     page.click("#set-css")
     page.wait_for_function(
@@ -215,5 +205,5 @@ def test_style_element_renders_stateful_css_as_text(
             .some(el => (el.textContent || '').includes('memo-css-dark'))""",
         timeout=5000,
     )
-    assert _document_contains(page, "memo-css-dark")
-    assert not _document_contains(page, "memo-css-light")
+    assert _document_contains_style(page, "memo-css-dark")
+    assert not _document_contains_style(page, "memo-css-light")
