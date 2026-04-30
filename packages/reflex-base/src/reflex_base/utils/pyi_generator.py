@@ -1599,14 +1599,68 @@ def _scan_file(module_path: Path) -> tuple[str, str] | None:
     return str(module_path.with_suffix(".pyi").resolve()), content_hash
 
 
+def _update_pyi_hashes_file(
+    written_files: list[tuple[str, str]],
+    scanned_sources: list[Path],
+) -> None:
+    """Merge a scan's results into the workspace ``pyi_hashes.json``.
+
+    Walks up from the current working directory to find an existing
+    ``pyi_hashes.json`` (the file is workspace-scoped — one per repo). If none
+    exists, a fresh one is created in cwd. Existing entries survive unless
+    their source file disappeared, or their stub was scanned this run but no
+    longer produces a stub. Newly produced hashes are written in.
+
+    Args:
+        written_files: ``(absolute pyi path, content md5)`` tuples for stubs
+            written this run.
+        scanned_sources: Absolute ``.py`` paths that were scanned this run,
+            including those that produced no stub. An entry whose source was
+            scanned but produced nothing this run is dropped from the file.
+    """
+    written_paths = [Path(p) for p, _ in written_files]
+    hashes = [h for _, h in written_files]
+
+    pyi_hashes_parent = Path.cwd().resolve()
+    while (
+        pyi_hashes_parent != pyi_hashes_parent.parent
+        and not (pyi_hashes_parent / PYI_HASHES).exists()
+    ):
+        pyi_hashes_parent = pyi_hashes_parent.parent
+
+    pyi_hashes_file = pyi_hashes_parent / PYI_HASHES
+    if pyi_hashes_file.exists():
+        existing = json.loads(pyi_hashes_file.read_text())
+    else:
+        pyi_hashes_file = (Path.cwd() / PYI_HASHES).resolve()
+        pyi_hashes_parent = pyi_hashes_file.parent
+        existing = {}
+
+    produced = {
+        p.relative_to(pyi_hashes_parent).as_posix(): h
+        for p, h in zip(written_paths, hashes, strict=True)
+    }
+    scanned = {
+        source.with_suffix(".pyi").relative_to(pyi_hashes_parent).as_posix()
+        for source in scanned_sources
+        if source.with_suffix(".pyi").is_relative_to(pyi_hashes_parent)
+    }
+    pyi_hashes = {
+        entry: produced.get(entry, current)
+        for entry, current in existing.items()
+        if (entry in produced or entry not in scanned)
+        and (pyi_hashes_parent / entry).with_suffix(".py").exists()
+    }
+    for entry, hashed in produced.items():
+        pyi_hashes.setdefault(entry, hashed)
+
+    pyi_hashes_file.write_text(json.dumps(pyi_hashes, indent=2, sort_keys=True) + "\n")
+
+
 class PyiGenerator:
     """A .pyi file generator that will scan all defined Component in Reflex and
     generate the appropriate stub.
     """
-
-    modules: list = []
-    root: str = ""
-    current_module: Any = {}
 
     def __init__(self) -> None:
         """Initialize per-instance scan state."""
@@ -1684,10 +1738,7 @@ class PyiGenerator:
                 relative = _relative_to_pwd(file_path)
                 if relative.name in EXCLUDED_FILES or file_path.suffix != ".py":
                     continue
-                if (
-                    changed_files is not None
-                    and _relative_to_pwd(file_path) not in changed_files
-                ):
+                if changed_files is not None and relative not in changed_files:
                     continue
                 file_targets.append(file_path)
 
@@ -1705,61 +1756,14 @@ class PyiGenerator:
 
         self._scan_files(file_targets)
 
-        file_paths, hashes = (
-            [f[0] for f in self.written_files],
-            [f[1] for f in self.written_files],
-        )
-
         # Fix generated pyi files with ruff.
-        if file_paths:
-            subprocess.run(["ruff", "format", *file_paths])
-            subprocess.run(["ruff", "check", "--fix", *file_paths])
+        if self.written_files:
+            written_paths = [p for p, _ in self.written_files]
+            subprocess.run(["ruff", "format", *written_paths])
+            subprocess.run(["ruff", "check", "--fix", *written_paths])
 
-        if use_json and (file_paths or file_targets):
-            file_paths = list(map(Path, file_paths))
-            # Anchor the pyi_hashes.json search at cwd, not at the first written
-            # file. The hash file is workspace-scoped — there is one for the whole
-            # repo — so walking up from cwd is what the caller (make_pyi.py, run
-            # from the repo root) actually means. Anchoring at file_paths[0] would
-            # make the result depend on which file happened to land first in
-            # `written_files`, and could find a package-local hash file in a
-            # leaf-package walk-up before reaching the workspace root.
-            pyi_hashes_parent = Path.cwd().resolve()
-            while (
-                pyi_hashes_parent != pyi_hashes_parent.parent
-                and not (pyi_hashes_parent / PYI_HASHES).exists()
-            ):
-                pyi_hashes_parent = pyi_hashes_parent.parent
-
-            pyi_hashes_file = pyi_hashes_parent / PYI_HASHES
-            if pyi_hashes_file.exists():
-                existing = json.loads(pyi_hashes_file.read_text())
-            else:
-                pyi_hashes_file = (Path.cwd() / PYI_HASHES).resolve()
-                pyi_hashes_parent = pyi_hashes_file.parent
-                existing = {}
-
-            produced = {
-                f.relative_to(pyi_hashes_parent).as_posix(): h
-                for f, h in zip(file_paths, hashes, strict=True)
-            }
-            scanned: set[str] = set()
-            for source in file_targets:
-                pyi_path = source.with_suffix(".pyi")
-                if pyi_path.is_relative_to(pyi_hashes_parent):
-                    scanned.add(pyi_path.relative_to(pyi_hashes_parent).as_posix())
-            pyi_hashes = {
-                entry: produced.get(entry, current)
-                for entry, current in existing.items()
-                if (entry in produced or entry not in scanned)
-                and (pyi_hashes_parent / entry).with_suffix(".py").exists()
-            }
-            for entry, hashed in produced.items():
-                pyi_hashes.setdefault(entry, hashed)
-
-            pyi_hashes_file.write_text(
-                json.dumps(pyi_hashes, indent=2, sort_keys=True) + "\n"
-            )
+        if use_json and (self.written_files or file_targets):
+            _update_pyi_hashes_file(self.written_files, file_targets)
 
 
 if __name__ == "__main__":

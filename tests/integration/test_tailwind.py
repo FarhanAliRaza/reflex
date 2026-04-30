@@ -42,7 +42,12 @@ def TailwindApp(
             id="p-content",
         )
 
-    assets = Path(__file__).resolve().parent.parent / "assets"
+    # Anchor on cwd so the stylesheet lands where the compiler will look.
+    # AppHarness re-runs the app via importlib.reload, which preserves the
+    # module's original file location; on a pytest rerun with a fresh
+    # tmp_path, an anchor based on the module file would still point at the
+    # previous tmp_path while cwd has been updated by the harness.
+    assets = Path.cwd() / "assets"
     assets.mkdir(exist_ok=True)
     stylesheet = assets / "test_styles.css"
     stylesheet.write_text(".external { color: rgba(0, 0, 255, 0.5) }")
