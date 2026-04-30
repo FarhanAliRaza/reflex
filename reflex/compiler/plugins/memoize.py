@@ -174,9 +174,19 @@ def _should_memoize(component: Component) -> bool:
 
     if component._memoization_mode.disposition == MemoizationDisposition.NEVER:
         return False
-    if isinstance(component, Bare) and component.contents._get_all_var_data():
-        # A stateful value will be wrapped in a separate component.
-        return True
+    if isinstance(component, Bare):
+        # A stateful value will be wrapped in a separate component. Match the
+        # per-Var predicate used by ``_subtree_has_reactive_data`` so a Bare
+        # whose Var carries only imports (no state/hooks) is not memoized.
+        contents_var_data = component.contents._get_all_var_data()
+        if contents_var_data is not None:
+            if contents_var_data.state or contents_var_data.hooks:
+                return True
+            for embedded in contents_var_data.components:
+                if isinstance(embedded, Component) and _subtree_has_reactive_data(
+                    embedded
+                ):
+                    return True
     # Cond and Match render conditional branch JSX from their own props rather
     # than from a tag, so they have no `tag` but still must be considered.
     if component.tag is None and not isinstance(component, (Cond, Match)):
@@ -185,9 +195,17 @@ def _should_memoize(component: Component) -> bool:
         return True
 
     # Direct Vars only (component's own props, style, class_name, id, etc.).
+    # Match the per-Var predicate used by ``_subtree_has_reactive_data``
+    # var_data carrying only imports is not reactive.
     for prop_var in component._get_vars(include_children=False):
-        if prop_var._get_all_var_data():
+        var_data = prop_var._get_all_var_data()
+        if var_data is None:
+            continue
+        if var_data.state or var_data.hooks:
             return True
+        for embedded in var_data.components:
+            if isinstance(embedded, Component) and _subtree_has_reactive_data(embedded):
+                return True
 
     if strategy is MemoizationStrategy.SNAPSHOT and not is_snapshot_boundary(component):
         return True

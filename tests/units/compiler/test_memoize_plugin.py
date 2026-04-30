@@ -123,6 +123,33 @@ def test_should_memoize_state_var_in_child_cond() -> None:
     assert _should_memoize(comp)
 
 
+def test_should_not_memoize_prop_var_with_imports_only_var_data() -> None:
+    """Prop Vars carrying only imports (no state/hooks) must not trigger memoize.
+
+    Regression: a ``class_name`` produced by the ``cn`` helper (clsx-for-tailwind)
+    has VarData with non-empty ``imports`` but empty ``state`` and ``hooks``;
+    snapshot-boundary elements like ``<textarea>`` were being wrapped in memo
+    purely because of that helper import.
+    """
+    from reflex_base.utils.imports import ImportVar
+
+    import_only_var = LiteralVar.create("static-class")._replace(
+        merge_var_data=VarData(
+            imports={"clsx-for-tailwind": [ImportVar(tag="cn")]},
+        )
+    )
+    comp = WithProp.create(label=import_only_var)
+    assert not _should_memoize(comp)
+    # Snapshot-boundary form of the same: a Textarea whose only stateful-looking
+    # signal is an import-bearing class_name should not be memoized either.
+    boundary = Textarea.create(class_name=import_only_var, name="x")
+    assert not _should_memoize(boundary)
+    # And the Bare-contents short-circuit must use the same predicate: a Bare
+    # wrapping a Var with import-only var_data must not be memoized.
+    bare = Bare.create(import_only_var)
+    assert not _should_memoize(bare)
+
+
 def test_should_not_memoize_when_disposition_never() -> None:
     """``MemoizationDisposition.NEVER`` overrides heuristic eligibility."""
     comp = Plain.create(STATE_VAR)
