@@ -156,7 +156,7 @@ export const evalReactComponent = async (component) => {
   const encodedJs = encodeURIComponent(component);
   const dataUri = "data:text/javascript;charset=utf-8," + encodedJs;
   const module = await eval(`import(dataUri)`);
-  return module.default;
+  return window.React.createElement(module.default);
 };
 
 /**
