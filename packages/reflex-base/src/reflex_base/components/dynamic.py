@@ -196,6 +196,7 @@ def load_dynamic_serializer():
                             imports.ImportVar(tag="evalReactComponent"),
                         ],
                         "react": [
+                            imports.ImportVar(tag="createElement"),
                             imports.ImportVar(tag="useState"),
                             imports.ImportVar(tag="useEffect"),
                         ],
@@ -207,7 +208,7 @@ def load_dynamic_serializer():
                         f"evalReactComponent({js_string!s})"
                         ".then((component) => {"
                         "if (isMounted) {"
-                        f"set_{unique_var_name}(component);"
+                        f"set_{unique_var_name}(() => createElement(component));"
                         "}"
                         "});"
                         "return () => {"
