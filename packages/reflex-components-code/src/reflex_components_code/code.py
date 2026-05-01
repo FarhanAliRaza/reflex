@@ -388,7 +388,7 @@ class CodeBlock(Component, MarkdownComponentMap):
     alias = "SyntaxHighlighter"
 
     theme: Var[Theme] = field(
-        default=Theme.one_light, doc='The theme to use ("light" or "dark").'
+        default=Theme.one_light, doc="The theme to use (e.g. Theme.one_light or Theme.one_dark)."
     )
 
     language: Var[LiteralCodeLanguage] = field(
