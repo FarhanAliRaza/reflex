@@ -99,6 +99,19 @@ class Plugin:
         """
         return []
 
+    def start_compile(self, app: "App") -> None:
+        """Lifecycle hook fired before pages are evaluated.
+
+        Use this to flip runtime state that must be set before user code in
+        ``add_page`` callbacks runs, or to mutate the ``App`` (e.g. extend
+        ``app.head_components``) before ``compile_document_root`` is called.
+        ``pre_compile`` runs *after* page evaluation and is too late for
+        either job.
+
+        Args:
+            app: The Reflex ``App`` being compiled.
+        """
+
     def get_static_assets(
         self, **context: Unpack[CommonContext]
     ) -> Sequence[tuple[Path, str | bytes]]:

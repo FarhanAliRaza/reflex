@@ -129,19 +129,6 @@ def discover_framework_roots() -> tuple[Path, ...]:
     return tuple(dict.fromkeys(_roots_from_sys_modules() + _roots_from_distributions()))
 
 
-def discover_framework_roots_fast() -> tuple[Path, ...]:
-    """Like :func:`discover_framework_roots` but skips the distributions scan.
-
-    Suitable for hot paths that need to refresh their cached roots after a
-    framework sub-package was lazily imported. Misses packages that are not
-    yet in ``sys.modules`` — the caller pays the slow scan once at startup.
-
-    Returns:
-        Resolved, deduplicated paths to every imported framework package.
-    """
-    return tuple(dict.fromkeys(_roots_from_sys_modules()))
-
-
 def walk_to_first_non_framework_frame(
     start_frame: FrameType | None,
     is_framework_frame: Callable[[str], bool],

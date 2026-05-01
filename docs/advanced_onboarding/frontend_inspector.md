@@ -6,22 +6,22 @@ import reflex as rx
 
 The frontend inspector maps rendered DOM nodes back to the Python source line that created them. Hover an element in the browser, see which `Component.create(...)` call produced it, and click to open that line in your editor.
 
-It is a development-only tool. Enabling it in a production build is a configuration error.
+It is a development-only tool. The plugin is a no-op under `REFLEX_ENV_MODE=prod`, so the same `rxconfig.py` works for both dev and prod runs.
 
 ## Enable
 
-Set `frontend_inspector="dev"` in your `rxconfig.py`:
+Add `FrontendInspectorPlugin` to `plugins` in your `rxconfig.py`:
 
 ```python
 import reflex as rx
 
 config = rx.Config(
     app_name="my_app",
-    frontend_inspector="dev",
+    plugins=[rx.plugins.FrontendInspectorPlugin()],
 )
 ```
 
-Run your app in dev mode (`uv run reflex run`). The inspector loads automatically; the `launch-editor` package is added to `.web/package.json` and installed during the same compile pass.
+Run your app in dev mode (`uv run reflex run`). The inspector loads automatically; the `launch-editor` dev dependency is installed during the same compile pass.
 
 ## Usage
 
@@ -38,42 +38,32 @@ Three modes:
 ```python
 config = rx.Config(
     app_name="my_app",
-    frontend_inspector="dev",
-    # Custom shortcut. Modifier aliases like cmd / option are accepted.
-    frontend_inspector_shortcut="ctrl+shift+i",
-    # Optional: override the editor invocation. Empty falls back to
-    # $REFLEX_EDITOR / $VISUAL / $EDITOR / launch-editor's auto-detection.
-    frontend_inspector_editor="code -g",
+    plugins=[
+        rx.plugins.FrontendInspectorPlugin(
+            # Custom shortcut. Modifier aliases like cmd / option are accepted.
+            shortcut="ctrl+shift+i",
+            # Optional: override the editor invocation. Empty falls back to
+            # $REFLEX_EDITOR / $VISUAL / $EDITOR / launch-editor's auto-detection.
+            editor="code -g",
+        ),
+    ],
 )
 ```
 
-| Field | Default | Notes |
+| Argument | Default | Notes |
 | --- | --- | --- |
-| `frontend_inspector` | `"off"` | `"off"` disables it (default), `"dev"` enables it in dev. Prod builds reject `"dev"`. |
-| `frontend_inspector_shortcut` | `"alt+x"` | Modifiers: `alt`, `ctrl`, `meta` (`cmd`/`super`/`win`), `shift`. |
-| `frontend_inspector_editor` | `""` | Forwarded to [`launch-editor`](https://github.com/yyx990803/launch-editor). |
-
-## Personal preferences via environment variables
-
-The shortcut and editor invocation are personal; you usually do not want to commit them to a shared `rxconfig.py`. Reflex reads the matching env vars at config time:
-
-```bash
-REFLEX_FRONTEND_INSPECTOR=dev
-REFLEX_FRONTEND_INSPECTOR_SHORTCUT=ctrl+shift+i
-REFLEX_FRONTEND_INSPECTOR_EDITOR=cursor
-```
-
-Set them in your shell, point Reflex at a dotenv file with `REFLEX_ENV_FILE=.env`, or pass `env_file=".env"` to `rx.Config(...)`. Reflex does not auto-discover a `.env` in the project root.
+| `shortcut` | `"alt+x"` | Modifiers: `alt`, `ctrl`, `meta` (`cmd`/`super`/`win`), `shift`. |
+| `editor` | `""` | Forwarded to [`launch-editor`](https://github.com/yyx990803/launch-editor). |
 
 ## Production safety
 
-`frontend_inspector="dev"` raises `ConfigError` whenever `REFLEX_ENV_MODE=prod`, including:
+The plugin's hooks all return empty when `REFLEX_ENV_MODE=prod`, so prod builds emit no inspector wiring:
 
 - `uv run reflex run --env prod`
 - `uv run reflex export --env prod`
 - Any deploy that sets `REFLEX_ENV_MODE=prod`.
 
-The check runs at compile time after the env mode is settled, so the safety net works even when the env is set on the command line.
+The gate is re-evaluated at every emission site, so the same `rxconfig.py` works in both dev and prod without further changes.
 
 ## What it does and does not do
 
@@ -86,7 +76,7 @@ It does:
 It does not:
 
 - Inspect React state or props at runtime — it is a source-mapping tool, not a React DevTools replacement.
-- Run in production. The plugin is registered with `apply: 'serve'` in Vite, so even if a stray asset slipped through, prod builds would not load it.
+- Run in production. The Vite plugin is registered with `apply: 'serve'`, so even if a stray asset slipped through, prod builds would not load it.
 - Modify your source code. The inspector stores a private id on each component that gets rendered out as a `data-rx` attribute; your `rxconfig.py` and component files are untouched.
 
 ## Programmatic toggle

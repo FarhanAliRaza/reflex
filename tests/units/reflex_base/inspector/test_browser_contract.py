@@ -1,12 +1,12 @@
 """Contract test pinning the Python <-> JS inspector boundary.
 
 The browser script ``inspector.js`` is hand-written; the head ``<script>``
-tags are emitted by ``inspector.integration.head_components``. Both refer to
-the same constants (``data-rx`` attribute, ``/__reflex/...`` URLs,
+tags are emitted by ``FrontendInspectorPlugin.get_head_components``. Both
+refer to the same constants (``data-rx`` attribute, ``/__reflex/...`` URLs,
 ``__REFLEX_INSPECTOR_CONFIG__`` window key, ``shortcut`` payload key). This
-test asserts that every constant defined on the Python side appears
-verbatim in the JS, so a future rename on either side fails CI instead of
-desyncing silently.
+test asserts that every constant defined on the Python side appears verbatim
+in the JS, so a future rename on either side fails CI instead of desyncing
+silently.
 """
 
 from __future__ import annotations
@@ -17,14 +17,14 @@ from pathlib import Path
 import pytest
 from reflex_base import inspector
 from reflex_base.constants import Env
-from reflex_base.inspector import integration as inspector_integration
+from reflex_base.plugins.frontend_inspector import _asset_source_dir
 
 import reflex as rx
 
 
 @pytest.fixture
 def inspector_js_text() -> str:
-    return inspector_integration.asset_source_dir().joinpath("inspector.js").read_text()
+    return _asset_source_dir().joinpath("inspector.js").read_text()
 
 
 @pytest.mark.parametrize(
@@ -55,9 +55,8 @@ def test_head_payload_uses_shortcut_key(monkeypatch: pytest.MonkeyPatch):
     renames the key, this test fails before it ships.
     """
     monkeypatch.setenv("REFLEX_ENV_MODE", Env.DEV.value)
-    config = rx.Config(app_name="test", frontend_inspector="dev")
-
-    components = inspector_integration.head_components(config)
+    plugin = rx.plugins.FrontendInspectorPlugin()
+    components = plugin._build_head_components()
     config_script = components[0].render()
     rendered = json.dumps(config_script)
     assert inspector.SHORTCUT_CONFIG_KEY in rendered
@@ -65,8 +64,8 @@ def test_head_payload_uses_shortcut_key(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_asset_directory_exists():
-    """The bundled asset directory must exist where ``integration`` says it does."""
-    src_dir = inspector_integration.asset_source_dir()
+    """The bundled asset directory must exist where the plugin reads from."""
+    src_dir = _asset_source_dir()
     assert src_dir.is_dir(), f"Inspector asset directory missing: {src_dir}"
     assert (src_dir / "inspector.js").is_file()
     assert (src_dir / "inspector.css").is_file()
@@ -74,7 +73,7 @@ def test_asset_directory_exists():
 
 
 def test_source_map_url_matches_emit_path(tmp_path: Path):
-    """``SOURCE_MAP_URL`` must resolve to the path ``emit`` writes to."""
+    """``SOURCE_MAP_URL`` must resolve to the path the plugin writes to."""
     expected_disk_path = (
         tmp_path / inspector.PUBLIC_DIRNAME / inspector.SOURCE_MAP_FILENAME
     )

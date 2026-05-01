@@ -11,6 +11,7 @@ from .compiler import (
     PageContext,
     PageDefinition,
 )
+from .frontend_inspector import FrontendInspectorPlugin
 from .sitemap import SitemapPlugin
 from .tailwind_v3 import TailwindV3Plugin
 from .tailwind_v4 import TailwindV4Plugin
@@ -21,6 +22,7 @@ __all__ = [
     "CompileContext",
     "CompilerHooks",
     "ComponentAndChildren",
+    "FrontendInspectorPlugin",
     "PageContext",
     "PageDefinition",
     "Plugin",

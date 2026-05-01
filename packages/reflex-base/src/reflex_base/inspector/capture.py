@@ -36,22 +36,6 @@ def _get_framework_roots() -> tuple[Path, ...]:
 _is_framework_frame = frames.make_framework_frame_predicate(_get_framework_roots)
 
 
-def refresh_framework_roots() -> tuple[Path, ...]:
-    """Re-scan ``sys.modules`` and rebuild the cached framework roots.
-
-    Useful when a framework sub-package is imported lazily after the
-    inspector has already initialised. Inexpensive: only the in-process
-    module table is consulted (no distribution metadata reads).
-
-    Returns:
-        The freshly discovered framework roots.
-    """
-    global _FRAMEWORK_ROOTS
-    _FRAMEWORK_ROOTS = frames.discover_framework_roots_fast()
-    _is_framework_frame.cache_clear()
-    return _FRAMEWORK_ROOTS
-
-
 def _ensure_framework_roots() -> None:
     global _FRAMEWORK_ROOTS
     if not _FRAMEWORK_ROOTS:

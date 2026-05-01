@@ -507,7 +507,6 @@ def vite_config_template(
     experimental_hmr: bool,
     sourcemap: bool | Literal["inline", "hidden"],
     allowed_hosts: bool | list[str] = False,
-    inspector: bool = False,
 ):
     """Template for vite.config.js.
 
@@ -518,7 +517,6 @@ def vite_config_template(
         experimental_hmr: Whether to enable experimental HMR features.
         sourcemap: The sourcemap configuration.
         allowed_hosts: Allow all hosts (True), specific hosts (list of strings), or only localhost (False).
-        inspector: Whether to register the dev-only frontend inspector plugin.
 
     Returns:
         Rendered vite.config.js content as string.
@@ -529,18 +527,10 @@ def vite_config_template(
         allowed_hosts_line = f"\n    allowedHosts: {json.dumps(allowed_hosts)},"
     else:
         allowed_hosts_line = ""
-    if inspector:
-        inspector_import = (
-            'import reflexInspectorPlugin from "./reflex-inspector-plugin.js";\n'
-        )
-        inspector_plugin_call = "    reflexInspectorPlugin(),\n"
-    else:
-        inspector_import = inspector_plugin_call = ""
     return rf"""import {{ fileURLToPath, URL }} from "url";
 import {{ reactRouter }} from "@react-router/dev/vite";
 import {{ defineConfig }} from "vite";
 import safariCacheBustPlugin from "./vite-plugin-safari-cachebust";
-{inspector_import}
 
 // Ensure that bun always uses the react-dom/server.node functions.
 function alwaysUseReactDomServerNode() {{
@@ -582,7 +572,7 @@ export default defineConfig((config) => ({{
     alwaysUseReactDomServerNode(),
     reactRouter(),
     safariCacheBustPlugin(),
-{inspector_plugin_call}  ].concat({"[fullReload()]" if force_full_reload else "[]"}),
+  ].concat({"[fullReload()]" if force_full_reload else "[]"}),
   build: {{
     sourcemap: {"true" if sourcemap is True else "false" if sourcemap is False else repr(sourcemap)},
     rollupOptions: {{

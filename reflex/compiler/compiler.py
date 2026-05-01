@@ -996,7 +996,6 @@ def compile_app(
 ) -> None:
     """Compile an app using the compiler plugin pipeline."""
     from reflex_base.components.dynamic import bundle_library, reset_bundled_libraries
-    from reflex_base.inspector import integration as inspector_integration
     from reflex_base.utils.exceptions import ReflexRuntimeError
 
     app._apply_decorated_pages()
@@ -1031,7 +1030,8 @@ def compile_app(
         app._add_optional_endpoints()
         return
 
-    inspector_integration.prepare_for_compile(config)
+    for plugin in config.plugins:
+        plugin.start_compile(app)
 
     progress = (
         Progress(
@@ -1103,15 +1103,11 @@ def compile_app(
         if page_ctx.output_path is not None and page_ctx.output_code is not None
     ]
 
-    # frontend_inspector may toggle between runs; re-render dependent files.
-    # package.json must hit disk now so install_frontend_packages picks up
-    # any new dev deps (e.g. launch-editor) on this same compile pass.
+    # Reinitialize vite config in case runtime options have changed.
     compile_results.append((
         constants.ReactRouter.VITE_CONFIG_FILE,
         frontend_skeleton._compile_vite_config(config),
     ))
-    frontend_skeleton.initialize_package_json()
-    frontend_skeleton.initialize_inspector_assets()
 
     all_imports = compile_ctx.all_imports
 
@@ -1284,7 +1280,3 @@ def compile_app(
     with console.timing("Write to Disk"):
         for output_path, code in output_mapping.items():
             utils.write_file(output_path, code)
-
-    inspector_integration.write_source_map(
-        prerequisites.get_web_dir() / constants.Dirs.PUBLIC,
-    )

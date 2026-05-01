@@ -559,90 +559,70 @@ class TestDisablePlugins:
         assert any(isinstance(p, SitemapPlugin) for p in config.plugins)
 
 
-class TestFrontendInspector:
-    """Tests for the dev-only frontend inspector config flags."""
+class TestFrontendInspectorPlugin:
+    """Tests for ``FrontendInspectorPlugin`` lifecycle and gating."""
 
-    def test_default_is_off(self):
-        """Default is "off" with the documented shortcut and empty editor."""
-        config = rx.Config(app_name="test")
-        assert config.frontend_inspector == "off"
-        assert config.frontend_inspector_shortcut == "alt+x"
-        assert config.frontend_inspector_editor == ""
-
-    def test_dev_in_prod_is_inert(self, monkeypatch: pytest.MonkeyPatch):
-        """`frontend_inspector="dev"` is a no-op under REFLEX_ENV_MODE=prod.
-
-        The same ``rxconfig.py`` is reused across dev and prod runs, so a
-        prod build must not raise — ``is_active`` returns False and every
-        emission site is gated on it.
-        """
-        from reflex_base.inspector import integration as inspector_integration
-
-        monkeypatch.setenv("REFLEX_ENV_MODE", Env.PROD.value)
-        config = rx.Config(app_name="test", frontend_inspector="dev")
-        assert inspector_integration.is_active(config) is False
+    def test_plugin_defaults(self):
+        """Default shortcut and editor match the documented values."""
+        plugin = rx.plugins.FrontendInspectorPlugin()
+        assert plugin.shortcut == "alt+x"
+        assert plugin.editor == ""
 
     def test_config_init_does_not_mutate_global_state(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        """Config construction is declarative; runtime state is untouched.
+        """Constructing the plugin is declarative; runtime state is untouched.
 
-        Runtime state is set later by
-        ``inspector.integration.prepare_for_compile`` (called from the
+        Runtime state is flipped later by ``start_compile`` (called from the
         compile path). This protects tests and parallel callers from
-        order-dependent leakage between ``Config()`` instances.
+        order-dependent leakage.
         """
         from reflex_base.inspector import state as inspector_state
 
         monkeypatch.setenv("REFLEX_ENV_MODE", Env.DEV.value)
         inspector_state.set_enabled(False)
-        rx.Config(app_name="test", frontend_inspector="dev")
+        rx.plugins.FrontendInspectorPlugin()
         assert inspector_state.is_enabled() is False
 
-    def test_is_active_gates_on_env_mode(self, monkeypatch: pytest.MonkeyPatch):
-        """``is_active`` re-reads ``REFLEX_ENV_MODE`` at every call site.
+    def test_active_gating_re_reads_env_mode(self, monkeypatch: pytest.MonkeyPatch):
+        """The active gate re-reads ``REFLEX_ENV_MODE`` at every call.
 
-        Regression: ``reflex export --env prod`` calls ``get_config()`` (env
-        still ``dev``) before setting ``REFLEX_ENV_MODE=prod``. The compile
-        path must observe the flipped env and skip emitting inspector
-        wiring even when ``Config()`` was constructed under dev.
+        Regression: ``reflex export --env prod`` constructs ``Config()`` under
+        dev and only flips ``REFLEX_ENV_MODE`` later. The plugin must observe
+        the flipped env at emission time, not at construction time.
         """
-        from reflex_base.inspector import integration as inspector_integration
+        plugin = rx.plugins.FrontendInspectorPlugin()
 
         monkeypatch.setenv("REFLEX_ENV_MODE", Env.DEV.value)
-        config = rx.Config(app_name="test", frontend_inspector="dev")
-        assert inspector_integration.is_active(config) is True
+        assert plugin.get_frontend_development_dependencies()
 
         monkeypatch.setenv("REFLEX_ENV_MODE", Env.PROD.value)
-        assert inspector_integration.is_active(config) is False
+        assert plugin.get_frontend_development_dependencies() == []
 
-    def test_is_active_returns_false_when_off(self):
-        """``integration.is_active`` is False whenever the mode is "off"."""
-        from reflex_base.inspector import integration as inspector_integration
-
-        config = rx.Config(app_name="test", frontend_inspector="off")
-        assert inspector_integration.is_active(config) is False
-
-    def test_prepare_for_compile_syncs_state_and_resets(
+    def test_start_compile_syncs_state_and_resets(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        """``prepare_for_compile`` is the single entry point for compile-time setup."""
+        """``start_compile`` flips the runtime flag and clears stale captures."""
         from reflex_base.inspector import capture as inspector_capture
-        from reflex_base.inspector import integration as inspector_integration
         from reflex_base.inspector import state as inspector_state
+
+        plugin = rx.plugins.FrontendInspectorPlugin()
+        app = rx.App()
 
         monkeypatch.setenv("REFLEX_ENV_MODE", Env.DEV.value)
         inspector_capture._REGISTRY[999] = inspector_capture.SourceInfo(
             file="/leftover.py", line=1, column=1, component="Stale"
         )
-
-        inspector_integration.prepare_for_compile(
-            rx.Config(app_name="test", frontend_inspector="dev")
-        )
+        baseline = len(app.head_components)
+        plugin.start_compile(app)
         assert inspector_state.is_enabled() is True
         assert inspector_capture.snapshot() == {}
+        assert len(app.head_components) == baseline + 2
 
-        inspector_integration.prepare_for_compile(
-            rx.Config(app_name="test", frontend_inspector="off")
-        )
+        # Calling again on the same app is idempotent.
+        plugin.start_compile(app)
+        assert len(app.head_components) == baseline + 2
+
+        monkeypatch.setenv("REFLEX_ENV_MODE", Env.PROD.value)
+        plugin.start_compile(app)
         assert inspector_state.is_enabled() is False

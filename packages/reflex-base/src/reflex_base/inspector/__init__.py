@@ -16,7 +16,7 @@ side and the JS runtime — pinned by ``tests/.../test_browser_contract.py``.
 
 from __future__ import annotations
 
-from . import capture, emit, shortcut, state
+from . import capture, shortcut, state
 
 DATA_ATTR = "data-rx"
 PUBLIC_DIRNAME = "__reflex"
@@ -41,7 +41,6 @@ __all__ = [
     "SOURCE_MAP_URL",
     "WINDOW_CONFIG_KEY",
     "capture",
-    "emit",
     "shortcut",
     "state",
 ]

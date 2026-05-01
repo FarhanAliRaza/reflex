@@ -1,4 +1,4 @@
-"""Parse the keyboard shortcut string from ``Config.frontend_inspector_shortcut``."""
+"""Parse the keyboard shortcut string from ``FrontendInspectorPlugin(shortcut=...)``."""
 
 from __future__ import annotations
 
@@ -58,12 +58,12 @@ def parse_shortcut(value: str) -> Shortcut:
             unknown modifier.
     """
     if not value or not value.strip():
-        msg = "frontend_inspector_shortcut must be a non-empty string."
+        msg = "FrontendInspectorPlugin shortcut must be a non-empty string."
         raise ConfigError(msg)
 
     parts = [p.strip().lower() for p in value.split("+")]
     if any(not p for p in parts):
-        msg = f"frontend_inspector_shortcut={value!r} has empty segments."
+        msg = f"FrontendInspectorPlugin shortcut={value!r} has empty segments."
         raise ConfigError(msg)
 
     *raw_modifiers, key = parts
@@ -73,7 +73,7 @@ def parse_shortcut(value: str) -> Shortcut:
         normalized = _MODIFIER_ALIASES.get(raw, raw)
         if normalized not in _VALID_MODIFIERS:
             msg = (
-                f"frontend_inspector_shortcut={value!r} contains unknown "
+                f"FrontendInspectorPlugin shortcut={value!r} contains unknown "
                 f"modifier {raw!r}; expected one of "
                 f"{_VALID_MODIFIERS + tuple(_MODIFIER_ALIASES)}."
             )

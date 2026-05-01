@@ -4,10 +4,9 @@ import json
 import random
 from pathlib import Path
 
-from reflex_base import constants, inspector
+from reflex_base import constants
 from reflex_base.config import Config, get_config
 from reflex_base.environment import environment
-from reflex_base.inspector import integration as inspector_integration
 
 from reflex.compiler import templates
 from reflex.utils import console, path_ops
@@ -177,9 +176,6 @@ def initialize_web_directory():
     console.debug("Initializing the vite.config.js file.")
     initialize_vite_config()
 
-    console.debug("Initializing the frontend inspector assets.")
-    initialize_inspector_assets()
-
     console.debug("Initializing the reflex.json file.")
     # Initialize the reflex json file.
     init_reflex_json(project_hash=project_hash)
@@ -225,17 +221,13 @@ def _update_react_router_config(config: Config, prerender_routes: bool = False):
 
 
 def _compile_package_json():
-    dev_dependencies = dict(constants.PackageJson.DEV_DEPENDENCIES)
-    dev_dependencies.update(
-        inspector_integration.package_json_dev_dependencies(get_config())
-    )
     return templates.package_json_template(
         scripts={
             "dev": constants.PackageJson.Commands.DEV,
             "export": constants.PackageJson.Commands.EXPORT,
         },
         dependencies=constants.PackageJson.DEPENDENCIES,
-        dev_dependencies=dev_dependencies,
+        dev_dependencies=constants.PackageJson.DEV_DEPENDENCIES,
         overrides=constants.PackageJson.OVERRIDES,
     )
 
@@ -255,7 +247,6 @@ def _compile_vite_config(config: Config):
         experimental_hmr=environment.VITE_EXPERIMENTAL_HMR.get(),
         sourcemap=environment.VITE_SOURCEMAP.get(),
         allowed_hosts=config.vite_allowed_hosts,
-        inspector=inspector_integration.is_active(config),
     )
 
 
@@ -263,29 +254,6 @@ def initialize_vite_config():
     """Render and write in .web the vite.config.js file using Reflex config."""
     vite_config_file_path = get_web_dir() / constants.ReactRouter.VITE_CONFIG_FILE
     vite_config_file_path.write_text(_compile_vite_config(get_config()))
-
-
-def initialize_inspector_assets():
-    """Copy the inspector browser assets and emit the Vite plugin file.
-
-    No-op when the inspector is not active for the current build. The
-    destination ``.web/public/__reflex/`` is served at ``/__reflex/`` by both
-    Vite and Astro out of the box.
-    """
-    config = get_config()
-    if not inspector_integration.is_active(config):
-        return
-
-    src_dir = inspector_integration.asset_source_dir()
-    if not src_dir.is_dir():
-        console.warn(f"Inspector assets directory missing: {src_dir}")
-        return
-
-    dst_dir = get_web_dir() / constants.Dirs.PUBLIC / inspector.PUBLIC_DIRNAME
-    path_ops.copy_tree(src_dir, dst_dir)
-
-    plugin_path = get_web_dir() / inspector.INSPECTOR_PLUGIN_FILE
-    plugin_path.write_text(inspector_integration.plugin_text(config))
 
 
 def initialize_bun_config():

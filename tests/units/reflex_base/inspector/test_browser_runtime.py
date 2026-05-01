@@ -8,7 +8,7 @@ import subprocess
 import textwrap
 
 import pytest
-from reflex_base.inspector import integration as inspector_integration
+from reflex_base.plugins.frontend_inspector import _asset_source_dir
 
 
 def _run_inspector_harness(scenario: str):
@@ -21,7 +21,7 @@ def _run_inspector_harness(scenario: str):
     if node is None:
         pytest.skip("node is required for inspector browser runtime tests")
 
-    inspector_path = inspector_integration.asset_source_dir() / "inspector.js"
+    inspector_path = _asset_source_dir() / "inspector.js"
     script = f"""
 const fs = require("fs");
 const vm = require("vm");
