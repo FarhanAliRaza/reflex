@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from reflex_base.utils.pyi_generator import PyiGenerator
 
 
@@ -12,28 +13,28 @@ def _write_hashes(path: Path, mapping: dict[str, str]) -> None:
     path.write_text(json.dumps(mapping, indent=2, sort_keys=True) + "\n")
 
 
-def _make_workspace(root: Path) -> Path:
-    """Lay out a fake workspace with a couple of source files and a hash file.
+@pytest.fixture
+def workspace(tmp_path: Path) -> Path:
+    """Lay out a fake workspace with a couple of source files.
 
     Args:
-        root: tmp directory to populate.
+        tmp_path: pytest-provided tmp directory to populate.
 
     Returns:
         The workspace root.
     """
-    pkg = root / "pkg"
+    pkg = tmp_path / "pkg"
     pkg.mkdir()
     (pkg / "foo.py").write_text("# placeholder\n")
     (pkg / "bar.py").write_text("# placeholder\n")
-    other = root / "other"
+    other = tmp_path / "other"
     other.mkdir()
     (other / "baz.py").write_text("# placeholder\n")
-    return root
+    return tmp_path
 
 
-def test_partial_run_preserves_unrelated_entries(tmp_path, monkeypatch):
+def test_partial_run_preserves_unrelated_entries(workspace, monkeypatch):
     """Entries for files outside the run's scope are preserved."""
-    workspace = _make_workspace(tmp_path)
     monkeypatch.chdir(workspace)
 
     hashes_path = workspace / "pyi_hashes.json"
@@ -64,9 +65,8 @@ def test_partial_run_preserves_unrelated_entries(tmp_path, monkeypatch):
     }
 
 
-def test_scanned_file_with_no_output_drops_entry(tmp_path, monkeypatch):
+def test_scanned_file_with_no_output_drops_entry(workspace, monkeypatch):
     """A file scanned this run that produces no stub has its hash entry removed."""
-    workspace = _make_workspace(tmp_path)
     monkeypatch.chdir(workspace)
 
     hashes_path = workspace / "pyi_hashes.json"
@@ -92,9 +92,8 @@ def test_scanned_file_with_no_output_drops_entry(tmp_path, monkeypatch):
     assert result == {"pkg/bar.pyi": "BAR_NEW"}
 
 
-def test_single_scanned_file_with_no_output_drops_entry(tmp_path, monkeypatch):
+def test_single_scanned_file_with_no_output_drops_entry(workspace, monkeypatch):
     """Scanning one file that produces no stub still drops its old hash entry."""
-    workspace = _make_workspace(tmp_path)
     monkeypatch.chdir(workspace)
 
     hashes_path = workspace / "pyi_hashes.json"
@@ -118,9 +117,8 @@ def test_single_scanned_file_with_no_output_drops_entry(tmp_path, monkeypatch):
     assert result == {"pkg/bar.pyi": "BAR"}
 
 
-def test_creates_hashes_file_when_missing(tmp_path, monkeypatch):
+def test_creates_hashes_file_when_missing(workspace, monkeypatch):
     """If ``pyi_hashes.json`` doesn't exist, the merge creates it."""
-    workspace = _make_workspace(tmp_path)
     monkeypatch.chdir(workspace)
 
     hashes_path = workspace / "pyi_hashes.json"
@@ -140,9 +138,8 @@ def test_creates_hashes_file_when_missing(tmp_path, monkeypatch):
     assert json.loads(hashes_path.read_text()) == {"pkg/foo.pyi": "FOO"}
 
 
-def test_missing_source_file_drops_entry(tmp_path, monkeypatch):
+def test_missing_source_file_drops_entry(workspace, monkeypatch):
     """An entry whose source ``.py`` no longer exists is cleaned up."""
-    workspace = _make_workspace(tmp_path)
     monkeypatch.chdir(workspace)
 
     hashes_path = workspace / "pyi_hashes.json"
@@ -168,13 +165,12 @@ def test_missing_source_file_drops_entry(tmp_path, monkeypatch):
     assert result == {"pkg/foo.pyi": "FOO_NEW"}
 
 
-def test_use_json_false_does_not_touch_hashes_file(tmp_path, monkeypatch):
+def test_use_json_false_does_not_touch_hashes_file(workspace, monkeypatch):
     """With ``use_json=False``, ``pyi_hashes.json`` is neither read nor written.
 
     Build hooks rely on this so parallel workspace builds don't race on a
     single shared hash file at the workspace root.
     """
-    workspace = _make_workspace(tmp_path)
     monkeypatch.chdir(workspace)
 
     hashes_path = workspace / "pyi_hashes.json"
@@ -194,9 +190,8 @@ def test_use_json_false_does_not_touch_hashes_file(tmp_path, monkeypatch):
     assert hashes_path.read_bytes() == original
 
 
-def test_incremental_run_merges_into_existing(tmp_path, monkeypatch):
+def test_incremental_run_merges_into_existing(workspace, monkeypatch):
     """An incremental run (``changed_files`` set) merges new hashes into the existing file."""
-    workspace = _make_workspace(tmp_path)
     monkeypatch.chdir(workspace)
 
     hashes_path = workspace / "pyi_hashes.json"
