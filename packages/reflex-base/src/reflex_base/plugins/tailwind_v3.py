@@ -62,22 +62,27 @@ def compile_config(config: TailwindConfig):
 
 def compile_root_style(
     theme_roots: Sequence["BaseComponent | None"] | None = None,
+    include_radix_themes: bool = True,
 ):
     """Compile the Tailwind root style.
 
     Args:
         theme_roots: Component roots used to detect which Radix color scales are
             actually referenced so only those CSS files are imported.
+        include_radix_themes: Whether to include any Radix stylesheet imports.
 
     Returns:
         The compiled Tailwind root style.
     """
     from reflex.compiler.compiler import get_radix_themes_stylesheets
 
-    radix_imports = "\n".join(
-        f"@import url('{sheet}');"
-        for sheet in get_radix_themes_stylesheets(theme_roots)
-    )
+    if include_radix_themes:
+        radix_imports = "\n".join(
+            f"@import url('{sheet}');"
+            for sheet in get_radix_themes_stylesheets(theme_roots)
+        )
+    else:
+        radix_imports = ""
     return str(
         Path(Dirs.STYLES) / Constants.ROOT_STYLE_PATH
     ), Constants.ROOT_STYLE_CONTENT.format(
@@ -128,11 +133,14 @@ def add_tailwind_to_postcss_config(postcss_file_content: str) -> str:
     return "\n".join(postcss_file_lines)
 
 
-def add_tailwind_to_css_file(css_file_content: str) -> str:
+def add_tailwind_to_css_file(
+    css_file_content: str, *, include_radix_themes: bool = True
+) -> str:
     """Add tailwind to the css file.
 
     Args:
         css_file_content: The content of the css file.
+        include_radix_themes: Whether the root stylesheet already imports Radix.
 
     Returns:
         The modified css file content.
@@ -140,14 +148,27 @@ def add_tailwind_to_css_file(css_file_content: str) -> str:
     if Constants.TAILWIND_CSS.splitlines()[0] in css_file_content:
         return css_file_content
 
-    stripped, count = strip_radix_theme_imports(css_file_content)
-    if count == 0:
-        print(  # noqa: T201
-            f"Could not find any '@radix-ui/themes' import in {Dirs.STYLES}. "
-            "Please make sure the file exists and is valid."
-        )
-        return css_file_content
-    return stripped.rstrip() + "\n" + Constants.TAILWIND_CSS + "\n"
+    if include_radix_themes:
+        stripped, count = strip_radix_theme_imports(css_file_content)
+        if count == 0:
+            print(  # noqa: T201
+                f"Could not find any '@radix-ui/themes' import in {Dirs.STYLES}. "
+                "Please make sure the file exists and is valid."
+            )
+            return css_file_content
+        return stripped.rstrip() + "\n" + Constants.TAILWIND_CSS + "\n"
+
+    lines = css_file_content.splitlines()
+    insert_at = next(
+        (
+            index + 1
+            for index, line in enumerate(lines)
+            if "__reflex_style_reset.css" in line
+        ),
+        1,
+    )
+    lines.insert(insert_at, Constants.TAILWIND_CSS)
+    return "\n".join(lines)
 
 
 @dataclasses.dataclass
@@ -175,9 +196,19 @@ class TailwindV3Plugin(TailwindPlugin):
             context: The context for the plugin.
         """
         context["add_save_task"](compile_config, self.get_unversioned_config())
-        context["add_save_task"](compile_root_style, context.get("theme_roots"))
+        include_radix_themes = context["radix_themes_plugin"].enabled
+        theme_roots = context.get("theme_roots")
+
+        context["add_save_task"](
+            compile_root_style,
+            theme_roots=theme_roots,
+            include_radix_themes=include_radix_themes,
+        )
         context["add_modify_task"](Dirs.POSTCSS_JS, add_tailwind_to_postcss_config)
         context["add_modify_task"](
             str(Path(Dirs.STYLES) / (PageNames.STYLESHEET_ROOT + Ext.CSS)),
-            add_tailwind_to_css_file,
+            lambda content: add_tailwind_to_css_file(
+                content,
+                include_radix_themes=include_radix_themes,
+            ),
         )
