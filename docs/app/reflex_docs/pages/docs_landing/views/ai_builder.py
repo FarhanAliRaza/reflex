@@ -2,9 +2,9 @@ import os
 
 import frontmatter
 import reflex as rx
-import reflex_ui as ui
-from reflex_ui_shared.components.marquee import marquee
-from reflex_ui_shared.constants import INTEGRATIONS_IMAGES_URL, REFLEX_ASSETS_CDN
+import reflex_components_internal as ui
+from reflex_site_shared.components.marquee import marquee
+from reflex_site_shared.constants import INTEGRATIONS_IMAGES_URL, REFLEX_ASSETS_CDN
 
 from reflex_docs.pages.docs import ai_builder as ai_builder_pages
 
@@ -13,13 +13,14 @@ def get_integration_path() -> list:
     from integrations_docs import DOCS_DIR
 
     base_dir = str(DOCS_DIR)
-    web_path_prefix = "/docs/ai-builder/integrations"
+    web_path_prefix = "/ai/integrations"
     result = []
 
     exclude_files = [
         "mcp_installation",
         "mcp_overview",
         "overview",
+        "skills",
         "snowflake",
     ]  # without .md extension
 
@@ -51,17 +52,15 @@ def get_integration_path() -> list:
                 if title == "Open Ai":
                     title = "Open AI"
 
-            result.append(
-                {
-                    key: {
-                        "path": f"{web_path_prefix}/{slug}",
-                        "tags": tag,
-                        "description": description,
-                        "name": key,
-                        "title": title,
-                    }
+            result.append({
+                key: {
+                    "path": f"{web_path_prefix}/{slug}",
+                    "tags": tag,
+                    "description": description,
+                    "name": key,
+                    "title": title,
                 }
-            )
+            })
 
     return result
 

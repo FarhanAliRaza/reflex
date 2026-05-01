@@ -26,14 +26,20 @@ def get_cdn_url(lib: str) -> str:
     return f"https://cdn.jsdelivr.net/npm/{lib}" + "/+esm"
 
 
-bundled_libraries = [
+DEFAULT_BUNDLED_LIBRARIES = [
     "react",
-    "@radix-ui/themes",
     "@emotion/react",
     f"$/{constants.Dirs.UTILS}/context",
     f"$/{constants.Dirs.UTILS}/state",
     f"$/{constants.Dirs.UTILS}/components",
 ]
+bundled_libraries = list(DEFAULT_BUNDLED_LIBRARIES)
+
+
+def reset_bundled_libraries() -> None:
+    """Reset the bundled library registry to its default values."""
+    bundled_libraries.clear()
+    bundled_libraries.extend(DEFAULT_BUNDLED_LIBRARIES)
 
 
 # Captured during Component serialization so ``collect_window_library_imports``
@@ -57,7 +63,7 @@ def bundle_library(component: Union["Component", str]):
         DynamicComponentMissingLibraryError: Raised when a dynamic component is missing a library.
     """
     if isinstance(component, str):
-        bundled_libraries.append(component)
+        bundled_libraries.append(format_library_name(component))
         return
     if component.library is None:
         msg = "Component must have a library to bundle."
@@ -96,9 +102,8 @@ def load_dynamic_serializer():
         rendered_components.update(component._get_all_custom_code())
 
         rendered_components[
-            templates.stateful_component_template(
+            templates.dynamic_component_template(
                 tag_name="MySSRComponent",
-                memo_trigger_hooks=[],
                 component=component,
                 export=True,
             )
@@ -126,7 +131,7 @@ def load_dynamic_serializer():
             else:
                 imports[lib] = names
 
-        module_code_lines = templates.stateful_components_template(
+        module_code_lines = templates.dynamic_components_module_template(
             imports=utils.compile_imports(imports),
             memoized_code="\n".join(rendered_components),
         ).splitlines()
@@ -207,6 +212,7 @@ def load_dynamic_serializer():
                             imports.ImportVar(tag="evalReactComponent"),
                         ],
                         "react": [
+                            imports.ImportVar(tag="createElement"),
                             imports.ImportVar(tag="useState"),
                             imports.ImportVar(tag="useEffect"),
                         ],
@@ -218,7 +224,7 @@ def load_dynamic_serializer():
                         f"evalReactComponent({js_string!s})"
                         ".then((component) => {"
                         "if (isMounted) {"
-                        f"set_{unique_var_name}(component);"
+                        f"set_{unique_var_name}(() => createElement(component));"
                         "}"
                         "});"
                         "return () => {"
