@@ -694,12 +694,23 @@ def _create_function_definition(
 def _create_component_definition(
     fn: Callable[..., Any],
     return_annotation: Any,
+    *,
+    preview: Component | None = None,
+    params: tuple[MemoParam, ...] | None = None,
 ) -> ExperimentalMemoComponentDefinition:
     """Create a definition for a component-returning memo.
 
     Args:
         fn: The function to analyze.
         return_annotation: The return annotation.
+        preview: An optional pre-evaluated component returned by ``fn`` with
+            placeholder Vars (i.e. the output of ``_evaluate_memo_function``
+            already normalized via ``_normalize_component_return``). When
+            provided alongside ``params``, the second evaluation pass is
+            skipped — used by ``create_passthrough_component_memo`` to
+            avoid re-running the wrapper's passthrough closure.
+        params: Optional pre-analyzed params matching ``preview``. Must be
+            supplied together with ``preview``.
 
     Returns:
         The component memo definition.
@@ -707,8 +718,11 @@ def _create_component_definition(
     Raises:
         TypeError: If the function does not return a component.
     """
-    params = _analyze_params(fn, for_component=True)
-    component = _normalize_component_return(_evaluate_memo_function(fn, params))
+    if preview is not None and params is not None:
+        component: Component | None = preview
+    else:
+        params = _analyze_params(fn, for_component=True)
+        component = _normalize_component_return(_evaluate_memo_function(fn, params))
     if component is None:
         msg = (
             f"Component-returning `@rx._x.memo` `{fn.__name__}` must return an "
@@ -1082,9 +1096,10 @@ def create_passthrough_component_memo(
         return new_component
 
     # Evaluate once to compute the tag from the rendered memo body shape.
-    # ``_create_component_definition`` will evaluate again internally; the
-    # second pass overwrites ``captured_hole_child`` but the captured value
-    # is identical.
+    # The preview Component is then threaded into
+    # ``_create_component_definition`` so the otherwise-identical second
+    # evaluation pass is skipped — saving roughly half of the wrapper-build
+    # cost per memoized node (see PROFILING_FINDINGS.md §9.2).
     params = _analyze_params(passthrough, for_component=True)
     preview = _normalize_component_return(_evaluate_memo_function(passthrough, params))
     if preview is None:
@@ -1099,7 +1114,9 @@ def create_passthrough_component_memo(
     passthrough.__qualname__ = passthrough.__name__
     passthrough.__module__ = __name__
 
-    definition = _create_component_definition(passthrough, Component)
+    definition = _create_component_definition(
+        passthrough, Component, preview=preview, params=params
+    )
     replacements: dict[str, Any] = {}
     if definition.export_name != tag:
         replacements["export_name"] = tag
