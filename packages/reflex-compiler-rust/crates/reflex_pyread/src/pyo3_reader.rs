@@ -27,6 +27,8 @@ use reflex_ir::{
     Value, VarData,
 };
 
+use super::memo_bodies;
+use super::memoize::{peek_memoize_for, should_memoize, MemoRefs};
 use super::text::decode_js_string_literal;
 use super::timing::{self, Counter as TC, Field as TF, Span as TSpan};
 
@@ -234,6 +236,20 @@ fn read_component<'arena, 'py>(
     refs: &PyRefs<'py>,
 ) -> Result<Component<'arena>, PyReadError> {
     timing::incr(TC::Node);
+
+    // Phase 2 Part B: when the Rust-side memoize transformation is on,
+    // intercept memoizable Components *before* dispatching by class so a
+    // memo-candidate Element/Bare/etc. becomes a `MemoCall` IR node.
+    // The hook recurses into the original children via `read_component`,
+    // so nested memo candidates correctly produce nested `MemoCall`s
+    // (pre-order on the original tree — equivalent to the Python
+    // bottom-up walk because each level's decision is independent).
+    if memo_bodies::memoize_enabled() {
+        if let Some(memo_call) = try_memoize_in_rust(py, component, arena, refs)? {
+            return Ok(memo_call);
+        }
+    }
+
     let cls_name = {
         let _s = TSpan::new(TF::ClassName);
         class_name(component)?
@@ -246,6 +262,81 @@ fn read_component<'arena, 'py>(
         "Match" => read_match(py, component, arena, refs),
         _ => read_element(py, component, arena, refs),
     }
+}
+
+/// If `component` is a memoize candidate, build a `Component::MemoCall`
+/// IR node for it and stash the wrapper body into the thread-local
+/// `memo_bodies` collector. Returns `Ok(None)` when the component
+/// isn't memoizable (caller falls through to the legacy dispatch).
+///
+/// Mirrors `reflex.compiler.rust_memo.walk_and_memoize`'s
+/// `should_memoize -> create_passthrough_component_memo` path, but
+/// without constructing the full Python wrapper Component — we peek
+/// at the wrapper body via `peek_memoize` and recurse into the
+/// original Component's children directly. That keeps the
+/// per-memo-node cost down to one Python call (`peek_memoize`) plus
+/// the normal child walk.
+fn try_memoize_in_rust<'arena, 'py>(
+    py: Python<'py>,
+    component: &Bound<'py, PyAny>,
+    arena: &'arena Arena,
+    refs: &PyRefs<'py>,
+) -> Result<Option<Component<'arena>>, PyReadError> {
+    // Cheap predicate first. `MemoRefs::from_pyrefs` re-resolves the
+    // `Component` class via `import_bound` — ~10 µs that we'd pay per
+    // node here. Avoid the import by reusing `PyRefs.var_cls` and only
+    // looking up `Component` once. For now, build per call: this hook
+    // only fires when the flag is on, and the page count is bounded.
+    let memo_refs = MemoRefs::from_pyrefs(py, refs)?;
+    let candidate = should_memoize(py, component, &memo_refs)?;
+    if !candidate {
+        return Ok(None);
+    }
+
+    // Peek at the wrapper body without constructing the full
+    // ExperimentalMemoComponent. Byte-equal output to cppm
+    // (proved by parity tests in Phase 1B).
+    let peek = peek_memoize_for(py, component, refs).map_err(|source| PyReadError::Attr {
+        attr: "peek_memoize(component)",
+        source,
+    })?;
+
+    // Passthrough wrappers carry the original's children at the
+    // page-level call site (`jsx(<Name>, {}, ...children)`); snapshot
+    // wrappers own their full subtree inside the memo body, so the
+    // call site passes no children.
+    let passthrough = peek.signature == "({ children })";
+    let children: &'arena [Component<'arena>] = if passthrough {
+        read_children(py, component, arena, refs)?
+    } else {
+        arena.alloc_slice_fill_iter(std::iter::empty::<Component<'arena>>())
+    };
+
+    // Register the wrapper-body PyObject + signature for the Python
+    // orchestrator to drain. The body is the lift-normalized
+    // Component returned by `peek_memoize`; it will later be passed
+    // to `compile_memo_from_component` to emit
+    // `.web/utils/components/<name>.jsx`.
+    let body_pyobj: PyObject = peek.body.clone().unbind();
+    memo_bodies::add(peek.export_name.clone(), body_pyobj, peek.signature);
+
+    // Register the page-level `import { <name> } from
+    // "$/utils/components/<name>";` line. Reuses the same harvest
+    // accumulator `import_alias_for` writes into so the page emitter
+    // groups & dedupes it alongside every other component import.
+    let name_sym = intern(&peek.export_name);
+    let module = format!("$/utils/components/{}", peek.export_name);
+    let module_sym = intern(&module);
+    refs.harvest
+        .borrow_mut()
+        .add_component_import((module_sym, name_sym));
+
+    Ok(Some(Component::MemoCall {
+        export_name: name_sym,
+        children,
+        id: NodeId::default(),
+        source_loc: SourceLoc::SYNTHETIC,
+    }))
 }
 
 fn read_bare<'arena, 'py>(

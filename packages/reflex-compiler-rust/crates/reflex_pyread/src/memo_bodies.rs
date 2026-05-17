@@ -24,7 +24,7 @@
 //! skipping duplicates is correct and saves the second PyObject
 //! reference.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use pyo3::prelude::*;
@@ -34,6 +34,28 @@ thread_local! {
     /// currently being read.
     pub static MEMO_BODIES: RefCell<HashMap<String, (PyObject, String)>>
         = RefCell::new(HashMap::new());
+
+    /// Phase 2 Part B feature flag: when `true`, the `read_page` walk
+    /// transforms memoize-candidate Components into `Component::MemoCall`
+    /// IR nodes (registering their bodies into `MEMO_BODIES`). Defaults
+    /// to `false` so the legacy Python `walk_and_memoize` pass keeps
+    /// owning the transformation until Part D flips the default. Flipping
+    /// while Python's pass is still active would double-wrap every
+    /// candidate.
+    pub static MEMOIZE_IN_RUST: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether the Rust-side memoize transformation is enabled for the
+/// current thread. See `MEMOIZE_IN_RUST` for the gating story.
+pub fn memoize_enabled() -> bool {
+    MEMOIZE_IN_RUST.with(|c| c.get())
+}
+
+/// Toggle the Rust-side memoize transformation on or off for the
+/// current thread. Persists across `read_page` calls — the per-page
+/// reset only touches the body collector, not this flag.
+pub fn set_memoize_enabled(value: bool) {
+    MEMOIZE_IN_RUST.with(|c| c.set(value));
 }
 
 /// Clear the collector. Call at the start of every page compile so the
@@ -68,4 +90,23 @@ pub fn drain() -> Vec<(String, PyObject, String)> {
 /// Number of entries currently held. Test helper.
 pub fn len() -> usize {
     MEMO_BODIES.with(|cell| cell.borrow().len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{memoize_enabled, set_memoize_enabled};
+
+    #[test]
+    fn flag_defaults_off() {
+        // Fresh thread-local state — the constant initializer is `false`.
+        assert!(!memoize_enabled());
+    }
+
+    #[test]
+    fn flag_roundtrips() {
+        set_memoize_enabled(true);
+        assert!(memoize_enabled());
+        set_memoize_enabled(false);
+        assert!(!memoize_enabled());
+    }
 }

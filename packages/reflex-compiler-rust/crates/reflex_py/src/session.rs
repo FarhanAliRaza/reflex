@@ -429,6 +429,24 @@ impl CompilerSession {
         Ok(d)
     }
 
+    /// Toggle the Phase 2 Part B Rust-side memoize transformation.
+    ///
+    /// When `on` is `true`, the next `compile_page_from_component` call
+    /// will route memoize-candidate Components through the Rust
+    /// `read_page` walk (emitting `Component::MemoCall` IR nodes and
+    /// stashing wrapper bodies into the thread-local
+    /// `memo_bodies` collector). Defaults to **off** — Python's
+    /// `walk_and_memoize` still owns the transformation until Part D
+    /// flips the default; running both would double-wrap every
+    /// candidate.
+    ///
+    /// The flag is thread-local: flipping on one thread doesn't affect
+    /// another. Persists across `read_page` calls (the per-page reset
+    /// only touches the body collector, not this flag).
+    fn set_memoize_in_rust(&self, on: bool) {
+        reflex_pyread::memo_bodies::set_memoize_enabled(on);
+    }
+
     /// Drain the per-page memo-body collector and return its contents
     /// as a `dict[str, tuple[Component, str]]`.
     ///

@@ -407,6 +407,32 @@ class CompilerSession:
         self.merge_imports_into(target, raw_dict)
         return raw_dict
 
+    def set_memoize_in_rust(self, on: bool) -> None:
+        """Toggle the Rust-side auto-memoize transformation.
+
+        Phase 2 Part B of the Rust IR Memoize port. When ``on`` is
+        ``True``, the next :meth:`compile_page_from_component` call
+        routes memoize-candidate Components through the Rust
+        ``read_page`` walk, emitting ``Component::MemoCall`` IR nodes
+        and stashing each wrapper body in the thread-local
+        ``memo_bodies`` collector (drained via
+        :meth:`take_memo_bodies`).
+
+        Defaults to ``False``. Python's
+        :func:`reflex.compiler.rust_memo.walk_and_memoize` still owns
+        the transformation until Part D flips the default — enabling
+        both at once would double-wrap every candidate.
+
+        The flag is **thread-local**: flipping on one thread doesn't
+        affect another. It persists across ``read_page`` calls (the
+        per-page reset only touches the body collector).
+
+        Args:
+            on: ``True`` to enable the Rust-side memoize pass,
+                ``False`` to disable it.
+        """
+        self._inner.set_memoize_in_rust(bool(on))
+
     def take_memo_bodies(self) -> dict[str, tuple[object, str]]:
         """Drain the per-page memo-body collector and return its contents.
 
