@@ -346,22 +346,156 @@ dominates.
 
 ---
 
-## 9. Where the time goes — the 24.66 ms / page budget
+## 9. Where the time goes — the 33 ms / page budget
 
-After rounds 1 + 2 + walk-fusion, single page at scale=1:
+After rounds 1 + 2 + walk-fusion + monkey-patched sub-timers,
+single page at scale=1 (10 runs, 1 warmup discarded):
 
 | Phase | Time | Where it runs |
 |---|---|---|
-| `walk_and_memoize` | 5.08 ms | **Python** — recursion + 464 `Component.create()` allocations for memo wrappers |
-| `app_root composition + render` | 5.99 ms | **Python** — `_RenderUtils.render` is a recursive Python JSX renderer |
-| `_get_all_custom_code` | 4.57 ms | **Python** — Markdown component builds `ComponentMap_*` closure |
-| `collect_all_imports_into` | 3.02 ms | **Rust+PyO3** — already moved; PyO3 callbacks dominate |
-| `memo body: compile_memo_from_component` | 2.63 ms | **Rust+PyO3** — already in Rust |
-| `compile_unevaluated_page` | 1.72 ms | **Python** — user `def page()` callable. **Unmovable.** |
-| `compile_page_from_component` | 0.65 ms | **Rust+PyO3** — already Rust |
-| Other (hooks, app_wraps, I/O) | 1.00 ms | mix |
+| `app_root composition + render` | 9.00 ms | **Python+hybrid** (see §9.4) |
+| `walk_and_memoize` | 6.73 ms | **Python** — recursion + 8 `Component.create()` allocations |
+| `_get_all_custom_code` | 6.37 ms | **Python** — Markdown component builds `ComponentMap_*` closure |
+| `collect_all_imports_into` | 3.91 ms | **Rust+PyO3** — see §9.5 for Rust sub-breakdown |
+| `compile_unevaluated_page` | 2.61 ms | **Python** — user `def page()` callable. **Unmovable.** |
+| `memo body: compile_memo_from_component` | 2.21 ms | **Rust+PyO3** |
+| `compile_page_from_component` | 0.43 ms | **Rust+PyO3** |
+| `_get_all_app_wrap_components` | 0.42 ms | **Python** |
+| `memo body: collect_all_imports_into` | 0.32 ms | **Rust+PyO3** |
+| `page write_text` | 0.21 ms | I/O |
+| `memo body: write_text` | 0.49 ms | I/O |
+| `_get_all_hooks + _render_hooks` | 0.17 ms | **Python** |
+| `memo body: _harvest_pre_hooks` | 0.11 ms | **Python** |
 
-**Python share: 73.7%. Hybrid (Rust + PyO3 callbacks): 26.3%. Pure Rust: 0%.**
+**Per-run median total: 32.99 ms. Python: 79.1%. Hybrid: 20.9%. Pure Rust: 0%.**
+
+### 9.1 `compile_unevaluated_page` — 2.61 ms (driver 8.6%)
+
+Reimplemented in the bench so each constituent gets timed.
+
+| Sub-step | Time | Share |
+|---|---|---|
+| `into_component` (user page callable) | 1.98 ms | 75.6% |
+| `_add_style_recursive` (theme apply) | 0.28 ms | 10.9% |
+| `add_meta` | 0.10 ms | 3.9% |
+| `Fragment.create` | 0.03 ms | 1.0% |
+| driver / function-entry overhead | 0.23 ms | 8.6% |
+
+Dominated by the user `def page()` callable itself. Unmovable.
+
+### 9.2 `walk_and_memoize` — 6.73 ms (driver 2.9%)
+
+Self-time per-node breakdown.
+
+| Sub-step | Time | Share | Count | µs/op |
+|---|---|---|---|---|
+| `create_passthrough_component_memo` | 5.81 ms | 86.3% | 8 wraps | **726 µs/wrap** |
+| `session.should_memoize` (Rust call) | 0.43 ms | 6.4% | 56 nodes | 7.7 µs/node |
+| `_wrap_with_memo body (excl cppm)` | 0.28 ms | 4.2% | 8 wraps | 35 µs/wrap |
+
+**`create_passthrough_component_memo` is 86% of the phase** — at 726 µs per
+wrapper × 8 wrappers / page, this is the dominant single cost in the
+entire 33 ms budget after the macros. The Rust port (plan §10 primary
+target) eliminates ~3-5 ms / page if memo wrappers become IR-only.
+
+### 9.3 `_get_all_custom_code` — 6.37 ms (driver 1.8%)
+
+Self-time per-node breakdown.
+
+| Sub-step | Time | Share | Count | µs/op |
+|---|---|---|---|---|
+| `self._get_custom_code()` | 6.19 ms | 97.1% | 41 nodes (1 returned code) | 151 µs/node |
+| `_get_components_in_props()` | 0.030 ms | 0.5% | 41 nodes | 0.7 µs/node |
+| `_iter_parent_classes_with_method` | 0.019 ms | 0.3% | 41 nodes | 0.5 µs/node |
+
+**`_get_custom_code()` per-node is 151 µs.** One node — the Markdown
+component — pays ~6 ms (it builds the entire `ComponentMap_*` closure).
+The other 40 nodes pay near-zero (no-op `return None`). A targeted
+fix in Markdown (cache the closure, or compile once at class definition)
+would erase ~6 ms / page on its own.
+
+### 9.4 `app_root composition + render` — 9.00 ms (driver 0.7%)
+
+The "render" label was misleading — actual render work (Tag tree +
+stringify) is only **0.57 ms**. The other 8.4 ms is plugin resolution,
+import harvest, and `_get_all_*` walks on the wrapped tree:
+
+| Sub-step | Time | Share | Kind |
+|---|---|---|---|
+| `plugin resolve + app_wrap resolve` | 3.78 ms | 41.9% | Python |
+| `sess.collect_all_imports_into(app_root)` | 3.57 ms | 39.6% | Rust+PyO3 |
+| `app._app_root(app_wrappers)` | 0.53 ms | 5.9% | Python |
+| `component.render()` (Tag tree build) | 0.53 ms | 5.9% | Python |
+| `app_root._get_all_hooks()` | 0.16 ms | 1.8% | Python |
+| `app_root._get_all_custom_code()` | 0.14 ms | 1.6% | Python |
+| `compile_imports + get_import join` | 0.08 ms | 0.9% | Python |
+| `app_root._get_all_imports()` | 0.07 ms | 0.8% | Python |
+| `_RenderUtils.render` (top-level stringify) | 0.03 ms | 0.4% | Python |
+| (smaller: render_tag pieces, hooks, apply_common_imports) | < 0.02 ms ea | | |
+
+**The "render" phase is misnamed**: ~42% of its time is plugin
+resolution (the radix-themes plugin search + app-wrap resolution
+happens here every page) and another 40% is a *second*
+`collect_all_imports_into` walk on `app_root`. The actual Python JSX
+renderer (`_RenderUtils.render` + `component.render()`) is 0.57 ms /
+6.3% of the phase.
+
+### 9.5 `collect_all_imports_into` — 3.91 ms (Rust+PyO3, see Rust table)
+
+Rust-side sub-breakdown via `import_timing::snapshot()`:
+
+| Sub-step | Time | Share |
+|---|---|---|
+| `walk_total_ns` (end-to-end) | 4.09 ms | 100% |
+| `get_imports_call_ns` (per-node `_get_imports()` PyO3 call) | 3.79 ms | **92.5%** |
+| `prop_components_call_ns` (per-node `_get_components_in_props()`) | 0.19 ms | 4.6% |
+| `merge_into_target_ns` (`append_items`) | 0.05 ms | 1.3% |
+| `children_iter_ns` (per-node `getattr("children")`) | 0.03 ms | 0.6% |
+| `lib_prefix_transform_ns` (`$/utils/...` rewrite) | 0.004 ms | 0.1% |
+| (unaccounted — loop control) | 0.04 ms | 0.9% |
+
+Counters: 48 nodes visited, 60 import entries, 88 ImportVar items.
+**93% of the time is the per-node `_get_imports()` PyO3 callback into
+Python.** The pure-Rust merge/prefix work is 1.4% — moving more work
+into Rust here would have to attack the callback itself (per-component
+import caching, or fusing into the existing `read_page` walk).
+
+### 9.6 Putting it all together — the 33 ms accounting
+
+Every fat Python phase now reconciles against its constituent sub-timers
+within **±10% driver overhead** (most under 3%). Nothing in the
+per-page budget is unaccounted-for anymore:
+
+| Phase | Wrapper | Sum of sub-timers | Driver |
+|---|---|---|---|
+| `compile_unevaluated_page` | 2.61 ms | 2.39 ms | 8.6% |
+| `walk_and_memoize` | 6.73 ms | 6.53 ms | 2.9% |
+| `_get_all_custom_code` | 6.37 ms | 6.26 ms | 1.8% |
+| `app_root composition + render` | 9.00 ms | 8.94 ms | 0.7% |
+| `collect_all_imports_into` (hybrid) | 3.91 ms | (Rust table: 4.09 ms walk_total) | — |
+
+### 9.7 Updated optimization priorities (after detailed accounting)
+
+The detailed accounting reshuffles the optimization targets vs §10:
+
+1. **Markdown `_get_custom_code` caching — ~6 ms / page.** A single
+   Markdown component's `ComponentMap_*` build dominates
+   `_get_all_custom_code` at 151 µs/node × 40 nodes (mostly zero work)
+   but ~6 ms on the one Markdown node. Surgical fix, no Rust port needed.
+2. **`create_passthrough_component_memo` → IR-only wrappers —
+   ~5.8 ms / page.** 726 µs/wrap × 8 wraps. Plan §10 primary target,
+   confirmed as #1 single-phase cost.
+3. **De-duplicate `collect_all_imports_into` on `app_root` —
+   ~3.6 ms / page.** The app_root composition phase does a second
+   full import walk (40 nodes) when the data is already in
+   `all_imports`. Caching/merging the page result instead would erase
+   most of this.
+4. **Move `plugin resolve + app_wrap resolve` out of the page loop —
+   ~3.8 ms / page.** This is per-page work that depends only on
+   `app.plugins` and `collected_app_wraps`; the plugin resolution piece
+   is purely a config lookup. Memoize / hoist out of the page loop.
+5. **`into_component` (user `def page()` body) — 1.98 ms / page.**
+   Unmovable (user code).
 
 ---
 

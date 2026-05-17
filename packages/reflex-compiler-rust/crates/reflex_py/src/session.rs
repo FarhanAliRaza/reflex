@@ -400,6 +400,35 @@ impl CompilerSession {
         Ok(d)
     }
 
+    /// Snapshot the per-sub-step timings recorded by the most recent
+    /// `collect_all_imports_into` call. Counters reset on every call so
+    /// the values reflect the single walk just executed.
+    ///
+    /// Returns a `dict[str, int]` with these keys:
+    ///
+    /// * `walk_total_ns` — end-to-end walk time.
+    /// * `get_imports_call_ns` — per-node `_get_imports()` PyO3 call.
+    /// * `lib_prefix_transform_ns` — `$/utils/...` library-name rewrite.
+    /// * `merge_into_target_ns` — appending into the caller's dict.
+    /// * `children_iter_ns` — `getattr("children")` + `iter()` setup.
+    /// * `prop_components_call_ns` — `_get_components_in_props()` call.
+    /// * `node_count`, `var_count`, `import_entry_count` — counters for
+    ///   per-unit cost derivation.
+    fn last_import_timings_ns<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let t = reflex_pyread::timing::import_timing::snapshot();
+        let d = PyDict::new_bound(py);
+        d.set_item("walk_total_ns", t.walk_total_ns)?;
+        d.set_item("get_imports_call_ns", t.get_imports_call_ns)?;
+        d.set_item("lib_prefix_transform_ns", t.lib_prefix_transform_ns)?;
+        d.set_item("merge_into_target_ns", t.merge_into_target_ns)?;
+        d.set_item("children_iter_ns", t.children_iter_ns)?;
+        d.set_item("prop_components_call_ns", t.prop_components_call_ns)?;
+        d.set_item("node_count", t.node_count)?;
+        d.set_item("var_count", t.var_count)?;
+        d.set_item("import_entry_count", t.import_entry_count)?;
+        Ok(d)
+    }
+
     /// Compile a single page directly from a Python `Component` PyObject —
     /// the new lever-(a) entry point that bypasses `bridge.py` + msgpack.
     ///

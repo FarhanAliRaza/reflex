@@ -30,12 +30,15 @@ use std::collections::HashMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyList, PyString, PyStringMethods};
 
+use super::timing::import_timing::{self, Counter as IC, Field as IF, Span as ISpan};
+
 /// Library-name prefixes that get rewritten to `$<prefix>` so Vite's
 /// `$` alias resolves them to `.web/<prefix>/...`. Mirrors
 /// `reflex_base.utils.imports.merge_imports`.
 const ALIAS_PREFIXES: &[&str] = &["/utils/", "/components/", "/styles/", "/public/"];
 
 fn apply_alias_prefix(lib: &str) -> String {
+    let _t = ISpan::new(IF::LibPrefixTransform);
     if ALIAS_PREFIXES.iter().any(|p| lib.starts_with(p)) {
         let mut out = String::with_capacity(lib.len() + 1);
         out.push('$');
@@ -79,6 +82,8 @@ pub fn collect_all_imports_into<'py>(
     target: &Bound<'py, PyDict>,
     root: &Bound<'py, PyAny>,
 ) -> PyResult<()> {
+    import_timing::reset();
+    let _total = ISpan::new(IF::WalkTotal);
     walk_into(py, root, target)
 }
 
@@ -127,15 +132,28 @@ fn walk_into<'py>(
     node: &Bound<'py, PyAny>,
     target: &Bound<'py, PyDict>,
 ) -> PyResult<()> {
-    let imports_obj = node.call_method0("_get_imports")?;
+    import_timing::incr(IC::Node);
+    let imports_obj = {
+        let _t = ISpan::new(IF::GetImportsCall);
+        node.call_method0("_get_imports")?
+    };
     let imports_dict = imports_obj.downcast::<PyDict>()?;
     for (lib_obj, items_obj) in imports_dict.iter() {
         let lib_str = lib_obj.downcast::<PyString>()?.to_str()?;
         let new_lib = apply_alias_prefix(lib_str);
-        append_items(py, target, &new_lib, &items_obj)?;
+        {
+            let _t = ISpan::new(IF::MergeIntoTarget);
+            append_items(py, target, &new_lib, &items_obj)?;
+        }
+        import_timing::incr(IC::ImportEntry);
+        if let Ok(items_list) = items_obj.downcast::<PyList>() {
+            import_timing::add_var(items_list.len() as u64);
+        }
     }
 
-    recurse_children_and_prop_components(py, node, &mut |child| walk_into(py, child, target))
+    recurse_children_and_prop_components_timed(py, node, &mut |child| {
+        walk_into(py, child, target)
+    })
 }
 
 fn recurse_children_and_prop_components<'py, F>(
@@ -159,6 +177,58 @@ where
 
     if let Ok(prop_components) = node.call_method0("_get_components_in_props") {
         if let Ok(iter) = prop_components.iter() {
+            for c in iter {
+                let prop_comp = c?;
+                visit(&prop_comp)?;
+            }
+        }
+    }
+
+    let _ = py;
+    Ok(())
+}
+
+/// Variant of [`recurse_children_and_prop_components`] used by the
+/// instrumented [`collect_all_imports_into`] path — the `getattr` and
+/// `call_method0` calls are individually timed (excluding the recursive
+/// `visit` time, which is attributed to the child node).
+fn recurse_children_and_prop_components_timed<'py, F>(
+    py: Python<'py>,
+    node: &Bound<'py, PyAny>,
+    visit: &mut F,
+) -> PyResult<()>
+where
+    F: FnMut(&Bound<'py, PyAny>) -> PyResult<()>,
+{
+    let children = {
+        let _t = ISpan::new(IF::ChildrenIter);
+        node.getattr("children")
+    };
+    if let Ok(children) = children {
+        if !children.is_none() {
+            let iter_res = {
+                let _t = ISpan::new(IF::ChildrenIter);
+                children.iter()
+            };
+            if let Ok(iter) = iter_res {
+                for c in iter {
+                    let child = c?;
+                    visit(&child)?;
+                }
+            }
+        }
+    }
+
+    let prop_components = {
+        let _t = ISpan::new(IF::PropComponentsCall);
+        node.call_method0("_get_components_in_props")
+    };
+    if let Ok(prop_components) = prop_components {
+        let iter_res = {
+            let _t = ISpan::new(IF::PropComponentsCall);
+            prop_components.iter()
+        };
+        if let Ok(iter) = iter_res {
             for c in iter {
                 let prop_comp = c?;
                 visit(&prop_comp)?;

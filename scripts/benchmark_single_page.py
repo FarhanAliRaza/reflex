@@ -122,21 +122,29 @@ class PhaseTimer:
 
     KIND_ORDER = {"python": 0, "hybrid": 1, "rust": 2}
 
-    def __init__(self) -> None:
+    def __init__(self, sub: SubTimer | None = None) -> None:
         self.samples: dict[str, list[int]] = {}
         self.kinds: dict[str, str] = {}
         self.order: list[str] = []
+        self._sub = sub
+
+    def attach_sub(self, sub: SubTimer | None) -> None:
+        self._sub = sub
 
     @contextmanager
     def measure(self, name: str, kind: str = "python"):
         if name not in self.kinds:
             self.kinds[name] = kind
             self.order.append(name)
+        if self._sub is not None:
+            self._sub.push_parent(name)
         t0 = _ns()
         try:
             yield
         finally:
             self.samples.setdefault(name, []).append(_ns() - t0)
+            if self._sub is not None:
+                self._sub.pop_parent()
 
     def trim_warmup(self) -> None:
         """Discard the first sample of every phase (the cold-cache run)."""
@@ -197,11 +205,587 @@ def _p95(samples: list[float]) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Sub-phase timer — accumulates monkey-patched fine-grained timings
+# alongside the coarse PhaseTimer. Each sub-phase belongs to a parent
+# (matches a row in PhaseTimer) so the printer can render a nested
+# breakdown that reconciles against the parent total.
+# ---------------------------------------------------------------------------
+
+
+class SubTimer:
+    """Per-run accumulator for sub-phase timings + counters.
+
+    Each parent phase has its own dict of sub-names. Patched functions
+    call ``add_ns(sub_name, ns)`` and ``add_count(name)`` without
+    specifying a parent — the SubTimer maintains a parent stack
+    (pushed/popped by :meth:`PhaseTimer.measure`) so the topmost active
+    wrapper receives the attribution. A function called from two
+    different parent wrappers (e.g. ``_get_all_custom_code`` invoked by
+    both the page wrapper and ``app_root composition + render``) gets
+    its time correctly split.
+
+    All sub-phase timings are **self-time only** — patched functions
+    reimplement their bodies so recursive child work flows into the
+    child level's own timing rather than the parent's inclusive measure.
+    """
+
+    def __init__(self) -> None:
+        # parent -> sub_name -> per-run total ns (one int per run)
+        self.run_totals: dict[str, dict[str, list[int]]] = {}
+        # parent -> counter_name -> per-run total (one int per run)
+        self.run_counts: dict[str, dict[str, list[int]]] = {}
+        # Mutable in-run accumulator; reset each run.
+        self._current_ns: dict[str, dict[str, int]] = {}
+        self._current_count: dict[str, dict[str, int]] = {}
+        # Active-parent stack updated by PhaseTimer.measure.
+        self._parent_stack: list[str] = []
+        # Preserve insertion order for the printer.
+        self.parent_order: list[str] = []
+        self.sub_order: dict[str, list[str]] = {}
+        self.count_order: dict[str, list[str]] = {}
+
+    def push_parent(self, name: str) -> None:
+        self._parent_stack.append(name)
+
+    def pop_parent(self) -> None:
+        if self._parent_stack:
+            self._parent_stack.pop()
+
+    def begin_run(self) -> None:
+        self._current_ns = {}
+        self._current_count = {}
+
+    def _active_parent(self) -> str | None:
+        return self._parent_stack[-1] if self._parent_stack else None
+
+    def add_ns(self, sub: str, ns: int) -> None:
+        parent = self._active_parent()
+        if parent is None:
+            return
+        if parent not in self.parent_order:
+            self.parent_order.append(parent)
+        sub_list = self.sub_order.setdefault(parent, [])
+        if sub not in sub_list:
+            sub_list.append(sub)
+        bucket = self._current_ns.setdefault(parent, {})
+        bucket[sub] = bucket.get(sub, 0) + ns
+
+    def add_count(self, name: str, n: int = 1) -> None:
+        parent = self._active_parent()
+        if parent is None:
+            return
+        if parent not in self.parent_order:
+            self.parent_order.append(parent)
+        clist = self.count_order.setdefault(parent, [])
+        if name not in clist:
+            clist.append(name)
+        bucket = self._current_count.setdefault(parent, {})
+        bucket[name] = bucket.get(name, 0) + n
+
+    def flush_run(self) -> None:
+        for parent, subs in self._current_ns.items():
+            tgt = self.run_totals.setdefault(parent, {})
+            for sub, ns in subs.items():
+                tgt.setdefault(sub, []).append(ns)
+        for parent, counts in self._current_count.items():
+            tgt = self.run_counts.setdefault(parent, {})
+            for name, n in counts.items():
+                tgt.setdefault(name, []).append(n)
+        # Ensure every known (parent, sub) gets a zero sample for runs
+        # where the wrapper wasn't hit — keeps medians honest.
+        for parent in self.parent_order:
+            tot = self.run_totals.setdefault(parent, {})
+            cnts = self.run_counts.setdefault(parent, {})
+            for sub in self.sub_order.get(parent, []):
+                if len(tot.setdefault(sub, [])) < self._expected_run_count(tot):
+                    tot[sub].append(0)
+            for cname in self.count_order.get(parent, []):
+                if len(cnts.setdefault(cname, [])) < self._expected_run_count(cnts):
+                    cnts[cname].append(0)
+        self._current_ns = {}
+        self._current_count = {}
+
+    @staticmethod
+    def _expected_run_count(d: dict[str, list[int]]) -> int:
+        return max((len(v) for v in d.values()), default=0)
+
+    def trim_warmup(self) -> None:
+        for subs in self.run_totals.values():
+            for k in list(subs):
+                if len(subs[k]) > 1:
+                    subs[k] = subs[k][1:]
+        for counts in self.run_counts.values():
+            for k in list(counts):
+                if len(counts[k]) > 1:
+                    counts[k] = counts[k][1:]
+
+    def parent_total_ms(self, parent: str) -> float:
+        """Median sum-of-subs (ms) per run for ``parent``."""
+        subs = self.run_totals.get(parent, {})
+        if not subs:
+            return 0.0
+        # Aggregate per-run sums first, then take median.
+        run_count = max(len(v) for v in subs.values())
+        per_run = [
+            sum(v[i] if i < len(v) else 0 for v in subs.values()) / 1_000_000
+            for i in range(run_count)
+        ]
+        return statistics.median(per_run)
+
+    def print_breakdown(self, phase_timer: PhaseTimer) -> None:
+        if not self.parent_order:
+            return
+        print()
+        print("=" * 90)
+        print("PYTHON SUB-PHASE BREAKDOWN (monkey-patched per-step timers)")
+        print("=" * 90)
+        print(
+            "Each sub-phase row reports the median per-run total for that"
+            " specific call site."
+        )
+        print(
+            "'driver' = parent wrapper time minus sum of timed sub-phases —"
+            " unaccounted residual"
+        )
+        print(
+            "(loop control, attribute reads, Python function-entry overhead)."
+        )
+
+        for parent in self.parent_order:
+            subs = self.run_totals.get(parent, {})
+            counts = self.run_counts.get(parent, {})
+            if not subs and not counts:
+                continue
+            parent_total = (
+                statistics.median(phase_timer.samples.get(parent, [0]))
+                / 1_000_000
+                if parent in phase_timer.samples
+                else None
+            )
+            print()
+            print(f"--- {parent} ---")
+            if parent_total is not None:
+                print(f"parent wrapper median:  {parent_total:.3f} ms")
+            header = (
+                f"  {'sub-phase':<42}{'median':>10}{'mean':>10}"
+                f"{'p95':>10}{'share':>9}"
+            )
+            print(header)
+            print(
+                f"  {'':<42}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}{'':>9}"
+            )
+            print("  " + "-" * (len(header) - 2))
+            sub_total = 0.0
+            for sub in self.sub_order.get(parent, []):
+                samples_ns = subs.get(sub, [])
+                if not samples_ns:
+                    continue
+                ms_samples = [s / 1_000_000 for s in samples_ns]
+                med = statistics.median(ms_samples)
+                mean = statistics.mean(ms_samples)
+                p95 = _p95(ms_samples)
+                share = (
+                    f"{(med / parent_total * 100):5.1f}%"
+                    if parent_total
+                    else "  n/a"
+                )
+                sub_total += med
+                print(
+                    f"  {sub:<42}{med:>10.3f}{mean:>10.3f}"
+                    f"{p95:>10.3f}{share:>9}"
+                )
+            print("  " + "-" * (len(header) - 2))
+            print(f"  {'sum of timed sub-phases:':<42}{sub_total:>10.3f}")
+            if parent_total is not None:
+                driver = parent_total - sub_total
+                pct = (driver / parent_total * 100) if parent_total else 0
+                kind = phase_timer.kinds.get(parent, "python")
+                tag = "driver / unaccounted"
+                # Hybrid / pure-Rust phases account for their work in
+                # the Rust-side timing tables; Python-side sub-timers
+                # only see the PyO3 wrappers if any. Don't warn on a
+                # large residual there.
+                if kind == "python" and abs(driver) > parent_total * 0.10:
+                    tag += "  ⚠ >10% — add another sub-timer"
+                elif kind != "python":
+                    tag = "driver / Rust+PyO3 work (see Rust table)"
+                print(
+                    f"  {tag:<42}{driver:>10.3f}{'':>10}{'':>10}{pct:>8.1f}%"
+                )
+
+            # Counter / per-op rows.
+            if counts:
+                print()
+                print(f"  {'counter':<42}{'median':>10}{'mean':>10}")
+                print("  " + "-" * 64)
+                for cname in self.count_order.get(parent, []):
+                    csamples = counts.get(cname, [])
+                    if not csamples:
+                        continue
+                    med = statistics.median(csamples)
+                    mean = statistics.mean(csamples)
+                    print(f"  {cname:<42}{med:>10.1f}{mean:>10.1f}")
+                # Per-op µs cost rows for each sub × each counter (median).
+                print()
+                print(f"  {'per-op cost (median)':<42}{'µs/op':>10}")
+                print("  " + "-" * 54)
+                for sub in self.sub_order.get(parent, []):
+                    sub_samples = subs.get(sub, [])
+                    if not sub_samples:
+                        continue
+                    sub_med_ns = statistics.median(sub_samples)
+                    for cname in self.count_order.get(parent, []):
+                        cs = counts.get(cname, [])
+                        if not cs:
+                            continue
+                        c_med = statistics.median(cs)
+                        if c_med <= 0:
+                            continue
+                        per_op = sub_med_ns / c_med / 1000  # µs
+                        label = f"{sub}  /  {cname}"
+                        print(f"  {label:<42}{per_op:>10.3f}")
+
+
+# ---------------------------------------------------------------------------
+# Monkey-patches that feed the SubTimer with fine-grained timings for the
+# hot Python phases identified by PROFILING_FINDINGS.md §9.
+# ---------------------------------------------------------------------------
+
+
+def _install_python_subtimers(sub: SubTimer) -> callable:
+    """Patch hot Python phases to record into ``sub``.
+
+    The patches replace module-level / class-level callables in
+    ``reflex/`` and ``reflex_base/`` for the duration of the benchmark.
+    Calls remain semantically identical — every wrapper just brackets the
+    original with ``perf_counter_ns`` reads.
+
+    Args:
+        sub: the accumulator to feed.
+
+    Returns:
+        A zero-arg ``restore`` callable that puts every patched symbol
+        back. Use it in a ``finally`` clause so failures don't leak the
+        patches into other tests.
+    """
+    import copy
+
+    import importlib
+
+    # ``reflex.experimental.__init__`` re-exports ``memo`` as the
+    # function (shadows the submodule attribute), so plain
+    # ``import reflex.experimental.memo`` doesn't give us module access.
+    memo_mod = importlib.import_module("reflex.experimental.memo")
+
+    from reflex.compiler import compiler as compiler_mod
+    from reflex.compiler import rust_memo
+    from reflex_base.compiler import templates as templates_mod
+    from reflex_base.components.component import Component
+
+    # Capture originals.
+    orig_walk = rust_memo.walk_and_memoize
+    orig_wrap = rust_memo._wrap_with_memo
+    orig_cppm = memo_mod.create_passthrough_component_memo
+    orig_render = templates_mod._RenderUtils.render
+    orig_render_tag = templates_mod._RenderUtils.render_tag
+    orig_render_iter = templates_mod._RenderUtils.render_iterable_tag
+    orig_render_match = templates_mod._RenderUtils.render_match_tag
+    orig_render_cond = templates_mod._RenderUtils.render_condition_tag
+    orig_custom_code = Component._get_all_custom_code
+    orig_cup = compiler_mod.compile_unevaluated_page
+    orig_into_component = compiler_mod.into_component
+    orig_add_meta = compiler_mod.utils.add_meta
+    # Fragment.create isn't patched; we call it directly inside patched_cup.
+
+    # ---- walk_and_memoize ----
+    # Reimplement to time self-work only. Recursive calls re-enter the
+    # patched function so each level adds its own self-time. Parent
+    # attribution is stack-based — whichever PhaseTimer.measure block is
+    # currently active receives the records.
+
+    def patched_walk(component, session, memo_bodies):
+        from reflex_base.components.component import Component as _C
+
+        if not isinstance(component, _C):
+            return component
+        sub.add_count("nodes_visited", 1)
+
+        # Recurse children — re-enters this function; we do NOT time the
+        # recursive call (would inclusively double-count subtree work).
+        new_children = [patched_walk(c, session, memo_bodies) for c in component.children]
+        if new_children != component.children:
+            component.children = new_children
+
+        t = _ns()
+        decision = session.should_memoize(component)
+        sub.add_ns("session.should_memoize", _ns() - t)
+
+        if not decision:
+            return component
+
+        sub.add_count("wrappers_created", 1)
+        # _wrap_with_memo is non-recursive but calls cppm; time them
+        # separately so neither inclusively includes the other.
+        return patched_wrap(component, memo_bodies)
+
+    def patched_wrap(component, memo_bodies):
+        import copy as _copy
+
+        # Time create_passthrough_component_memo as its own sub-phase;
+        # subtract from the wrap body so "wrap body (excl cppm)" reflects
+        # the genuine non-cppm self-work.
+        t = _ns()
+        factory, definition = patched_cppm(component)
+        # patched_cppm already recorded its own time; we don't re-record.
+
+        t = _ns()
+        export_name = definition.export_name
+        if export_name not in memo_bodies:
+            body = _copy.copy(definition.component)
+            if definition.passthrough_hole_child is not None:
+                body.children = [definition.passthrough_hole_child]
+            memo_bodies[export_name] = (body, definition)
+        wrapper = factory()
+        if definition.passthrough_hole_child is not None:
+            wrapper.children = list(component.children)
+        sub.add_ns("_wrap_with_memo body (excl cppm)", _ns() - t)
+        return wrapper
+
+    def patched_cppm(component):
+        t = _ns()
+        try:
+            return orig_cppm(component)
+        finally:
+            sub.add_ns("create_passthrough_component_memo", _ns() - t)
+
+    rust_memo.walk_and_memoize = patched_walk
+    rust_memo._wrap_with_memo = patched_wrap
+    memo_mod.create_passthrough_component_memo = patched_cppm
+
+    # ---- _get_all_custom_code on Component ----
+    # Reimplement self-time-only: each leaf op gets timed; the recursive
+    # `child._get_all_custom_code()` call re-enters the patched method,
+    # which adds its own per-node self-time at that level.
+
+    def patched_custom(self):
+        sub.add_count("nodes_visited", 1)
+        code: dict[str, None] = {}
+
+        t = _ns()
+        cc = self._get_custom_code()
+        sub.add_ns("_get_custom_code", _ns() - t)
+        if cc is not None:
+            sub.add_count("nodes_with_code", 1)
+            code[cc] = None
+
+        t = _ns()
+        prop_comps = list(self._get_components_in_props())
+        sub.add_ns("_get_components_in_props", _ns() - t)
+        for component in prop_comps:
+            code |= component._get_all_custom_code()
+
+        t = _ns()
+        clzs = list(self._iter_parent_classes_with_method("add_custom_code"))
+        sub.add_ns("_iter_parent_classes_with_method", _ns() - t)
+        for clz in clzs:
+            sub.add_count("parent_class_iters", 1)
+            t = _ns()
+            for item in clz.add_custom_code(self):
+                code[item] = None
+            sub.add_ns("parent.add_custom_code()", _ns() - t)
+
+        for child in self.children:
+            code |= child._get_all_custom_code()
+
+        return code
+
+    Component._get_all_custom_code = patched_custom
+
+    # ---- _RenderUtils.render and render_tag ----
+    # Reimplement self-time-only. Recursive helper calls (render_tag's
+    # children loop, render_iterable_tag, render_match_tag,
+    # render_condition_tag) each call back through `patched_render`, so
+    # per-level self-time accumulates across recursion levels.
+
+    def patched_render(component):
+        if isinstance(component, str):
+            sub.add_count("render_calls", 1)
+            sub.add_count("render_string_branches", 1)
+            return component or "null"
+
+        sub.add_count("render_calls", 1)
+
+        # Iterable / match / cond / contents branches: the helper itself
+        # recurses through _RenderUtils.render. We let the patched render
+        # see those recursive calls — no inclusive timing here.
+        if "iterable" in component:
+            sub.add_count("render_iterable_branches", 1)
+            return orig_render_iter(component)
+        if "match_cases" in component:
+            sub.add_count("render_match_branches", 1)
+            return orig_render_match(component)
+        if "cond_state" in component:
+            sub.add_count("render_cond_branches", 1)
+            return orig_render_cond(component)
+        if (contents := component.get("contents")) is not None:
+            sub.add_count("render_contents_branches", 1)
+            return contents or "null"
+        return patched_render_tag(component)
+
+    def patched_render_tag(component):
+        sub.add_count("render_tag_calls", 1)
+        t = _ns()
+        name = component.get("name") or "Fragment"
+        props = f"{{{','.join(component['props'])}}}"
+        sub.add_ns("render_tag: props join", _ns() - t)
+
+        rendered_children = [
+            patched_render(child)
+            for child in component.get("children", [])
+            if child
+        ]
+
+        t = _ns()
+        result = f"jsx({name},{props},{','.join(rendered_children)})"
+        sub.add_ns("render_tag: format", _ns() - t)
+        return result
+
+    templates_mod._RenderUtils.render = staticmethod(patched_render)
+    templates_mod._RenderUtils.render_tag = staticmethod(patched_render_tag)
+
+    # ---- compile_unevaluated_page ----
+    # Reimplementing the body lets us time each constituent call without
+    # double-wrapping the whole function.
+
+    def patched_cup(route, page, style=None, theme=None):
+        from reflex_base.config import get_config
+        from reflex_base.utils.format import make_default_page_title
+        from reflex_components_core.base.fragment import Fragment as _Fragment
+
+        try:
+            t = _ns()
+            component = orig_into_component(page.component)
+            sub.add_ns("into_component", _ns() - t)
+
+            t = _ns()
+            component._add_style_recursive(style or {}, theme)
+            sub.add_ns("_add_style_recursive", _ns() - t)
+
+            t = _ns()
+            component = _Fragment.create(component)
+            sub.add_ns("Fragment.create", _ns() - t)
+
+            meta_args = {
+                "title": (
+                    page.title
+                    if page.title is not None
+                    else make_default_page_title(get_config().app_name, route)
+                ),
+                "image": page.image,
+                "meta": page.meta,
+            }
+            if page.description is not None:
+                meta_args["description"] = page.description
+
+            t = _ns()
+            orig_add_meta(component, **meta_args)
+            sub.add_ns("add_meta", _ns() - t)
+        except Exception as e:
+            if sys.version_info >= (3, 11):
+                e.add_note(f"Happened while evaluating page {route!r}")
+            raise
+        else:
+            return component
+
+    compiler_mod.compile_unevaluated_page = patched_cup
+
+    # Side-effect: `from reflex.compiler.compiler import compile_unevaluated_page`
+    # in _instrumented_compile_pages was already bound before this patch ran.
+    # We rely on the bench routing through the patched module attribute.
+    # Force the bench's local import to use the patched version below.
+
+    _ = copy  # silence unused
+
+    def restore():
+        rust_memo.walk_and_memoize = orig_walk
+        rust_memo._wrap_with_memo = orig_wrap
+        memo_mod.create_passthrough_component_memo = orig_cppm
+        templates_mod._RenderUtils.render = staticmethod(orig_render)
+        templates_mod._RenderUtils.render_tag = staticmethod(orig_render_tag)
+        Component._get_all_custom_code = orig_custom_code
+        compiler_mod.compile_unevaluated_page = orig_cup
+
+    return restore
+
+
+def _print_import_timing_table(sess) -> None:
+    """Print the Rust-side ``collect_all_imports_into`` sub-breakdown.
+
+    Pulls the thread-local snapshot from the **most recent** call into
+    Rust — callers should run one fresh ``collect_all_imports_into`` just
+    before invoking this so the counters reflect the page just walked
+    rather than e.g. the memo-body walk that ran later.
+    """
+    t = sess._inner.last_import_timings_ns()
+    walk_total = t.get("walk_total_ns", 0)
+    spans = {
+        k: v
+        for k, v in t.items()
+        if k.endswith("_ns") and k != "walk_total_ns"
+    }
+    counts = {
+        k: v for k, v in t.items() if k.endswith("_count")
+    }
+
+    print()
+    print("=" * 90)
+    print("RUST-SIDE collect_all_imports_into BREAKDOWN")
+    print("=" * 90)
+    print(f"{'phase':<32}{'ns':>14}{'ms':>14}{'share':>10}")
+    print("-" * 70)
+    print(
+        f"{'walk_total_ns':<32}{walk_total:>14}"
+        f"{walk_total / 1e6:>14.3f}{'100.0%':>10}"
+    )
+    accounted = 0
+    for k, v in sorted(spans.items(), key=lambda kv: kv[1], reverse=True):
+        accounted += v
+        share = (v / walk_total * 100) if walk_total else 0
+        print(f"{'  ' + k:<32}{v:>14}{v / 1e6:>14.3f}{share:>9.1f}%")
+    unaccounted = max(0, walk_total - accounted)
+    upct = (unaccounted / walk_total * 100) if walk_total else 0
+    print(
+        f"{'  (unaccounted)':<32}{unaccounted:>14}"
+        f"{unaccounted / 1e6:>14.3f}{upct:>9.1f}%"
+    )
+
+    print()
+    print(f"{'counter':<32}{'count':>14}")
+    print("-" * 46)
+    for k, v in counts.items():
+        print(f"{k:<32}{v:>14}")
+
+    if counts.get("node_count", 0) and walk_total:
+        print()
+        print(f"per-node cost: {walk_total / counts['node_count']:.0f} ns")
+    if counts.get("var_count", 0) and spans.get("get_imports_call_ns"):
+        gic = spans["get_imports_call_ns"]
+        print(
+            f"get_imports_call_ns / node: "
+            f"{gic / counts['node_count']:.0f} ns"
+            if counts.get("node_count")
+            else ""
+        )
+
+
+# ---------------------------------------------------------------------------
 # Instrumented compile loop
 # ---------------------------------------------------------------------------
 
 
-def _instrumented_compile_pages(app, sess, timer: PhaseTimer, web_dir: Path) -> None:
+def _instrumented_compile_pages(
+    app, sess, timer: PhaseTimer, web_dir: Path, sub: SubTimer | None = None
+) -> None:
     """Mirror of ``rust_pipeline.compile_pages`` with per-phase timers.
 
     Skips the post-loop static-artifact emission (``_emit_static_artifacts``,
@@ -214,13 +798,20 @@ def _instrumented_compile_pages(app, sess, timer: PhaseTimer, web_dir: Path) -> 
         sess: the live ``CompilerSession`` shared across runs.
         timer: the accumulator for phase samples.
         web_dir: writable directory the rust emitters target.
+        sub: optional sub-phase accumulator. When provided, the local
+            ``component.render()`` vs ``_RenderUtils.render`` split is
+            recorded into the ``app_root composition + render`` parent.
     """
     from reflex_base.compiler.templates import _render_hooks
 
     from reflex.compiler import compiler as legacy_compiler
+    from reflex.compiler import rust_memo
     from reflex.compiler import utils as compiler_utils
-    from reflex.compiler.compiler import compile_unevaluated_page
-    from reflex.compiler.rust_memo import walk_and_memoize
+
+    # Resolve the (possibly monkey-patched) module attribute at call time
+    # so the SubTimer wrappers actually run.
+    compile_unevaluated_page = legacy_compiler.compile_unevaluated_page
+    walk_and_memoize = rust_memo.walk_and_memoize
 
     app._apply_decorated_pages()
 
@@ -295,7 +886,8 @@ def _instrumented_compile_pages(app, sess, timer: PhaseTimer, web_dir: Path) -> 
             (components_dir / f"{name}.jsx").write_text(js)
 
     # Keep the legacy `_get_all_imports` for app_root → ordered template
-    # rendering. Time it so we have visibility, but don't refactor.
+    # rendering. Time each constituent step inline so the sub-timer
+    # report reconciles against the parent wrapper total.
     with timer.measure("app_root composition + render", "python"):
         from reflex_base.compiler.templates import _RenderUtils
         from reflex_base.config import get_config
@@ -306,21 +898,59 @@ def _instrumented_compile_pages(app, sess, timer: PhaseTimer, web_dir: Path) -> 
             _resolve_radix_themes_plugin,
         )
 
+        _record = (lambda name, dt: sub.add_ns(name, dt)) if sub else (lambda *_: None)
+
+        t = _ns()
         _, radix_themes_plugin = _resolve_radix_themes_plugin(app, get_config().plugins)
         if radix_themes_plugin.enabled and radix_themes_plugin.theme is not None:
             collected_app_wraps[20, "Theme"] = radix_themes_plugin.theme
         app_wrappers = _resolve_app_wrap_components(app, collected_app_wraps)
+        _record("plugin resolve + app_wrap resolve", _ns() - t)
+
+        t = _ns()
         app_root = app._app_root(app_wrappers)
+        _record("app._app_root(app_wrappers)", _ns() - t)
+
+        t = _ns()
         sess.collect_all_imports_into(all_imports, app_root)
+        _record("sess.collect_all_imports_into(app_root)", _ns() - t)
+
+        t = _ns()
         app_root_imports = app_root._get_all_imports()
+        _record("app_root._get_all_imports()", _ns() - t)
+
+        t = _ns()
         _apply_common_imports(app_root_imports)
+        _record("_apply_common_imports", _ns() - t)
+
+        t = _ns()
         _ = "\n".join(
             _RenderUtils.get_import(m)
             for m in compiler_utils.compile_imports(app_root_imports)
         )
+        _record("compile_imports + get_import join", _ns() - t)
+
+        t = _ns()
         _ = "\n".join(app_root._get_all_custom_code())
-        _ = _render_hooks(app_root._get_all_hooks())
-        _ = _RenderUtils.render(app_root.render())
+        _record("app_root._get_all_custom_code() (full)", _ns() - t)
+
+        t = _ns()
+        hooks_dict = app_root._get_all_hooks()
+        _record("app_root._get_all_hooks()", _ns() - t)
+        t = _ns()
+        _ = _render_hooks(hooks_dict)
+        _record("_render_hooks", _ns() - t)
+
+        # Split out the two halves of the render: Python Tag-tree
+        # construction (component.render()) vs. stringification
+        # (_RenderUtils.render).
+        t = _ns()
+        tag_tree = app_root.render()
+        _record("component.render() (Tag tree build)", _ns() - t)
+        t = _ns()
+        _ = _RenderUtils.render(tag_tree)
+        _record("_RenderUtils.render (top-level stringify)", _ns() - t)
+
         _ = legacy_compiler  # silence unused
 
 
@@ -585,7 +1215,8 @@ def benchmark(runs: int = 10, scale: int = 1) -> None:
 
     from reflex.compiler.session import CompilerSession
 
-    timer = PhaseTimer()
+    sub = SubTimer()
+    timer = PhaseTimer(sub=sub)
 
     with tempfile.TemporaryDirectory(prefix="reflex_bench_") as tmpstr:
         tmp = Path(tmpstr)
@@ -608,11 +1239,28 @@ def benchmark(runs: int = 10, scale: int = 1) -> None:
         print(f"Runs: {runs} (1 warmup discarded)")
         print()
 
-        # Section 1: per-phase Rust-pipeline breakdown.
-        for _ in range(runs + 1):
-            _instrumented_compile_pages(app, sess, timer, tmp / ".web")
+        # Install monkey-patches for fine-grained Python sub-timers.
+        restore = _install_python_subtimers(sub)
+        try:
+            # Section 1: per-phase Rust-pipeline breakdown.
+            for _ in range(runs + 1):
+                sub.begin_run()
+                _instrumented_compile_pages(app, sess, timer, tmp / ".web", sub)
+                sub.flush_run()
+        finally:
+            restore()
         timer.trim_warmup()
+        sub.trim_warmup()
         timer.report(runs)
+        sub.print_breakdown(timer)
+
+        # Surface the Rust-side collect_all_imports_into sub-table.
+        # Drive a fresh single-page walk so the thread-local counters
+        # snapshot reflects exactly one page's imports (mirrors the
+        # per-page wrapper sample we report).
+        all_imports_for_import_table: dict[str, list] = {}
+        sess.collect_all_imports_into(all_imports_for_import_table, evaluated)
+        _print_import_timing_table(sess)
 
         # Section 2: head-to-head Python vs Rust on the mechanical step.
         _compare_python_vs_rust(app, sess, runs)

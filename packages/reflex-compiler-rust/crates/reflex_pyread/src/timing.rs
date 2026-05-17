@@ -189,3 +189,145 @@ impl Drop for Span {
         add(self.field, ns);
     }
 }
+
+/// Standalone timing namespace for the `collect_all_imports_into` walk.
+///
+/// `collect_all_imports_into` is a separate Rust entry point — it does
+/// not go through `read_page` and therefore never touches the
+/// [`PhaseTimings`] cell above. Without its own namespace the 3.10 ms
+/// per page it costs at scale=1 was a black box. The fields below
+/// mirror the leaf operations inside `walk_into` (see `imports.rs`)
+/// so a Python-side benchmark can attribute the wrapper time to
+/// specific sub-steps.
+pub mod import_timing {
+    use std::cell::RefCell;
+    use std::time::Instant;
+
+    /// Per-phase nanosecond counters for the import-collection walk.
+    /// All spans are leaf-only — nested recursion is excluded — so the
+    /// fields sum to ~`walk_total_ns` (modulo loop control flow).
+    #[derive(Clone, Copy, Default, Debug)]
+    pub struct ImportTimings {
+        /// End-to-end `collect_all_imports_into` time.
+        pub walk_total_ns: u64,
+        /// Per-node `_get_imports()` PyO3 call + dict downcast + iteration setup.
+        pub get_imports_call_ns: u64,
+        /// Per-entry library-name read + `$/utils/...` prefix rewrite.
+        pub lib_prefix_transform_ns: u64,
+        /// Per-entry `append_items` — merges into the caller's dict.
+        pub merge_into_target_ns: u64,
+        /// Per-node `getattr("children")` + `iter()` setup (excludes child recursion).
+        pub children_iter_ns: u64,
+        /// Per-node `_get_components_in_props()` PyO3 call + iter setup
+        /// (excludes prop-component recursion).
+        pub prop_components_call_ns: u64,
+
+        /// Tree nodes the walk visited (one per `walk_into` entry).
+        pub node_count: u64,
+        /// Vars handled implicitly via `_get_imports()` results — bumped
+        /// per import entry observed.
+        pub var_count: u64,
+        /// `dict[str, list[ImportVar]]` entries appended into the target.
+        pub import_entry_count: u64,
+    }
+
+    thread_local! {
+        pub static IMPORT_TIMINGS: RefCell<ImportTimings> = const { RefCell::new(ImportTimings {
+            walk_total_ns: 0,
+            get_imports_call_ns: 0,
+            lib_prefix_transform_ns: 0,
+            merge_into_target_ns: 0,
+            children_iter_ns: 0,
+            prop_components_call_ns: 0,
+            node_count: 0,
+            var_count: 0,
+            import_entry_count: 0,
+        }) };
+    }
+
+    pub fn reset() {
+        IMPORT_TIMINGS.with(|cell| *cell.borrow_mut() = ImportTimings::default());
+    }
+
+    pub fn snapshot() -> ImportTimings {
+        IMPORT_TIMINGS.with(|cell| *cell.borrow())
+    }
+
+    #[inline]
+    pub fn add(field: Field, elapsed_ns: u64) {
+        IMPORT_TIMINGS.with(|cell| {
+            let mut t = cell.borrow_mut();
+            match field {
+                Field::WalkTotal => t.walk_total_ns += elapsed_ns,
+                Field::GetImportsCall => t.get_imports_call_ns += elapsed_ns,
+                Field::LibPrefixTransform => t.lib_prefix_transform_ns += elapsed_ns,
+                Field::MergeIntoTarget => t.merge_into_target_ns += elapsed_ns,
+                Field::ChildrenIter => t.children_iter_ns += elapsed_ns,
+                Field::PropComponentsCall => t.prop_components_call_ns += elapsed_ns,
+            }
+        });
+    }
+
+    #[inline]
+    pub fn incr(counter: Counter) {
+        IMPORT_TIMINGS.with(|cell| {
+            let mut t = cell.borrow_mut();
+            match counter {
+                Counter::Node => t.node_count += 1,
+                Counter::Var => t.var_count += 1,
+                Counter::ImportEntry => t.import_entry_count += 1,
+            }
+        });
+    }
+
+    #[inline]
+    pub fn add_var(n: u64) {
+        IMPORT_TIMINGS.with(|cell| cell.borrow_mut().var_count += n);
+    }
+
+    #[inline]
+    pub fn add_entry(n: u64) {
+        IMPORT_TIMINGS.with(|cell| cell.borrow_mut().import_entry_count += n);
+    }
+
+    #[derive(Clone, Copy)]
+    pub enum Field {
+        WalkTotal,
+        GetImportsCall,
+        LibPrefixTransform,
+        MergeIntoTarget,
+        ChildrenIter,
+        PropComponentsCall,
+    }
+
+    #[derive(Clone, Copy)]
+    pub enum Counter {
+        Node,
+        Var,
+        ImportEntry,
+    }
+
+    /// RAII guard mirroring the parent module's `Span`.
+    pub struct Span {
+        start: Instant,
+        field: Field,
+    }
+
+    impl Span {
+        #[inline]
+        pub fn new(field: Field) -> Self {
+            Self {
+                start: Instant::now(),
+                field,
+            }
+        }
+    }
+
+    impl Drop for Span {
+        #[inline]
+        fn drop(&mut self) {
+            let ns = self.start.elapsed().as_nanos() as u64;
+            add(self.field, ns);
+        }
+    }
+}
