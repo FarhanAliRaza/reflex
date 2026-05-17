@@ -127,6 +127,15 @@ impl CompilerSession {
     ) -> PyResult<String> {
         let refs = PyRefs::new(py)?;
         let arena = Arena::new();
+        // Phase 2 Part D: the memoize flag defaults ON globally. The memo
+        // body's top-level node has the same shape as the original
+        // memoize-candidate Component (hash-parity guarantee), so it
+        // would re-trigger `should_memoize` here and recursively
+        // register itself — producing a self-import in the emitted
+        // module. Disable the Rust-side transform for this `read_page`
+        // call and restore the prior value via an RAII guard so a panic
+        // mid-walk doesn't leak the disabled state to the next page.
+        let _guard = MemoizeFlagGuard::disable();
         let page = read_page(py, component, route, None, &[], &arena, &refs)?;
         let mut buf = CodeBuffer::with_capacity(1024);
         emit_memo_module(&mut buf, &page, name, signature, pre_hooks);
@@ -750,6 +759,33 @@ impl CompiledOutput {
             self.orphans.len(),
             self.diagnostics.len()
         )
+    }
+}
+
+/// RAII guard that disables the Rust-side memoize transformation for
+/// the lifetime of the value and restores the previous flag on drop.
+///
+/// Used by `compile_memo_from_component` to prevent the memo body's
+/// top-level node — which carries the same shape as the original
+/// memoize-candidate — from re-triggering `should_memoize` during the
+/// nested `read_page` call (which would produce a self-import in the
+/// emitted memo module). The guard pattern keeps the flag balanced
+/// across early returns and panics.
+struct MemoizeFlagGuard {
+    prev: bool,
+}
+
+impl MemoizeFlagGuard {
+    fn disable() -> Self {
+        let prev = reflex_pyread::memo_bodies::memoize_enabled();
+        reflex_pyread::memo_bodies::set_memoize_enabled(false);
+        Self { prev }
+    }
+}
+
+impl Drop for MemoizeFlagGuard {
+    fn drop(&mut self) {
+        reflex_pyread::memo_bodies::set_memoize_enabled(self.prev);
     }
 }
 

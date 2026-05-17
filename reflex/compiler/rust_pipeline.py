@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from reflex.compiler import utils as compiler_utils
-from reflex.compiler.rust_memo import emit_memo_modules, walk_and_memoize
+from reflex.compiler.rust_memo import emit_memo_modules
 from reflex.compiler.session import CompilerSession
 
 
@@ -216,10 +216,6 @@ def compile_pages(
         # wrapper set.
         collected_app_wraps.update(component._get_all_app_wrap_components())
 
-        # Memoize: substitute wrappers in-place; track each unique memo
-        # body for separate emission below.
-        component = walk_and_memoize(component, sess, memo_bodies)
-
         ident = _route_to_ident(route)
 
         # Harvest custom-code blocks + render hooks for this page —
@@ -236,6 +232,12 @@ def compile_pages(
             custom_code=page_custom_code,
             hooks_body=page_hooks_body,
         )
+        # Phase 2 Part D: the Rust-side memoize transform populated the
+        # session's thread-local memo-body collector during the walk
+        # above. Drain into the outer dict so the downstream memo emit
+        # sees `{export_name: (body, signature)}` — same shape the
+        # legacy `walk_and_memoize` produced.
+        memo_bodies.update(sess.take_memo_bodies())
 
         out_path = Path(compiler_utils.get_page_path(route))
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -245,7 +247,7 @@ def compile_pages(
     # Emit each unique memo body as its own module file. Also harvest
     # each body's imports for the ``bun install`` step.
     components_dir = Path(compiler_utils.get_memo_components_dir())
-    for _name, (body, _definition) in memo_bodies.items():
+    for _name, (body, _signature) in memo_bodies.items():
         sess.collect_all_imports_into(all_imports, body)
     emit_memo_modules(memo_bodies, sess, components_dir)
 

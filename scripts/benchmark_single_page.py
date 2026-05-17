@@ -190,7 +190,7 @@ class PhaseTimer:
             label = {
                 "python": "Python only",
                 "hybrid": "Rust + PyO3 callbacks",
-                "rust":   "pure Rust (no callbacks)",
+                "rust": "pure Rust (no callbacks)",
             }[kind]
             print(f"  {label:<28}{t:>8.2f} ms  ({pct:5.1f}%)")
         print()
@@ -347,9 +347,7 @@ class SubTimer:
             "'driver' = parent wrapper time minus sum of timed sub-phases —"
             " unaccounted residual"
         )
-        print(
-            "(loop control, attribute reads, Python function-entry overhead)."
-        )
+        print("(loop control, attribute reads, Python function-entry overhead).")
 
         for parent in self.parent_order:
             subs = self.run_totals.get(parent, {})
@@ -357,8 +355,7 @@ class SubTimer:
             if not subs and not counts:
                 continue
             parent_total = (
-                statistics.median(phase_timer.samples.get(parent, [0]))
-                / 1_000_000
+                statistics.median(phase_timer.samples.get(parent, [0])) / 1_000_000
                 if parent in phase_timer.samples
                 else None
             )
@@ -367,13 +364,10 @@ class SubTimer:
             if parent_total is not None:
                 print(f"parent wrapper median:  {parent_total:.3f} ms")
             header = (
-                f"  {'sub-phase':<42}{'median':>10}{'mean':>10}"
-                f"{'p95':>10}{'share':>9}"
+                f"  {'sub-phase':<42}{'median':>10}{'mean':>10}{'p95':>10}{'share':>9}"
             )
             print(header)
-            print(
-                f"  {'':<42}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}{'':>9}"
-            )
+            print(f"  {'':<42}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}{'':>9}")
             print("  " + "-" * (len(header) - 2))
             sub_total = 0.0
             for sub in self.sub_order.get(parent, []):
@@ -385,15 +379,10 @@ class SubTimer:
                 mean = statistics.mean(ms_samples)
                 p95 = _p95(ms_samples)
                 share = (
-                    f"{(med / parent_total * 100):5.1f}%"
-                    if parent_total
-                    else "  n/a"
+                    f"{(med / parent_total * 100):5.1f}%" if parent_total else "  n/a"
                 )
                 sub_total += med
-                print(
-                    f"  {sub:<42}{med:>10.3f}{mean:>10.3f}"
-                    f"{p95:>10.3f}{share:>9}"
-                )
+                print(f"  {sub:<42}{med:>10.3f}{mean:>10.3f}{p95:>10.3f}{share:>9}")
             print("  " + "-" * (len(header) - 2))
             print(f"  {'sum of timed sub-phases:':<42}{sub_total:>10.3f}")
             if parent_total is not None:
@@ -409,9 +398,7 @@ class SubTimer:
                     tag += "  ⚠ >10% — add another sub-timer"
                 elif kind != "python":
                     tag = "driver / Rust+PyO3 work (see Rust table)"
-                print(
-                    f"  {tag:<42}{driver:>10.3f}{'':>10}{'':>10}{pct:>8.1f}%"
-                )
+                print(f"  {tag:<42}{driver:>10.3f}{'':>10}{'':>10}{pct:>8.1f}%")
 
             # Counter / per-op rows.
             if counts:
@@ -512,7 +499,9 @@ def _install_python_subtimers(sub: SubTimer) -> callable:
 
         # Recurse children — re-enters this function; we do NOT time the
         # recursive call (would inclusively double-count subtree work).
-        new_children = [patched_walk(c, session, memo_bodies) for c in component.children]
+        new_children = [
+            patched_walk(c, session, memo_bodies) for c in component.children
+        ]
         if new_children != component.children:
             component.children = new_children
 
@@ -640,9 +629,7 @@ def _install_python_subtimers(sub: SubTimer) -> callable:
         sub.add_ns("render_tag: props join", _ns() - t)
 
         rendered_children = [
-            patched_render(child)
-            for child in component.get("children", [])
-            if child
+            patched_render(child) for child in component.get("children", []) if child
         ]
 
         t = _ns()
@@ -728,14 +715,8 @@ def _print_import_timing_table(sess) -> None:
     """
     t = sess._inner.last_import_timings_ns()
     walk_total = t.get("walk_total_ns", 0)
-    spans = {
-        k: v
-        for k, v in t.items()
-        if k.endswith("_ns") and k != "walk_total_ns"
-    }
-    counts = {
-        k: v for k, v in t.items() if k.endswith("_count")
-    }
+    spans = {k: v for k, v in t.items() if k.endswith("_ns") and k != "walk_total_ns"}
+    counts = {k: v for k, v in t.items() if k.endswith("_count")}
 
     print()
     print("=" * 90)
@@ -744,8 +725,7 @@ def _print_import_timing_table(sess) -> None:
     print(f"{'phase':<32}{'ns':>14}{'ms':>14}{'share':>10}")
     print("-" * 70)
     print(
-        f"{'walk_total_ns':<32}{walk_total:>14}"
-        f"{walk_total / 1e6:>14.3f}{'100.0%':>10}"
+        f"{'walk_total_ns':<32}{walk_total:>14}{walk_total / 1e6:>14.3f}{'100.0%':>10}"
     )
     accounted = 0
     for k, v in sorted(spans.items(), key=lambda kv: kv[1], reverse=True):
@@ -771,8 +751,7 @@ def _print_import_timing_table(sess) -> None:
     if counts.get("var_count", 0) and spans.get("get_imports_call_ns"):
         gic = spans["get_imports_call_ns"]
         print(
-            f"get_imports_call_ns / node: "
-            f"{gic / counts['node_count']:.0f} ns"
+            f"get_imports_call_ns / node: {gic / counts['node_count']:.0f} ns"
             if counts.get("node_count")
             else ""
         )
@@ -805,13 +784,11 @@ def _instrumented_compile_pages(
     from reflex_base.compiler.templates import _render_hooks
 
     from reflex.compiler import compiler as legacy_compiler
-    from reflex.compiler import rust_memo
     from reflex.compiler import utils as compiler_utils
 
     # Resolve the (possibly monkey-patched) module attribute at call time
     # so the SubTimer wrappers actually run.
     compile_unevaluated_page = legacy_compiler.compile_unevaluated_page
-    walk_and_memoize = rust_memo.walk_and_memoize
 
     app._apply_decorated_pages()
 
@@ -829,15 +806,18 @@ def _instrumented_compile_pages(
         with timer.measure("_get_all_app_wrap_components", "python"):
             collected_app_wraps.update(component._get_all_app_wrap_components())
 
-        with timer.measure("walk_and_memoize", "python"):
-            component = walk_and_memoize(component, sess, memo_bodies)
-
         with timer.measure("_get_all_custom_code", "python"):
             page_custom_code = list(component._get_all_custom_code())
 
         with timer.measure("_get_all_hooks + _render_hooks", "python"):
             page_hooks_body = _render_hooks(component._get_all_hooks())
 
+        # Phase 2 Part D: the Rust pyread walk inside
+        # ``compile_page_from_component`` handles memoize substitution
+        # in-line via the thread-local `MEMOIZE_IN_RUST` flag (defaults
+        # ON). The page-level memo-body collector is drained right
+        # after via `take_memo_bodies()` — same shape the legacy
+        # `walk_and_memoize` produced.
         with timer.measure("compile_page_from_component (Rust JSX emit)", "hybrid"):
             rust_js = sess.compile_page_from_component(
                 "Bench",
@@ -846,6 +826,7 @@ def _instrumented_compile_pages(
                 custom_code=page_custom_code,
                 hooks_body=page_hooks_body,
             )
+            memo_bodies.update(sess.take_memo_bodies())
 
         with timer.measure("page write_text", "python"):
             out_path = Path(compiler_utils.get_page_path(route))
@@ -854,21 +835,21 @@ def _instrumented_compile_pages(
 
     # Memo body emission — split into sub-phases so the Python vs Rust
     # split is legible.
-    from reflex.compiler.rust_memo import _harvest_pre_hooks, _signature_for
+    from reflex.compiler.rust_memo import _harvest_pre_hooks
 
     components_dir = Path(compiler_utils.get_memo_components_dir())
     components_dir.mkdir(parents=True, exist_ok=True)
 
     with timer.measure("memo body: collect_all_imports_into", "hybrid"):
-        for body, _definition in memo_bodies.values():
+        for body, _signature in memo_bodies.values():
             sess.collect_all_imports_into(all_imports, body)
 
     with timer.measure("memo body: _harvest_pre_hooks (Python walk)", "python"):
         prepared: list[tuple[str, str, object, str]] = []
-        for name, (body, definition) in memo_bodies.items():
+        for name, (body, signature) in memo_bodies.items():
             prepared.append((
                 name,
-                _signature_for(definition),
+                signature,
                 body,
                 _harvest_pre_hooks(body),
             ))
@@ -1092,14 +1073,10 @@ def _compare_python_vs_rust(app, sess, runs: int) -> None:
         print()
         print(f"=== {label} ===")
         header = (
-            f"{'step':<44}"
-            f"{'median':>10}{'mean':>10}{'p95':>10}{'min':>10}{'max':>10}"
+            f"{'step':<44}{'median':>10}{'mean':>10}{'p95':>10}{'min':>10}{'max':>10}"
         )
         print(header)
-        print(
-            f"{'':<44}"
-            f"{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}"
-        )
+        print(f"{'':<44}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}")
         print("-" * len(header))
         total = 0.0
         for name, ns_samples in steps.items():
@@ -1165,9 +1142,7 @@ def _compare_python_vs_rust(app, sess, runs: int) -> None:
     total_ns = spans.get("read_page_total_ns", 0)
     emit_ns = spans.get("emit_ns", 0)
     sub_phases = [
-        (k, v)
-        for k, v in spans.items()
-        if k not in ("read_page_total_ns", "emit_ns")
+        (k, v) for k, v in spans.items() if k not in ("read_page_total_ns", "emit_ns")
     ]
     sub_phases.sort(key=lambda kv: kv[1], reverse=True)
 
@@ -1205,17 +1180,39 @@ def _compare_python_vs_rust(app, sess, runs: int) -> None:
             return "n/a"
         return f"{spans.get(span_key, 0) / c:.0f}"
 
-    print(f"  class_name_ns / element        = {percall('class_name_ns', 'element_count')}")
-    print(f"  resolve_tag_ns / element       = {percall('resolve_tag_ns', 'element_count')}")
-    print(f"  import_alias_ns / element      = {percall('import_alias_ns', 'element_count')}")
-    print(f"  get_props_call_ns / element    = {percall('get_props_call_ns', 'element_count')}")
-    print(f"  children_attr_ns / element     = {percall('children_attr_ns', 'element_count')}")
-    print(f"  event_triggers_attr_ns / elem  = {percall('event_triggers_attr_ns', 'element_count')}")
-    print(f"  needs_ref_ns / element         = {percall('needs_ref_ns', 'element_count')}")
-    print(f"  prop_value_getattr_ns / prop   = {percall('prop_value_getattr_ns', 'prop_count')}")
-    print(f"  isinstance_var_ns / prop       = {percall('isinstance_var_ns', 'prop_count')}")
-    print(f"  var_js_expr_attr_ns / var      = {percall('var_js_expr_attr_ns', 'var_count')}")
-    print(f"  read_var_data_ns / var         = {percall('read_var_data_ns', 'var_count')}")
+    print(
+        f"  class_name_ns / element        = {percall('class_name_ns', 'element_count')}"
+    )
+    print(
+        f"  resolve_tag_ns / element       = {percall('resolve_tag_ns', 'element_count')}"
+    )
+    print(
+        f"  import_alias_ns / element      = {percall('import_alias_ns', 'element_count')}"
+    )
+    print(
+        f"  get_props_call_ns / element    = {percall('get_props_call_ns', 'element_count')}"
+    )
+    print(
+        f"  children_attr_ns / element     = {percall('children_attr_ns', 'element_count')}"
+    )
+    print(
+        f"  event_triggers_attr_ns / elem  = {percall('event_triggers_attr_ns', 'element_count')}"
+    )
+    print(
+        f"  needs_ref_ns / element         = {percall('needs_ref_ns', 'element_count')}"
+    )
+    print(
+        f"  prop_value_getattr_ns / prop   = {percall('prop_value_getattr_ns', 'prop_count')}"
+    )
+    print(
+        f"  isinstance_var_ns / prop       = {percall('isinstance_var_ns', 'prop_count')}"
+    )
+    print(
+        f"  var_js_expr_attr_ns / var      = {percall('var_js_expr_attr_ns', 'var_count')}"
+    )
+    print(
+        f"  read_var_data_ns / var         = {percall('read_var_data_ns', 'var_count')}"
+    )
 
 
 def benchmark(runs: int = 10, scale: int = 1) -> None:

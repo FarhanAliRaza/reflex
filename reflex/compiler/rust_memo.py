@@ -77,7 +77,9 @@ def walk_and_memoize(
         return component
 
     # Recurse children first; wrappers may already replace deeper nodes.
-    new_children = [walk_and_memoize(c, session, memo_bodies) for c in component.children]
+    new_children = [
+        walk_and_memoize(c, session, memo_bodies) for c in component.children
+    ]
     if new_children != component.children:
         component.children = new_children
 
@@ -130,8 +132,7 @@ def emit_memo_modules(
     """
     components_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {}
-    for name, (body, definition) in memo_bodies.items():
-        signature = _signature_for(definition)
+    for name, (body, signature) in memo_bodies.items():
         pre_hooks = _harvest_pre_hooks(body)
         js = session.compile_memo_from_component(
             name, signature, body, pre_hooks=pre_hooks

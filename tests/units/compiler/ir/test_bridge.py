@@ -25,7 +25,16 @@ from reflex.compiler.session import CompilerSession
 
 @pytest.fixture(scope="module")
 def session() -> CompilerSession:
-    return CompilerSession()
+    sess = CompilerSession()
+    # These tests assert on the un-memoized pyread emit shape — ternary
+    # `?:` for Cond, `.map(...)` for Foreach, `match_template(...)` for
+    # Match. Phase 2 Part D flipped the default-on Rust memoize flag,
+    # which would wrap each of those nodes (state-binding makes them
+    # memoize candidates) and move the asserted substrings into a
+    # separate memo body. Disable explicitly for this module so the
+    # tests keep exercising the page-level emitter directly.
+    sess.set_memoize_in_rust(False)
+    return sess
 
 
 def _render(session: CompilerSession, ident: str, route: str, component) -> str:

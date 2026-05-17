@@ -38,11 +38,11 @@ thread_local! {
     /// Phase 2 Part B feature flag: when `true`, the `read_page` walk
     /// transforms memoize-candidate Components into `Component::MemoCall`
     /// IR nodes (registering their bodies into `MEMO_BODIES`). Defaults
-    /// to `false` so the legacy Python `walk_and_memoize` pass keeps
-    /// owning the transformation until Part D flips the default. Flipping
-    /// while Python's pass is still active would double-wrap every
-    /// candidate.
-    pub static MEMOIZE_IN_RUST: Cell<bool> = const { Cell::new(false) };
+    /// to `true` after Phase 2 Part D — the Rust-side transformation is
+    /// the production path. Callers that still want the legacy Python
+    /// `walk_and_memoize` flow (parity tests, bench A/B paths) must
+    /// explicitly disable via `set_memoize_enabled(false)`.
+    pub static MEMOIZE_IN_RUST: Cell<bool> = const { Cell::new(true) };
 }
 
 /// Whether the Rust-side memoize transformation is enabled for the
@@ -97,16 +97,27 @@ mod tests {
     use super::{memoize_enabled, set_memoize_enabled};
 
     #[test]
-    fn flag_defaults_off() {
-        // Fresh thread-local state — the constant initializer is `false`.
-        assert!(!memoize_enabled());
+    fn flag_defaults_on() {
+        // Phase 2 Part D: the production default is `true`. Save/restore
+        // around the assertion so the test doesn't leak state to other
+        // tests on the same thread.
+        let prev = memoize_enabled();
+        // Force fresh-state observation by setting through the API.
+        // (Other tests may have flipped it; the constant initializer is
+        // the contract this test pins.)
+        // We can't reset the cell from outside; assert directly given
+        // the public default API.
+        assert!(memoize_enabled());
+        set_memoize_enabled(prev);
     }
 
     #[test]
     fn flag_roundtrips() {
+        let prev = memoize_enabled();
         set_memoize_enabled(true);
         assert!(memoize_enabled());
         set_memoize_enabled(false);
         assert!(!memoize_enabled());
+        set_memoize_enabled(prev);
     }
 }
