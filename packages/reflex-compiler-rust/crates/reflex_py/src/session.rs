@@ -429,6 +429,36 @@ impl CompilerSession {
         Ok(d)
     }
 
+    /// Drain the per-page memo-body collector and return its contents
+    /// as a `dict[str, tuple[Component, str]]`.
+    ///
+    /// Phase 2 Part C of the Rust IR Memoize port. Phase 2 Part B's
+    /// `read_page` walk populates the thread-local
+    /// `reflex_pyread::memo_bodies` cell with one entry per auto-
+    /// memoize wrapper it encounters. After a successful
+    /// `compile_page_from_component` call, Phase 2 Part D drains the
+    /// collector via this method to recover the
+    /// `{export_name: (body_pyobj, signature)}` map the legacy
+    /// `walk_and_memoize` produced.
+    ///
+    /// Calling this clears the Rust-side state. Calling on an empty
+    /// collector returns an empty dict.
+    fn take_memo_bodies<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let drained = reflex_pyread::memo_bodies::drain();
+        let d = PyDict::new_bound(py);
+        for (name, body, signature) in drained {
+            // Tuple of (body PyObject, signature str) — mirrors the
+            // legacy `walk_and_memoize` value shape so Part D can drop
+            // into `rust_pipeline.compile_pages` unchanged.
+            let tup = PyTuple::new_bound(
+                py,
+                &[body.into_bound(py).into_any(), signature.into_py(py).into_bound(py)],
+            );
+            d.set_item(name, tup)?;
+        }
+        Ok(d)
+    }
+
     /// Compile a single page directly from a Python `Component` PyObject —
     /// the new lever-(a) entry point that bypasses `bridge.py` + msgpack.
     ///
@@ -478,6 +508,14 @@ impl CompilerSession {
         let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
         let custom_code_refs: Vec<&str> = custom_code_owned.iter().map(String::as_str).collect();
         let hooks = hooks_body.unwrap_or("");
+
+        // Per-page reset of the memo-body collector. Phase 2 Part B's
+        // `read_page` populates this cell as it constructs `MemoCall`
+        // IR nodes; Phase 2 Part D drains it via `take_memo_bodies()`
+        // after this method returns. Resetting here (not inside
+        // `read_page`) keeps recursive memo-body reads from clobbering
+        // the page-level collection.
+        reflex_pyread::memo_bodies::reset();
 
         let refs = PyRefs::new(py)?;
         let arena = Arena::new();

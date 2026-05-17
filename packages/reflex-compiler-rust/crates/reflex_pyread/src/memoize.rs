@@ -16,9 +16,67 @@
 use std::collections::{HashMap, HashSet};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyDict};
+use pyo3::types::{PyAnyMethods, PyDict, PyTuple};
 
 use super::pyo3_reader::{class_name, py_str, PyReadError, PyRefs};
+
+/// Result of `peek_memoize_for` — the three pieces an auto-memoize
+/// passthrough wrapper exposes for codegen.
+///
+/// Fields:
+///
+/// * `export_name` — JS identifier the wrapper module is registered
+///   under. Caller interns it when building the IR memo node; we
+///   return `String` here so the interning policy stays with the
+///   caller (Part B of the Rust IR memoize port).
+/// * `body` — the lift-normalized body `Component`, returned as a
+///   live PyObject so the caller can walk it via `read_component`.
+/// * `signature` — either `"({ children })"` (passthrough wrapper
+///   that splices children) or `"()"` (no children hole). Matches
+///   `create_passthrough_component_memo`'s output 1:1.
+pub struct PeekResult<'py> {
+    pub export_name: String,
+    pub body: Bound<'py, PyAny>,
+    pub signature: String,
+}
+
+/// Bridge to `reflex.experimental.memo.peek_memoize`.
+///
+/// Calls the Python peek and unpacks the 3-tuple. The callable itself
+/// is pre-resolved on `PyRefs::new`; per-call cost is ~one `call1` plus
+/// three tuple-index extractions. Python-side exceptions propagate
+/// untouched.
+///
+/// Used by `read_page` (Phase 2 Part B) when a node has been flagged
+/// memoizable by `should_memoize`, to obtain the wrapper's export name
+/// and body for the JSX emission step without paying the cost of
+/// building a full `ExperimentalMemoComponentDefinition`.
+pub fn peek_memoize_for<'py>(
+    _py: Python<'py>,
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
+) -> PyResult<PeekResult<'py>> {
+    let result = refs.peek_memoize.call1((component,))?;
+    let tup: Bound<'py, PyTuple> = result.downcast_into().map_err(|e| {
+        pyo3::exceptions::PyTypeError::new_err(format!(
+            "peek_memoize: expected tuple result, got {e}",
+        ))
+    })?;
+    if tup.len() != 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "peek_memoize: expected 3-tuple, got {}-tuple",
+            tup.len()
+        )));
+    }
+    let export_name: String = tup.get_item(0)?.extract()?;
+    let body = tup.get_item(1)?;
+    let signature: String = tup.get_item(2)?.extract()?;
+    Ok(PeekResult {
+        export_name,
+        body,
+        signature,
+    })
+}
 
 /// Memoize plugin's per-node decision, ported from
 /// `reflex.compiler.plugins.memoize._should_memoize`.

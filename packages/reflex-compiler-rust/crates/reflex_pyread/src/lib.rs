@@ -26,6 +26,9 @@ mod pyo3_reader;
 pub mod memoize;
 
 #[cfg(feature = "pyo3")]
+pub mod memo_bodies;
+
+#[cfg(feature = "pyo3")]
 pub mod imports;
 
 #[cfg(feature = "pyo3")]
@@ -35,7 +38,7 @@ pub mod timing;
 pub use pyo3_reader::{read_page, PyReadError, PyRefs};
 
 #[cfg(feature = "pyo3")]
-pub use memoize::{should_memoize, MemoRefs};
+pub use memoize::{peek_memoize_for, should_memoize, MemoRefs, PeekResult};
 
 #[cfg(feature = "pyo3")]
 pub use imports::{collect_all_imports, collect_all_imports_into, merge_imports_into};

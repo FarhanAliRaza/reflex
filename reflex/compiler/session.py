@@ -407,6 +407,34 @@ class CompilerSession:
         self.merge_imports_into(target, raw_dict)
         return raw_dict
 
+    def take_memo_bodies(self) -> dict[str, tuple[object, str]]:
+        """Drain the per-page memo-body collector and return its contents.
+
+        Phase 2 Part C of the Rust IR Memoize port. During
+        :meth:`compile_page_from_component`, the Rust ``read_page`` walk
+        (Phase 2 Part B) records each auto-memoize wrapper it encounters
+        in a thread-local cell keyed by export name. This method drains
+        that cell and returns the entries as
+        ``{export_name: (body_component, signature)}`` — the same shape
+        the legacy ``walk_and_memoize`` in
+        :mod:`reflex.compiler.rust_memo` produced. Phase 2 Part D calls
+        this from ``rust_pipeline.compile_pages`` after each page
+        compile to feed the memo-module emitter.
+
+        The collector is per-page: it resets at the start of every
+        ``compile_page_from_component`` call. Calling this method on an
+        empty collector returns ``{}``; calling it twice in a row also
+        returns ``{}`` the second time (drain semantics).
+
+        Returns:
+            ``dict[export_name, (body_pyobj, signature)]``. ``body_pyobj``
+            is the wrapper-body ``Component`` (already
+            ``{children}``-hole-substituted for passthroughs);
+            ``signature`` is the parameter list spliced after ``memo(``
+            (e.g. ``"({ children })"`` or ``"()"``).
+        """
+        return dict(self._inner.take_memo_bodies())
+
     def last_phase_timings_ns(self) -> dict[str, int]:
         """Snapshot the Rust per-phase timings from the most recent compile.
 

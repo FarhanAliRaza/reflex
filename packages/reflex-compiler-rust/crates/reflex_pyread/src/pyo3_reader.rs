@@ -76,6 +76,12 @@ pub struct PyRefs<'py> {
     /// `reflex_base.utils.format.format_library_name` for normalizing
     /// `Component.library` and `VarData.imports` module specifiers.
     pub format_library_name: Bound<'py, PyAny>,
+    /// `reflex.experimental.memo.peek_memoize` — cheap preview of an
+    /// auto-memoize passthrough wrapper, returning
+    /// `(export_name, body, signature)` without constructing the
+    /// full memo component. Called per memo-eligible node by the
+    /// `read_page` walk.
+    pub peek_memoize: Bound<'py, PyAny>,
     /// Page-level harvests accumulated inline during `read_page` so we
     /// don't have to re-walk the Python tree three more times for
     /// `component_imports` / `state_bindings` / `needs_ref`. Interior
@@ -144,10 +150,18 @@ impl<'py> PyRefs<'py> {
                 attr: "reflex_base.utils.format.format_library_name",
                 source,
             })?;
+        let peek_memoize = py
+            .import_bound("reflex.experimental.memo")
+            .and_then(|m| m.getattr("peek_memoize"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex.experimental.memo.peek_memoize",
+                source,
+            })?;
         Ok(Self {
             var_cls,
             literal_var_cls,
             format_library_name,
+            peek_memoize,
             harvest: RefCell::new(HarvestState::default()),
         })
     }
