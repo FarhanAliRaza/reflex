@@ -1028,6 +1028,66 @@ def _create_component_wrapper(
     return _ExperimentalMemoComponentWrapper(definition)
 
 
+def _build_passthrough_body(
+    component: Component,
+    children: Var[Component],
+) -> tuple[Component, Component | None, bool]:
+    """Build the body Component for an auto-memoize passthrough wrapper.
+
+    Shared between :func:`create_passthrough_component_memo` and
+    :func:`peek_memoize` so both produce byte-identical bodies (and therefore
+    byte-identical ``_compute_memo_tag`` hashes).
+
+    Snapshot-boundary components (see ``is_snapshot_boundary``) own their
+    subtree — the ``.children`` slot is internal machinery from the
+    subclass's ``.create`` (e.g. the dropzone Div built inside
+    ``Upload.create``), not a user content hole. The memoize plugin wraps
+    the boundary with no structural children on the page side, so the memo
+    body renders the full snapshot rather than a ``{children}``-holed
+    template.
+
+    Components with no original structural children own their own JSX
+    output (e.g. ``CodeBlock`` injects ``code`` as the ``children`` prop
+    in ``_render``). Substituting a ``{children}`` hole would emit
+    ``jsx(Inner, {children: "..."}, hole)``, and an undefined hole at call
+    time clobbers the prop. Skip the substitution so the wrapper's
+    ``children`` parameter is present in the signature but unused.
+
+    Args:
+        component: The component to wrap.
+        children: The placeholder ``Var[Component]`` to slot into the body's
+            ``children`` (only inserted when a hole is appropriate).
+
+    Returns:
+        ``(body, hole_bare, render_snapshot)`` where ``hole_bare`` is the
+        ``Bare``-wrapped placeholder substituted in (or ``None`` if no hole
+        was inserted) and ``render_snapshot`` is whether the component is a
+        snapshot boundary.
+    """
+    render_snapshot = (
+        get_memoization_strategy(component) is MemoizationStrategy.SNAPSHOT
+    )
+    new_component = copy(component)
+    if render_snapshot or not component.children:
+        return new_component, None, render_snapshot
+    hole_bare = Bare.create(children)
+    # Substitute the ``{children}`` hole for the original descendants so
+    # the memo body's hash and JSX both reflect the placeholder, not the
+    # specific children at any given call site. Original descendants stay
+    # reachable on the page-level wrapper via the plugin's
+    # ``_get_all_refs`` delegation back to the source component.
+    new_component.children = [hole_bare]
+    # Compile-time walkers that need the real subtree (notably
+    # ``Form._get_form_refs`` collecting id-based input refs into the
+    # generated ``handleSubmit`` JS) call ``self._get_all_refs()`` while
+    # the memo body's hooks are computed. With the hole substituted in,
+    # that walk would return nothing and the form handler would emit an
+    # empty ``field_ref_mapping``. Delegate ref collection back to the
+    # source component so descendants behind the hole remain visible.
+    object.__setattr__(new_component, "_get_all_refs", component._get_all_refs)
+    return new_component, hole_bare, False
+
+
 def create_passthrough_component_memo(
     component: Component,
 ) -> tuple[
@@ -1052,47 +1112,12 @@ def create_passthrough_component_memo(
     Returns:
         The callable memo wrapper and its component definition.
     """
-    # Snapshot-boundary components (see ``is_snapshot_boundary``) own their
-    # subtree — the ``.children`` slot is internal machinery from the
-    # subclass's ``.create`` (e.g. the dropzone Div built inside
-    # ``Upload.create``), not a user content hole. The memoize plugin wraps
-    # the boundary with no structural children on the page side, so the memo
-    # body renders the full snapshot rather than a ``{children}``-holed
-    # template.
-    render_snapshot = (
-        get_memoization_strategy(component) is MemoizationStrategy.SNAPSHOT
-    )
-
     captured_hole_child: list[Component] = []
 
     def passthrough(children: Var[Component]) -> Component:
-        new_component = copy(component)
-        if render_snapshot:
-            return new_component
-        # Components with no original structural children own their own JSX
-        # output (e.g. ``CodeBlock`` injects ``code`` as the ``children`` prop
-        # in ``_render``). Substituting a ``{children}`` hole here would emit
-        # ``jsx(Inner, {children: "..."}, hole)``, and an undefined hole at
-        # call time clobbers the prop. Skip the substitution so the wrapper's
-        # ``children`` parameter is present in the signature but unused.
-        if not component.children:
-            return new_component
-        hole_bare = Bare.create(children)
-        captured_hole_child.append(hole_bare)
-        # Substitute the ``{children}`` hole for the original descendants so
-        # the memo body's hash and JSX both reflect the placeholder, not the
-        # specific children at any given call site. Original descendants stay
-        # reachable on the page-level wrapper via the plugin's
-        # ``_get_all_refs`` delegation back to the source component.
-        new_component.children = [hole_bare]
-        # Compile-time walkers that need the real subtree (notably
-        # ``Form._get_form_refs`` collecting id-based input refs into the
-        # generated ``handleSubmit`` JS) call ``self._get_all_refs()`` while
-        # the memo body's hooks are computed. With the hole substituted in,
-        # that walk would return nothing and the form handler would emit an
-        # empty ``field_ref_mapping``. Delegate ref collection back to the
-        # source component so descendants behind the hole remain visible.
-        object.__setattr__(new_component, "_get_all_refs", component._get_all_refs)
+        new_component, hole_bare, _ = _build_passthrough_body(component, children)
+        if hole_bare is not None:
+            captured_hole_child.append(hole_bare)
         return new_component
 
     # Evaluate once to compute the tag from the rendered memo body shape.
@@ -1126,6 +1151,49 @@ def create_passthrough_component_memo(
         definition = dataclasses.replace(definition, **replacements)
 
     return _create_component_wrapper(definition), definition
+
+
+def peek_memoize(component: Component) -> tuple[str, Component, str]:
+    """Cheaply preview an auto-memoize passthrough wrapper.
+
+    Returns the same ``(export_name, body, signature)`` that
+    :func:`create_passthrough_component_memo` would expose for ``component``,
+    but without constructing the ``passthrough`` closure, running
+    :func:`_analyze_params`, building an
+    :class:`ExperimentalMemoComponentDefinition`, or producing a callable
+    wrapper. Used by the Rust IR memoize port (Phase 2 of
+    PROFILING_FINDINGS.md §10) to obtain the export name + body needed for
+    JSX emission without paying the full cppm cost on every node.
+    Hash parity with cppm is gating: both code paths share
+    :func:`_build_passthrough_body` so the placeholder Var, hole insertion,
+    and ``_get_all_refs`` rebinding are byte-identical.
+
+    Args:
+        component: The component to peek at.
+
+    Returns:
+        ``(export_name, body, signature)`` where ``export_name`` matches
+        ``cppm(component)[1].export_name``, ``body`` is the
+        ``_lift_rest_props``-normalized body Component, and ``signature``
+        is ``"({ children })"`` when a ``{children}`` hole was substituted
+        in (matching cppm's passthrough signature) or ``"()"`` otherwise.
+    """
+    # Construct the same ``children`` placeholder Var that cppm threads
+    # through ``passthrough`` via ``_evaluate_memo_function`` /
+    # ``_placeholder_for_param``. The Var's ``_js_expr`` and ``_var_data``
+    # govern the rendered memo body, which in turn feeds the
+    # ``_compute_memo_tag`` hash — drift here would break on-disk
+    # ``.web/utils/components/<Name>.jsx`` caching.
+    children_placeholder = _var_placeholder("children", Var[Component])
+    body, hole_bare, _render_snapshot = _build_passthrough_body(
+        component, children_placeholder
+    )
+    # cppm computes the tag on the pre-lift preview (see cppm above).
+    # Preserve that ordering exactly to keep export names byte-identical.
+    export_name = body._compute_memo_tag()
+    body = _lift_rest_props(body)
+    signature = "({ children })" if hole_bare is not None else "()"
+    return export_name, body, signature
 
 
 def memo(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -1174,4 +1242,5 @@ __all__ = [
     "ExperimentalMemoFunctionDefinition",
     "create_passthrough_component_memo",
     "memo",
+    "peek_memoize",
 ]

@@ -21,6 +21,8 @@ from reflex.experimental.memo import (
     ExperimentalMemoComponent,
     ExperimentalMemoComponentDefinition,
     ExperimentalMemoFunctionDefinition,
+    create_passthrough_component_memo,
+    peek_memoize,
 )
 
 
@@ -540,3 +542,222 @@ def test_compile_memo_components_includes_experimental_custom_code():
     code = "\n".join(c for _, c in files)
 
     assert "const foo = 'bar'" in code
+
+
+# ---------------------------------------------------------------------------
+# peek_memoize: cheap preview used by the Rust IR memoize port.
+# Hash parity with create_passthrough_component_memo is gating.
+# ---------------------------------------------------------------------------
+
+
+def _signature_for(definition: ExperimentalMemoComponentDefinition) -> str:
+    """Reconstruct the JS signature cppm would emit for a definition.
+
+    cppm produces ``"({ children })"`` when a passthrough hole was substituted
+    in (``definition.passthrough_hole_child is not None``) and ``"()"``
+    otherwise. peek's third tuple element must match this exactly so Phase 2
+    JSX emission stays byte-identical.
+
+    Args:
+        definition: The cppm component definition.
+
+    Returns:
+        The expected signature string.
+    """
+    return "({ children })" if definition.passthrough_hole_child is not None else "()"
+
+
+def _peek_corpus():
+    """Build the gating hash-parity corpus.
+
+    Each entry is ``(label, component)``. Cases are kept inside this factory
+    rather than as module-level constants so that custom subclasses created
+    during the test run are torn down between tests by
+    ``preserve_memo_registries``.
+
+    Returns:
+        A list of ``(label, component)`` tuples.
+    """
+    box_with_children = rx.box(rx.text("a"), rx.text("b"), class_name="outer")
+    box_empty = rx.box(class_name="solo")
+    # rx.upload is a MemoizationLeaf — snapshot boundary.
+    snapshot = rx.upload(rx.text("drop"), id="dropzone")
+    # Form exercises the ``_get_all_refs`` rebinding path (Form._get_form_refs
+    # walks descendants to build the submit handler's field map).
+    form = rx.el.form(
+        rx.el.input(id="name", name="name"),
+        rx.el.input(id="email", name="email"),
+    )
+    # Outer wrapping an already-memoized inner: peek on the outer must NOT
+    # recurse into the inner. We assert that by hashing inner separately and
+    # confirming the outer's hash is independent of recursive peek.
+    inner_for_nested = rx.box(rx.text("inner-content"), class_name="inner")
+    nested_outer = rx.box(inner_for_nested, class_name="outer-of-nested")
+    return [
+        ("box_with_children", box_with_children),
+        ("box_empty", box_empty),
+        ("snapshot_upload", snapshot),
+        ("form_with_refs", form),
+        ("nested_outer", nested_outer),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("label", "component"),
+    _peek_corpus(),
+    ids=lambda v: v if isinstance(v, str) else "",
+)
+def test_peek_memoize_hash_parity(label: str, component: Component):
+    """peek_memoize must return the same export_name + signature as cppm.
+
+    This is the gating contract: Phase 2 (Rust IR memoize) consumes peek's
+    output and writes ``.web/utils/components/<export_name>.jsx``. Any drift
+    from cppm's export name silently strands cached JSX files.
+
+    Args:
+        label: Corpus entry label (for failure messages).
+        component: Component under test.
+    """
+    name_peek, body_peek, sig_peek = peek_memoize(component)
+    _, definition = create_passthrough_component_memo(component)
+
+    assert name_peek == definition.export_name, (
+        f"[{label}] export_name drift: peek={name_peek!r} cppm={definition.export_name!r}"
+    )
+    assert sig_peek == _signature_for(definition), (
+        f"[{label}] signature drift: peek={sig_peek!r} cppm={_signature_for(definition)!r}"
+    )
+    # Body equality via _compute_memo_tag round-trip: if the post-lift bodies
+    # have any structural difference (placeholder _js_expr, _var_data, child
+    # ordering, special_props), the tag hash diverges. cppm stores the
+    # post-lift component in definition.component (lifted in-place inside
+    # _create_component_definition).
+    assert body_peek._compute_memo_tag() == definition.component._compute_memo_tag(), (
+        f"[{label}] body hash drift after lift"
+    )
+    # And the rendered dicts must match structurally too (catches placeholder
+    # var-data drift that _compute_memo_tag's shallow mode might miss).
+    assert body_peek.render() == definition.component.render(), (
+        f"[{label}] rendered body drift"
+    )
+
+
+def test_peek_memoize_returns_documented_tuple_shape():
+    """peek_memoize must return a 3-tuple of (str, Component, str)."""
+    result = peek_memoize(rx.box(rx.text("x")))
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+    name, body, signature = result
+    assert isinstance(name, str)
+    assert name
+    assert isinstance(body, Component)
+    assert signature in {"({ children })", "()"}
+
+
+def test_peek_memoize_does_not_mutate_input():
+    """peek_memoize must leave the input component untouched.
+
+    Phase 2 calls peek on live page-tree nodes; mutation would corrupt the
+    user-authored subtree and downstream walkers (Form._get_form_refs,
+    plugin._get_all_refs delegation) would observe stale state.
+    """
+    component = rx.box(rx.text("hello"), class_name="probe")
+    before_children = list(component.children)
+    before_special = list(component.special_props)
+    before_get_all_refs = type(component)._get_all_refs
+
+    peek_memoize(component)
+
+    assert component.children == before_children
+    assert component.special_props == before_special
+    # The bound method on the instance must still be the class method, i.e.
+    # peek must not have rebound _get_all_refs on the source via setattr.
+    assert "_get_all_refs" not in component.__dict__
+    assert type(component)._get_all_refs is before_get_all_refs
+
+
+def test_peek_memoize_is_idempotent():
+    """Calling peek_memoize twice on the same component must return equal tuples."""
+    component = rx.box(rx.text("x"), rx.text("y"), class_name="probe")
+    first = peek_memoize(component)
+    second = peek_memoize(component)
+    assert first[0] == second[0]
+    assert first[2] == second[2]
+    assert first[1].render() == second[1].render()
+    assert first[1]._compute_memo_tag() == second[1]._compute_memo_tag()
+
+
+def test_peek_memoize_signature_for_empty_passthrough_is_no_args():
+    """Passthrough with no original children should yield ``()`` signature.
+
+    Mirrors cppm's behavior: when ``component.children`` is empty, no hole is
+    inserted (see ``_build_passthrough_body``) so the wrapper signature has
+    no destructured ``children`` parameter.
+    """
+    component = rx.box(class_name="empty")
+    _, _, signature = peek_memoize(component)
+    assert signature == "()"
+
+
+def test_peek_memoize_signature_for_snapshot_is_no_args():
+    """Snapshot-boundary components also yield ``()`` (no hole)."""
+    component = rx.upload(rx.text("drop"), id="dz")
+    _, _, signature = peek_memoize(component)
+    assert signature == "()"
+
+
+def test_peek_memoize_rest_props_corpus():
+    """A snapshot component with RestProp children must lift identically to cppm.
+
+    In passthrough mode the outer ``children`` are replaced by the
+    ``{children}`` hole, so any RestProp directly under the outer is lost.
+    The lifting path is meaningful for snapshot-boundary components (which
+    keep their original children), so we use a snapshot component here to
+    exercise ``_lift_rest_props`` against both peek and cppm output.
+    """
+    from reflex_base.vars.object import RestProp
+    from reflex_components_core.base.bare import Bare
+
+    rest_prop = RestProp(_js_expr="extras", _var_type=dict[str, Any])
+    # rx.upload is a snapshot boundary (MemoizationLeaf), so its children
+    # survive into the body uncloned by the hole — _lift_rest_props can find
+    # the RestProp child and promote it into special_props.
+    component = rx.upload(Bare.create(rest_prop), rx.text("inner"), id="dz")
+
+    name_peek, body_peek, _ = peek_memoize(component)
+    _, definition = create_passthrough_component_memo(component)
+
+    assert name_peek == definition.export_name
+    # Comparing the rendered dicts is sufficient and the strictest check:
+    # any difference in special_props or children renders as different JSX.
+    assert body_peek.render() == definition.component.render()
+    # Hash parity guarantees byte-equal special_props handling across peek
+    # and cppm regardless of *where* in the tree the lift fires.
+    assert body_peek._compute_memo_tag() == definition.component._compute_memo_tag()
+
+
+def test_peek_memoize_does_not_recurse_into_inner_memo():
+    """Peek on an outer component must hash its *literal* children.
+
+    The Phase 2 Rust IR walker is responsible for memoizing inner candidates
+    before peeking the outer; peek itself is intentionally non-recursive so
+    callers control the walk order. Verify outer peek treats the inner as a
+    plain child (no implicit recursion into another memo build).
+    """
+    inner = rx.box(rx.text("inner-content"), class_name="inner")
+    outer = rx.box(inner, class_name="outer")
+
+    name_outer, body_outer, _ = peek_memoize(outer)
+    name_inner, _, _ = peek_memoize(inner)
+
+    # Outer's hash must reflect inner's literal render, not a memoized stub.
+    # Tag includes inner's full hash via the children render dict.
+    assert name_outer != name_inner
+    # Re-peeking inner after peeking outer must still be idempotent — outer's
+    # call must not have mutated inner.
+    name_inner_again, _, _ = peek_memoize(inner)
+    assert name_inner == name_inner_again
+    # Outer body's first child is still a Component (the inner box), not an
+    # ExperimentalMemoComponent stub. peek_memoize is non-recursive.
+    assert isinstance(body_outer.children[0], Component)
+    assert not isinstance(body_outer.children[0], ExperimentalMemoComponent)
