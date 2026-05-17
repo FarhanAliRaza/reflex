@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from functools import lru_cache
 from hashlib import md5
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 from reflex_base.components.component import (
     BaseComponent,
@@ -208,6 +208,10 @@ class Markdown(Component):
         default="",
         is_javascript_property=False,
     )
+
+    # Cache of rendered custom code keyed by component_map_hash. Two Markdown instances with
+    # identical component_map produce byte-identical closures, so we only build once.
+    _custom_code_cache: ClassVar[dict[str, str]] = {}
 
     remark_plugins: Var[Sequence[Var | tuple[Var, Var]]] = field(
         doc="Remark plugins to use when rendering the content. Provide (plugin, options) if the plugin requires options."
@@ -438,10 +442,18 @@ let {_LANGUAGE!s} = match ? match[1] : '';
     def _get_component_map_name(self) -> str:
         return f"ComponentMap_{self.component_map_hash}"
 
-    def _get_custom_code(self) -> str | None:
-        hooks = {}
+    def _build_custom_code(self) -> str:
+        """Build the ComponentMap closure source.
+
+        The output depends only on ``self.component_map`` (whose identity is captured by
+        ``self.component_map_hash``), so the result is stable across instances sharing a hash.
+
+        Returns:
+            The rendered custom code closure as a JS source string.
+        """
         from reflex_base.compiler.templates import _render_hooks
 
+        hooks = {}
         for component_factory in self.component_map.values():
             comp = component_factory(_MOCK_ARG)
             hooks.update(comp._get_all_hooks())
@@ -454,6 +466,15 @@ let {_LANGUAGE!s} = match ? match[1] : '';
             )
         }}
         """
+
+    def _get_custom_code(self) -> str | None:
+        cache = type(self)._custom_code_cache
+        cached = cache.get(self.component_map_hash)
+        if cached is not None:
+            return cached
+        code = self._build_custom_code()
+        cache[self.component_map_hash] = code
+        return code
 
     def _render(self) -> Tag:
         return (
