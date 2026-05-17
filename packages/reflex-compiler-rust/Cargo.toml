@@ -5,7 +5,6 @@ members = [
     "crates/reflex_arena",
     "crates/reflex_intern",
     "crates/reflex_db",
-    "crates/reflex_semantic",
     "crates/reflex_codegen",
     "crates/reflex_py",
     "crates/reflex_bench",
@@ -25,7 +24,6 @@ reflex_ir       = { path = "crates/reflex_ir" }
 reflex_arena    = { path = "crates/reflex_arena" }
 reflex_intern   = { path = "crates/reflex_intern" }
 reflex_db       = { path = "crates/reflex_db" }
-reflex_semantic = { path = "crates/reflex_semantic" }
 reflex_codegen  = { path = "crates/reflex_codegen" }
 reflex_vars     = { path = "crates/reflex_vars" }
 reflex_pyread   = { path = "crates/reflex_pyread" }

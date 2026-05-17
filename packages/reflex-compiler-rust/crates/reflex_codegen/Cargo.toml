@@ -10,6 +10,5 @@ publish.workspace = true
 reflex_ir       = { workspace = true }
 reflex_intern   = { workspace = true }
 reflex_arena    = { workspace = true }
-reflex_semantic = { workspace = true }
 itoa            = "1"
 ryu             = "1"

@@ -228,7 +228,6 @@ dependencies = [
  "reflex_arena",
  "reflex_intern",
  "reflex_ir",
- "reflex_semantic",
  "ryu",
 ]
 
@@ -287,15 +286,6 @@ dependencies = [
  "reflex_intern",
  "reflex_ir",
  "thiserror",
-]
-
-[[package]]
-name = "reflex_semantic"
-version = "0.0.0"
-dependencies = [
- "reflex_arena",
- "reflex_intern",
- "reflex_ir",
 ]
 
 [[package]]
