@@ -114,6 +114,11 @@ pub fn walk_component<'a, V: IrVisitor<'a> + ?Sized>(v: &mut V, component: &Comp
         Component::Expr { value, .. } => {
             v.visit_value(value);
         }
+        Component::MemoCall { children, .. } => {
+            for child in *children {
+                v.visit_component(child);
+            }
+        }
     }
 }
 

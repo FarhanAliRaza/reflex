@@ -24,6 +24,7 @@
 //!   Memoize(5)  = [5, inner:Component, key:u64, id:u64, loc]
 //!   Fragment(6) = [6, children:[Component], id:u64, loc]
 //!   Expr(7)     = [7, value:Value, id:u64, loc]
+//!   MemoCall(8) = [8, export_name:str, children:[Component], id:u64, loc]
 //! Value         = [kind:u8, ...payload]
 //!   JsExpr(0)   = [0, expr:str, VarData]
 //!   Literal(1)  = [1, Literal]
@@ -634,6 +635,29 @@ fn read_component<'a>(arena: &'a Arena, buf: &mut &[u8]) -> Result<Component<'a>
                 source_loc,
             })
         }
+        8 => {
+            if arr_len != 5 {
+                return Err(ParseError::BadArrayLen {
+                    expected: 5,
+                    actual: arr_len,
+                });
+            }
+            let export_name = intern_str(read_str_borrowed(buf)?);
+            let n_children = read_array_len(buf)? as usize;
+            let mut children: bumpalo::collections::Vec<Component<'a>> =
+                bumpalo::collections::Vec::with_capacity_in(n_children, arena.bump());
+            for _ in 0..n_children {
+                children.push(read_component(arena, buf)?);
+            }
+            let id = NodeId(read_u64(buf)?);
+            let source_loc = read_source_loc(buf)?;
+            Ok(Component::MemoCall {
+                export_name,
+                children: children.into_bump_slice(),
+                id,
+                source_loc,
+            })
+        }
         _ => Err(ParseError::UnknownComponentKind(kind)),
     }
 }
@@ -938,6 +962,65 @@ mod tests {
         write_u32(&mut bytes, 9999).unwrap();
         let err = parse_page(&arena, &bytes).unwrap_err();
         assert!(matches!(err, ParseError::UnsupportedVersion(9999)));
+    }
+
+    #[test]
+    fn parses_memo_call() {
+        // Build a tiny PageIR whose root is a MemoCall with two Text children.
+        use rmp::encode::*;
+        let mut bytes = Vec::new();
+        write_array_len(&mut bytes, 9).unwrap();
+        write_u32(&mut bytes, 2).unwrap();
+        write_str(&mut bytes, "/m").unwrap();
+        // Root: MemoCall(8) = [8, export_name, children, id, loc]
+        write_array_len(&mut bytes, 5).unwrap();
+        write_uint(&mut bytes, 8).unwrap();
+        write_str(&mut bytes, "MyMemo").unwrap();
+        // children: two Text nodes
+        write_array_len(&mut bytes, 2).unwrap();
+        for v in ["a", "b"] {
+            write_array_len(&mut bytes, 4).unwrap();
+            write_uint(&mut bytes, 1).unwrap(); // kind=Text
+            write_str(&mut bytes, v).unwrap();
+            write_uint(&mut bytes, 1).unwrap();
+            write_array_len(&mut bytes, 3).unwrap();
+            write_uint(&mut bytes, 0).unwrap();
+            write_uint(&mut bytes, 0).unwrap();
+            write_uint(&mut bytes, 0).unwrap();
+        }
+        write_uint(&mut bytes, 99).unwrap(); // id
+        write_array_len(&mut bytes, 3).unwrap();
+        write_uint(&mut bytes, 0).unwrap();
+        write_uint(&mut bytes, 0).unwrap();
+        write_uint(&mut bytes, 0).unwrap();
+        // title:nil, meta:[], source_files:[], component_imports:[],
+        // state_bindings:[], needs_ref:false
+        write_nil(&mut bytes).unwrap();
+        write_array_len(&mut bytes, 0).unwrap();
+        write_array_len(&mut bytes, 0).unwrap();
+        write_array_len(&mut bytes, 0).unwrap();
+        write_array_len(&mut bytes, 0).unwrap();
+        write_bool(&mut bytes, false).unwrap();
+
+        let arena = Arena::new();
+        let page = parse_page(&arena, &bytes).unwrap();
+        match page.root {
+            Component::MemoCall {
+                export_name,
+                children,
+                id,
+                ..
+            } => {
+                assert_eq!(reflex_intern::resolve(*export_name).unwrap(), "MyMemo");
+                assert_eq!(children.len(), 2);
+                assert_eq!(id.0, 99);
+                match &children[0] {
+                    Component::Text { value, .. } => assert_eq!(*value, "a"),
+                    _ => panic!("expected Text child"),
+                }
+            }
+            _ => panic!("expected MemoCall root"),
+        }
     }
 
     #[test]

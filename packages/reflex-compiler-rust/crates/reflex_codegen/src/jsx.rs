@@ -65,6 +65,11 @@ fn emit_component_inner<'a>(
         Component::Memoize { inner, key, .. } => emit_memoize(buf, inner, key.0, map),
         Component::Fragment { children, .. } => emit_fragment(buf, children, map),
         Component::Expr { value, .. } => emit_value(buf, value),
+        Component::MemoCall {
+            export_name,
+            children,
+            ..
+        } => emit_memo_call(buf, *export_name, children, map),
     }
 }
 
@@ -177,6 +182,22 @@ fn emit_match<'a>(
         emit_component_with_map(buf, d, map);
     } else {
         buf.write_str("null");
+    }
+    buf.write_str(")");
+}
+
+fn emit_memo_call<'a>(
+    buf: &mut CodeBuffer,
+    export_name: reflex_intern::Symbol,
+    children: &'a [Component<'a>],
+    mut map: Option<&mut SourceMap>,
+) {
+    buf.write_str("jsx(");
+    buf.write_str(resolve_unchecked(export_name));
+    buf.write_str(", {}");
+    for child in children {
+        buf.write_str(", ");
+        emit_component_with_map(buf, child, map.as_deref_mut());
     }
     buf.write_str(")");
 }
@@ -307,6 +328,46 @@ mod tests {
         assert!(!is_js_identifier("1foo"));
         assert!(!is_js_identifier("aria-label"));
         assert!(!is_js_identifier("foo bar"));
+    }
+
+    #[test]
+    fn emits_memo_call_with_children() {
+        use reflex_ir::{Component, NodeId, SourceLoc};
+        let arena = Arena::new();
+        let child_a = Component::Text {
+            value: "a",
+            id: NodeId(1),
+            source_loc: SourceLoc::SYNTHETIC,
+        };
+        let child_b = Component::Text {
+            value: "b",
+            id: NodeId(2),
+            source_loc: SourceLoc::SYNTHETIC,
+        };
+        let children = arena.bump().alloc_slice_copy(&[child_a, child_b]);
+        let call = Component::MemoCall {
+            export_name: reflex_intern::intern("MyMemo"),
+            children,
+            id: NodeId(3),
+            source_loc: SourceLoc::SYNTHETIC,
+        };
+        let mut buf = CodeBuffer::new();
+        emit_component(&mut buf, &call);
+        assert_eq!(buf.as_str(), "jsx(MyMemo, {}, \"a\", \"b\")");
+    }
+
+    #[test]
+    fn emits_memo_call_with_zero_children() {
+        use reflex_ir::{Component, NodeId, SourceLoc};
+        let call = Component::MemoCall {
+            export_name: reflex_intern::intern("MyMemo"),
+            children: &[],
+            id: NodeId(3),
+            source_loc: SourceLoc::SYNTHETIC,
+        };
+        let mut buf = CodeBuffer::new();
+        emit_component(&mut buf, &call);
+        assert_eq!(buf.as_str(), "jsx(MyMemo, {})");
     }
 
     #[test]

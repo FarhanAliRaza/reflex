@@ -190,6 +190,18 @@ pub enum Component<'a> {
         id: NodeId,
         source_loc: SourceLoc,
     } = 7,
+    /// Call into a separately-emitted memo module — renders as
+    /// `<ExportName>{children}</ExportName>` (i.e.
+    /// `jsx(ExportName, {}, ...children)`). The module itself is emitted
+    /// via `emit_memo_module`; the call site needs only the export name
+    /// and the original child subtree. Distinct from `Memoize` above,
+    /// which is the keyed `<MemoWrapper>` runtime-wrapper pattern.
+    MemoCall {
+        export_name: Symbol,
+        children: &'a [Component<'a>],
+        id: NodeId,
+        source_loc: SourceLoc,
+    } = 8,
 }
 
 impl<'a> Component<'a> {
@@ -203,7 +215,8 @@ impl<'a> Component<'a> {
             | Component::Match { id, .. }
             | Component::Memoize { id, .. }
             | Component::Fragment { id, .. }
-            | Component::Expr { id, .. } => *id,
+            | Component::Expr { id, .. }
+            | Component::MemoCall { id, .. } => *id,
         }
     }
 
@@ -217,7 +230,8 @@ impl<'a> Component<'a> {
             | Component::Match { source_loc, .. }
             | Component::Memoize { source_loc, .. }
             | Component::Fragment { source_loc, .. }
-            | Component::Expr { source_loc, .. } => *source_loc,
+            | Component::Expr { source_loc, .. }
+            | Component::MemoCall { source_loc, .. } => *source_loc,
         }
     }
 
@@ -234,6 +248,7 @@ impl<'a> Component<'a> {
             Component::Memoize { .. } => 5,
             Component::Fragment { .. } => 6,
             Component::Expr { .. } => 7,
+            Component::MemoCall { .. } => 8,
         }
     }
 }
