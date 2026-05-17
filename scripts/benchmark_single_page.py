@@ -911,13 +911,23 @@ def _instrumented_compile_pages(
         app_root = app._app_root(app_wrappers)
         _record("app._app_root(app_wrappers)", _ns() - t)
 
+        # Mirror rust_pipeline.py — go through the cached session method
+        # so the bench picks up the app-root imports cache, and reuse
+        # its returned raw dict for the next step so we don't re-walk.
         t = _ns()
-        sess.collect_all_imports_into(all_imports, app_root)
-        _record("sess.collect_all_imports_into(app_root)", _ns() - t)
+        app_root_cache_key: tuple[tuple, ...] = (
+            *((k[0], k[1], type(v).__qualname__) for k, v in app_wrappers.items()),
+            (id(app.theme), "app.theme"),
+            (id(app.toaster), "app.toaster"),
+        )
+        cached_app_root_imports = sess.collect_app_root_imports_cached(
+            all_imports, app_root, app_root_cache_key
+        )
+        _record("sess.collect_app_root_imports_cached(app_root)", _ns() - t)
 
         t = _ns()
-        app_root_imports = app_root._get_all_imports()
-        _record("app_root._get_all_imports()", _ns() - t)
+        app_root_imports = {k: list(v) for k, v in cached_app_root_imports.items()}
+        _record("app_root_imports copy (from cache)", _ns() - t)
 
         t = _ns()
         _apply_common_imports(app_root_imports)

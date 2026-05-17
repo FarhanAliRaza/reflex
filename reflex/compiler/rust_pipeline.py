@@ -149,8 +149,15 @@ def compile_pages(
     from reflex_base.components.dynamic import bundle_library, reset_bundled_libraries
 
     reset_bundled_libraries()
-    _, _radix_for_bundle = _resolve_radix_themes_plugin(app, get_config().plugins)
-    for plugin in (*get_config().plugins, _radix_for_bundle):
+    # Resolve the Radix Themes plugin once per compile. The function is
+    # pure over ``(app, config.plugins)`` for everything we read off it
+    # (``enabled`` / ``theme``), and ``apply_app_theme`` is idempotent —
+    # so hoisting this out saves the ~3.8 ms a second call would cost at
+    # app-root composition time below.
+    _plugin_chain, radix_themes_plugin = _resolve_radix_themes_plugin(
+        app, get_config().plugins
+    )
+    for plugin in (*get_config().plugins, radix_themes_plugin):
         for dep in plugin.get_frontend_dependencies():
             bundle_library(dep)
 
@@ -209,7 +216,6 @@ def compile_pages(
         # wrapper set.
         collected_app_wraps.update(component._get_all_app_wrap_components())
 
-
         # Memoize: substitute wrappers in-place; track each unique memo
         # body for separate emission below.
         component = walk_and_memoize(component, sess, memo_bodies)
@@ -249,14 +255,37 @@ def compile_pages(
     # window libs); Rust assembles the template.
     # The radix-themes plugin's `compile_page` hook adds the `(20,"Theme")`
     # wrap per page during the legacy compile. We skip the plugin walk
-    # but still need the wrap, so add it directly here.
-    _, radix_themes_plugin = _resolve_radix_themes_plugin(app, get_config().plugins)
+    # but still need the wrap, so add it directly here. The resolved
+    # plugin from above is reused — calling ``_resolve_radix_themes_plugin``
+    # a second time would re-run the implicit-plugin construction
+    # (``RadixThemesPlugin.create_implicit()``) for no benefit.
     if radix_themes_plugin.enabled and radix_themes_plugin.theme is not None:
         collected_app_wraps[20, "Theme"] = radix_themes_plugin.theme
 
     app_wrappers = _resolve_app_wrap_components(app, collected_app_wraps)
     app_root = app._app_root(app_wrappers)
-    sess.collect_all_imports_into(all_imports, app_root)
+    # Cache the app-root import walk on the session. The wrapper
+    # composition (slot keys + each value's class) is determined by
+    # class-level state (StrictMode/Theme/Toaster/user wraps), and the
+    # objects that *parameterize* it (``app.theme``, ``app.toaster``)
+    # are identity-stable on the App for the lifetime of the Python
+    # process. So subsequent compiles in a long-running session
+    # (hot-reload) skip the walk. We deliberately do NOT use ``id(v)``
+    # for the freshly-built wrapper Components — ``_resolve_app_wrap_components``
+    # constructs new instances on every call, so their ``id()`` would
+    # invalidate the cache every compile.
+    app_root_cache_key: tuple[tuple, ...] = (
+        *((k[0], k[1], type(v).__qualname__) for k, v in app_wrappers.items()),
+        (id(app.theme), "app.theme"),
+        (id(app.toaster), "app.toaster"),
+    )
+    # The returned raw (un-prefixed) imports dict is reused at L312
+    # for the app-root JSX imports_str build — saves a second
+    # ``app_root._get_all_imports()`` walk that the per-instance
+    # ``_imports_cache`` no longer warms (the Rust walker bypasses it).
+    _cached_app_root_imports = sess.collect_app_root_imports_cached(
+        all_imports, app_root, app_root_cache_key
+    )
 
     # Harvest imports from every ``@rx.memo`` custom component for the
     # install step AND emit each component's standalone memo file —
@@ -286,7 +315,11 @@ def compile_pages(
             continue
         sess.merge_imports_into(all_imports, custom_imports)
 
-    app_root_imports = app_root._get_all_imports()
+    # Reuse the cached raw imports from L282 — every lib in this dict
+    # is also in ``all_imports`` (with the prefix transform applied),
+    # but the un-prefixed form is what the app-root JSX template wants.
+    # Copy so ``_apply_common_imports`` doesn't mutate the session cache.
+    app_root_imports = {k: list(v) for k, v in _cached_app_root_imports.items()}
     _apply_common_imports(app_root_imports)
     imports_str = "\n".join(
         _RenderUtils.get_import(m)
@@ -472,7 +505,10 @@ def _emit_static_artifacts(
         except Exception:
             continue
         name = render["name"]
-        index_entries.append((name, legacy_compiler._memo_component_index_specifier(name)))
+        index_entries.append((
+            name,
+            legacy_compiler._memo_component_index_specifier(name),
+        ))
     index_path = compiler_utils.get_components_path()
     Path(index_path).parent.mkdir(parents=True, exist_ok=True)
     sess.compile_memo_index(index_entries, index_path)

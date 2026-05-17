@@ -40,6 +40,18 @@ class CompilerSession:
         except ImportError as exc:
             raise RuntimeError(_WHEEL_MISSING) from exc
         self._inner = _native.CompilerSession()
+        # Cache for the app-root imports walk. The wrapper composition
+        # (StrictMode/Theme/ToasterProvider/user wraps) is class-level and
+        # stable across hot-reloads in a long-running session, so walking
+        # the app_root tree once per process is enough. Keyed on the
+        # identity-stable tuple computed by ``_app_root_cache_key``; value
+        # is the raw (un-prefixed) imports dict from
+        # ``collect_all_imports``. Merge via ``merge_imports_into`` to
+        # apply the ``$/utils/...`` prefix transform on hit.
+        self._app_root_imports_cache: (
+            tuple[tuple[tuple, ...], dict[str, list]] | None
+        ) = None
+        self._app_root_imports_walks: int = 0
 
     # ---- Cache controls -----------------------------------------------------
 
@@ -348,6 +360,52 @@ class CompilerSession:
             component: any ``reflex_base.components.component.BaseComponent``.
         """
         self._inner.collect_all_imports_into(target, component)
+
+    def collect_app_root_imports_cached(
+        self,
+        target: dict[str, list],
+        app_root: object,
+        cache_key: tuple[tuple, ...],
+    ) -> dict[str, list]:
+        """Walk ``app_root`` for imports, caching across compiles.
+
+        The app-root wrapper composition (StrictMode/Theme/Toaster/user
+        wraps) is class-level and stable for the lifetime of the Python
+        process, so the import-walk result can be cached on the session.
+        On cache hit, this is equivalent to
+        :meth:`merge_imports_into`-ing the cached raw imports into
+        ``target``. On miss, performs a fresh walk via
+        :meth:`collect_all_imports` and stores the result.
+
+        The cache stores the **raw** (un-prefixed) import dict — the same
+        shape ``collect_all_imports`` returns — so that
+        :meth:`merge_imports_into` applies the ``$/utils/...`` prefix
+        transform exactly once per merge. The raw dict is returned so
+        callers that need the un-prefixed form (e.g. the app-root JSX
+        emit's ``imports_str`` build) can skip a second
+        ``app_root._get_all_imports()`` walk.
+
+        Args:
+            target: existing ``ParsedImportDict`` to merge into.
+            app_root: the composed app-root ``Component`` tree.
+            cache_key: an identity-stable key derived from the wrapper
+                composition. Cache invalidates when this changes.
+
+        Returns:
+            The raw (un-prefixed) app-root import dict — same shape as
+            ``Component._get_all_imports()``. Callers should treat it as
+            read-only; mutate via a shallow copy if needed.
+        """
+        cached = self._app_root_imports_cache
+        if cached is not None and cached[0] == cache_key:
+            self.merge_imports_into(target, cached[1])
+            return cached[1]
+        raw = self.collect_all_imports(app_root)
+        raw_dict = dict(raw)
+        self._app_root_imports_cache = (cache_key, raw_dict)
+        self._app_root_imports_walks += 1
+        self.merge_imports_into(target, raw_dict)
+        return raw_dict
 
     def last_phase_timings_ns(self) -> dict[str, int]:
         """Snapshot the Rust per-phase timings from the most recent compile.
