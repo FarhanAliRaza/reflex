@@ -7,9 +7,8 @@
 //!    Spike wire format: positional msgpack arrays, simple shape documented
 //!    inline below.
 //!
-//! 2. `CompilerSession` — the real entry point. Takes a §4 PageIR msgpack
-//!    blob, runs the parse → JSX-emit pipeline, returns a JS source string.
-//!    Salsa caching lands in D5 — for now every call rebuilds.
+//! 2. `CompilerSession` — the real entry point. Walks a Python `Component`
+//!    PyObject via `reflex_pyread` and emits JSX in one pass.
 
 mod session;
 
@@ -349,6 +348,5 @@ fn _native(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // The real compiler session.
     m.add_class::<session::CompilerSession>()?;
-    m.add_class::<session::CompiledOutput>()?;
     Ok(())
 }

@@ -1,24 +1,16 @@
 """Python wrapper around the Rust ``CompilerSession``.
 
-The Rust side (``reflex_compiler_rust._native.CompilerSession``) holds the
-content-hash compile cache. This wrapper handles:
+The supported caller path is
+:meth:`CompilerSession.compile_page_from_component` — the Rust pyread walk
+over a Component PyObject (plan §0b lever (a)). This module is a thin
+shim that wraps the Rust ``_native.CompilerSession`` and surfaces a
+friendly error when the wheel can't be imported.
 
-* A friendly error when the wheel can't be imported.
-* Conversion of :mod:`reflex.compiler.ir.builder` lists to msgpack bytes
-  (used by tests and benchmarks that still build IR through the Python
-  helpers).
-
-The supported caller path is :meth:`CompilerSession.compile_page_from_component`
-— the Rust pyread walk over a Component PyObject (plan §0b lever (a)).
-The IR-bytes entry points (:meth:`compile_page_ir`, :meth:`compile_app_ir`)
-remain available for the codegen-corpus IR-shape tests.
+The legacy msgpack IR pipeline (Python-built list-of-lists → msgpack →
+Rust parse) has been removed; ``reflex.compiler.ir`` is gone.
 """
 
 from __future__ import annotations
-
-from collections.abc import Iterable, Sequence
-
-from reflex.compiler.ir import pack
 
 _WHEEL_MISSING = (
     "reflex_compiler_rust wheel not available — install it via "
@@ -29,9 +21,8 @@ _WHEEL_MISSING = (
 class CompilerSession:
     """Long-lived compiler handle. Shared across hot-reloads.
 
-    Constructing this is cheap (no compile work happens). The expensive piece
-    is the underlying Rust ``CompilerSession`` which holds the content-hash
-    cache across calls to :meth:`compile_page` / :meth:`compile_app`.
+    Constructing this is cheap (no compile work happens). The Rust side
+    owns the per-process state (timing cells, memo-body collector).
     """
 
     def __init__(self) -> None:
@@ -53,55 +44,7 @@ class CompilerSession:
         ) = None
         self._app_root_imports_walks: int = 0
 
-    # ---- Cache controls -----------------------------------------------------
-
-    def set_cache_capacity(self, cap: int | None) -> None:
-        """Bound the in-process page-render cache. ``None`` for unbounded."""
-        self._inner.set_cache_capacity(cap)
-
-    def clear_cache(self) -> None:
-        self._inner.clear_cache()
-
-    def cache_len(self) -> int:
-        return int(self._inner.cache_len())
-
     # ---- Compile entry points ----------------------------------------------
-
-    def compile_page_ir(self, route_ident: str, page_ir: list) -> str:
-        """Compile a pre-built IR tree to a JS source string.
-
-        Args:
-            route_ident: JS function name for the page module.
-            page_ir: the list-of-lists IR from :mod:`reflex.compiler.ir.builder`.
-
-        Returns:
-            Rendered JS source for the page module.
-        """
-        return self.compile_page_bytes(route_ident, pack.pack_page(page_ir))
-
-    def compile_page_bytes(self, route_ident: str, page_bytes: bytes) -> str:
-        """Compile pre-packed IR bytes to a JS source string."""
-        return str(self._inner.compile_page(route_ident, page_bytes))
-
-    def compile_page_with_sourcemap(
-        self, route_ident: str, page_ir: list
-    ) -> tuple[str, list[tuple[int, int, int, int]]]:
-        """Compile an IR tree and return ``(js, mappings)``.
-
-        Each mapping is ``(byte_offset, file_id, line, col)``. The cache is
-        bypassed — use this for diagnostic flows, not hot-reload.
-
-        Args:
-            route_ident: JS function name for the page module.
-            page_ir: the list-of-lists IR from :mod:`reflex.compiler.ir.builder`.
-
-        Returns:
-            ``(js, mappings)``.
-        """
-        js, mappings = self._inner.compile_page_with_sourcemap(
-            route_ident, pack.pack_page(page_ir)
-        )
-        return str(js), [tuple(m) for m in mappings]
 
     def compile_memo_from_component(
         self,
@@ -534,27 +477,4 @@ class CompilerSession:
                 list(custom_code) if custom_code else None,
                 hooks_body,
             )
-        )
-
-    def compile_app_ir(
-        self,
-        pages: Iterable[tuple[str, str, list]],
-        *,
-        theme: list | None = None,
-        global_state: list | None = None,
-        plugin_manifest: list | None = None,
-    ) -> object:
-        """Compile a whole app from IR. Returns the Rust ``CompiledOutput``."""
-        packed_pages: Sequence[tuple[str, str, bytes]] = [
-            (ident, route, pack.pack_page(page_ir)) for ident, route, page_ir in pages
-        ]
-        return self._inner.compile_app(
-            packed_pages,
-            theme=pack.pack_theme(theme) if theme is not None else None,
-            global_state=pack.pack_global_state(global_state)
-            if global_state is not None
-            else None,
-            plugin_manifest=pack.pack_plugin_manifest(plugin_manifest)
-            if plugin_manifest is not None
-            else None,
         )

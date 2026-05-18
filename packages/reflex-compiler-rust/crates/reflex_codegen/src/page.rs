@@ -302,14 +302,44 @@ fn emit_imports_grouped_by_module(
 mod tests {
     use super::*;
     use reflex_arena::Arena;
-    use reflex_ir::parse::test_helpers::tiny_page_bytes;
-    use reflex_ir::parse_page;
+    use reflex_ir::{Component, NodeId, Page as PageIR, SourceLoc, Value, VarData};
 
     #[test]
     fn emits_page_module() {
         let arena = Arena::new();
-        let bytes = tiny_page_bytes();
-        let page = parse_page(&arena, &bytes).unwrap();
+        let text = Component::Text {
+            value: "hello",
+            id: NodeId(42),
+            source_loc: SourceLoc::SYNTHETIC,
+        };
+        let children = arena.bump().alloc_slice_copy(&[text]);
+        let props = arena.bump().alloc_slice_copy(&[(
+            reflex_intern::intern("id"),
+            Value::JsExpr {
+                expr: "x",
+                var_data: VarData::EMPTY,
+            },
+        )]);
+        let root = arena.alloc(Component::Element {
+            tag: reflex_intern::intern("div"),
+            props,
+            children,
+            event_handlers: &[],
+            hooks: &[],
+            id: NodeId(7),
+            source_loc: SourceLoc::SYNTHETIC,
+        });
+        let page = PageIR {
+            schema_version: 2,
+            route: "/index",
+            root: &*root,
+            title: None,
+            meta: &[],
+            source_files: &[],
+            component_imports: &[],
+            state_bindings: &[],
+            needs_ref: false,
+        };
         let mut buf = CodeBuffer::new();
         emit_page(&mut buf, &page, "Index");
         let s = buf.as_str();

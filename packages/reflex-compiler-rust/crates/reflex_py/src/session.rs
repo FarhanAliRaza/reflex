@@ -1,28 +1,20 @@
 //! `CompilerSession` — the real PyO3 entry point. See plan §3.4, D4.
 //!
 //! The Python side keeps a long-lived `CompilerSession` instance across
-//! reloads. Each `compile_app(...)` call ships per-page msgpack blobs plus
-//! the theme/global-state/plugin-manifest blobs; Rust parses, emits, and
-//! returns a `CompiledOutput` carrying `{path: bytes}` for the Python side
-//! to write.
-//!
-//! Salsa caching lands in D5. Until then every call rebuilds — the
-//! `content_hash` ferried over the wire is recorded but unused.
-
-use std::collections::HashMap;
+//! reloads. `compile_page_from_component` is the live entry point: Python
+//! hands over a `Component` PyObject and Rust walks it via `reflex_pyread`,
+//! builds the IR in-arena, and emits JSX in one pass. The legacy
+//! `compile_page` / `compile_app` msgpack flow has been removed.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use reflex_arena::Arena;
 use reflex_codegen::{
-    emit_app_root, emit_app_root_module, emit_context, emit_context_module,
-    emit_document_root_module, emit_memo_index, emit_memo_module, emit_page,
-    emit_page_with_extras, emit_page_with_map, emit_stateful_pages_json, emit_styles_root,
-    emit_theme, emit_theme_module, emit_vite_config, CodeBuffer, SourceMap,
+    emit_app_root_module, emit_context_module, emit_document_root_module, emit_memo_index,
+    emit_memo_module, emit_page_with_extras, emit_stateful_pages_json, emit_styles_root,
+    emit_theme_module, CodeBuffer,
 };
-use reflex_db::CompilerDb;
-use reflex_ir::{parse_global_state, parse_page, parse_plugin_manifest, parse_theme};
 use reflex_pyread::{
     collect_all_imports as pyread_collect_all_imports,
     collect_all_imports_into as pyread_collect_all_imports_into,
@@ -30,73 +22,17 @@ use reflex_pyread::{
     should_memoize as memoize_should_memoize, MemoRefs, PyRefs,
 };
 
-/// One per Python `reflex.compiler.session.CompilerSession`. Holds the
-/// content-hash-keyed compile cache (D5) so hot-reload is incremental.
+/// One per Python `reflex.compiler.session.CompilerSession`. Stateless from
+/// Rust's point of view today — the only per-session resources are the
+/// thread-local timing/memo-body cells in `reflex_pyread`.
 #[pyclass]
-pub struct CompilerSession {
-    db: CompilerDb,
-}
+pub struct CompilerSession {}
 
 #[pymethods]
 impl CompilerSession {
     #[new]
     fn new() -> Self {
-        Self {
-            db: CompilerDb::new(),
-        }
-    }
-
-    /// Cap the page cache. Pass `None` for unbounded.
-    fn set_cache_capacity(&self, cap: Option<usize>) {
-        self.db.set_cache_capacity(cap);
-    }
-
-    /// Drop all cached page renders. Equivalent to creating a new session.
-    fn clear_cache(&self) {
-        self.db.clear();
-    }
-
-    /// Number of cached page renders. Useful for tests + diagnostics.
-    fn cache_len(&self) -> usize {
-        self.db.cache_len()
-    }
-
-    /// Compile a single page's IR bytes to a JS source string. The Python side
-    /// passes `(route_ident, page_ir_bytes)`; we return the rendered module
-    /// source.
-    ///
-    /// This is the single-page fast path used by hot-reload. `compile_app`
-    /// below batches over many pages and produces auxiliary artifacts.
-    fn compile_page(
-        &self,
-        py: Python<'_>,
-        route_ident: &str,
-        page_bytes: &Bound<'_, PyBytes>,
-    ) -> PyResult<String> {
-        let bytes = page_bytes.as_bytes().to_vec();
-        let route_ident = route_ident.to_owned();
-        let db = self.db.clone();
-        py.allow_threads(move || {
-            db.emit_page(&route_ident, &bytes)
-                .map(|s| s.as_ref().to_owned())
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
-        })
-    }
-
-    /// Compile one page and also return its source map. The cache is bypassed
-    /// (it stores only the rendered string, not the map). Use when you need
-    /// diagnostic back-mapping; use `compile_page` for hot-reload.
-    ///
-    /// Returns `(rendered_js, [(offset, file_id, line, col), ...])`.
-    fn compile_page_with_sourcemap(
-        &self,
-        py: Python<'_>,
-        route_ident: &str,
-        page_bytes: &Bound<'_, PyBytes>,
-    ) -> PyResult<(String, Vec<(u32, u32, u32, u32)>)> {
-        let bytes = page_bytes.as_bytes().to_vec();
-        let route_ident = route_ident.to_owned();
-        py.allow_threads(move || compile_page_with_sourcemap_inner(&route_ident, &bytes))
+        Self {}
     }
 
     /// Compile a memo wrapper module from a Component PyObject.
@@ -559,207 +495,6 @@ impl CompilerSession {
         })
     }
 
-    /// Compile a whole app. Returns a `CompiledOutput` whose `files` dict maps
-    /// output paths (relative to the Vite project root) to UTF-8 byte blobs.
-    ///
-    /// `pages`: list of `(route_ident, route_path, page_ir_bytes)` triples.
-    /// `theme`: optional theme IR bytes.
-    /// `global_state`: optional global-state IR bytes.
-    /// `plugin_manifest`: optional plugin-manifest IR bytes.
-    #[pyo3(signature = (pages, theme=None, global_state=None, plugin_manifest=None))]
-    fn compile_app(
-        &self,
-        py: Python<'_>,
-        pages: &Bound<'_, PyList>,
-        theme: Option<&Bound<'_, PyBytes>>,
-        global_state: Option<&Bound<'_, PyBytes>>,
-        plugin_manifest: Option<&Bound<'_, PyBytes>>,
-    ) -> PyResult<CompiledOutput> {
-        let mut page_inputs: Vec<(String, String, Vec<u8>)> = Vec::with_capacity(pages.len());
-        for item in pages.iter() {
-            let tup: Bound<PyTuple> = item.downcast_into()?;
-            if tup.len() != 3 {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "each page entry must be (route_ident, route_path, ir_bytes)",
-                ));
-            }
-            let ident: String = tup.get_item(0)?.extract()?;
-            let route: String = tup.get_item(1)?.extract()?;
-            let bytes: Vec<u8> = tup.get_item(2)?.extract::<&[u8]>()?.to_vec();
-            page_inputs.push((ident, route, bytes));
-        }
-        let theme_bytes = theme.map(|b| b.as_bytes().to_vec());
-        let state_bytes = global_state.map(|b| b.as_bytes().to_vec());
-        let plugin_bytes = plugin_manifest.map(|b| b.as_bytes().to_vec());
-
-        let db = self.db.clone();
-        let result = py
-            .allow_threads(move || compile_app_inner(&db, page_inputs, theme_bytes, state_bytes, plugin_bytes))
-            .map_err(map_err)?;
-        Ok(result)
-    }
-}
-
-fn map_err(e: CompileError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(e.to_string())
-}
-
-#[derive(Debug, thiserror::Error)]
-enum CompileError {
-    #[error("page compile failed for {route_ident}: {source}")]
-    Page {
-        route_ident: String,
-        #[source]
-        source: reflex_db::DbError,
-    },
-    #[error("theme parse failed: {0}")]
-    Theme(reflex_ir::ParseError),
-    #[error("global-state parse failed: {0}")]
-    GlobalState(reflex_ir::ParseError),
-    #[error("plugin manifest parse failed: {0}")]
-    PluginManifest(reflex_ir::ParseError),
-}
-
-fn compile_page_with_sourcemap_inner(
-    route_ident: &str,
-    page_bytes: &[u8],
-) -> PyResult<(String, Vec<(u32, u32, u32, u32)>)> {
-    let arena = Arena::with_capacity(page_bytes.len() * 4);
-    let page = parse_page(&arena, page_bytes)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("page parse: {e}")))?;
-    let mut buf = CodeBuffer::with_capacity(page_bytes.len() * 2);
-    let mut map = SourceMap::new();
-    emit_page_with_map(&mut buf, &page, route_ident, &mut map);
-    let js = String::from_utf8(buf.into_bytes()).map_err(|e| {
-        pyo3::exceptions::PyValueError::new_err(format!("emit produced non-utf8: {e}"))
-    })?;
-    let mappings: Vec<(u32, u32, u32, u32)> = map
-        .entries()
-        .iter()
-        .map(|(offset, loc)| (*offset, loc.file.0, loc.line, loc.col))
-        .collect();
-    Ok((js, mappings))
-}
-
-fn compile_app_inner(
-    db: &CompilerDb,
-    pages: Vec<(String, String, Vec<u8>)>,
-    theme: Option<Vec<u8>>,
-    global_state: Option<Vec<u8>>,
-    plugin_manifest: Option<Vec<u8>>,
-) -> Result<CompiledOutput, CompileError> {
-    let arena = Arena::new();
-    let mut files: HashMap<String, Vec<u8>> = HashMap::with_capacity(pages.len() + 4);
-
-    // D11: parallel page emit via rayon. Cache hits still avoid work.
-    let parallel_inputs: Vec<(String, Vec<u8>)> = pages
-        .iter()
-        .map(|(ident, _, bytes)| (ident.clone(), bytes.clone()))
-        .collect();
-    let results = db.emit_pages_parallel(&parallel_inputs);
-    for ((ident, route, _), result) in pages.iter().zip(results.into_iter()) {
-        let rendered = result.map_err(|source| CompileError::Page {
-            route_ident: ident.clone(),
-            source,
-        })?;
-        let out_path = page_output_path(route);
-        files.insert(out_path, rendered.as_bytes().to_vec());
-    }
-
-    if let Some(bytes) = theme {
-        let theme = parse_theme(&arena, &bytes).map_err(CompileError::Theme)?;
-        let mut buf = CodeBuffer::with_capacity(1024);
-        emit_theme(&mut buf, &theme);
-        files.insert("src/styles/theme.css".to_owned(), buf.into_bytes());
-    }
-    if let Some(bytes) = global_state {
-        let state = parse_global_state(&arena, &bytes).map_err(CompileError::GlobalState)?;
-        let mut buf = CodeBuffer::with_capacity(2048);
-        emit_context(&mut buf, &state);
-        files.insert("src/context.js".to_owned(), buf.into_bytes());
-    }
-    if let Some(bytes) = plugin_manifest {
-        let manifest = parse_plugin_manifest(&arena, &bytes).map_err(CompileError::PluginManifest)?;
-        let mut buf = CodeBuffer::with_capacity(2048);
-        emit_app_root(&mut buf, &manifest);
-        files.insert("src/AppWrap.jsx".to_owned(), buf.into_bytes());
-
-        // Plugin static assets pass-through (artifact #7 in §4.5 — Python
-        // ships path+bytes, Rust copies into the output map verbatim).
-        for plugin in manifest.plugins {
-            for (path, body) in plugin.static_assets {
-                files.insert(
-                    reflex_intern::resolve_unchecked(*path).to_owned(),
-                    body.to_vec(),
-                );
-            }
-        }
-    }
-
-    // Always emit a Vite config — Python doesn't need to opt in.
-    let mut vite_buf = CodeBuffer::with_capacity(512);
-    emit_vite_config(&mut vite_buf, "");
-    files.insert("vite.config.js".to_owned(), vite_buf.into_bytes());
-
-    Ok(CompiledOutput {
-        files,
-        orphans: Vec::new(),
-        diagnostics: Vec::new(),
-    })
-}
-
-/// Convert a route path to the emitted JS module path. `/` → `pages/index.jsx`,
-/// `/about` → `pages/about.jsx`, `/foo/bar` → `pages/foo/bar.jsx`. The Python
-/// side will respect this layout when writing files.
-fn page_output_path(route: &str) -> String {
-    let trimmed = route.trim_start_matches('/');
-    if trimmed.is_empty() {
-        return "pages/index.jsx".to_owned();
-    }
-    let mut out = String::with_capacity(8 + trimmed.len());
-    out.push_str("pages/");
-    out.push_str(trimmed);
-    out.push_str(".jsx");
-    out
-}
-
-#[pyclass]
-pub struct CompiledOutput {
-    files: HashMap<String, Vec<u8>>,
-    orphans: Vec<String>,
-    diagnostics: Vec<String>,
-}
-
-#[pymethods]
-impl CompiledOutput {
-    /// Return the rendered files as a `dict[str, bytes]`.
-    fn files<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let dict = PyDict::new_bound(py);
-        for (path, contents) in &self.files {
-            dict.set_item(path, PyBytes::new_bound(py, contents))?;
-        }
-        Ok(dict)
-    }
-
-    /// Paths the Python side should delete (no longer emitted by Rust).
-    fn orphans(&self) -> Vec<String> {
-        self.orphans.clone()
-    }
-
-    /// Compiler diagnostics. List of pre-formatted strings for now; D11 will
-    /// convert to structured `miette`-style records.
-    fn diagnostics(&self) -> Vec<String> {
-        self.diagnostics.clone()
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "CompiledOutput(files={}, orphans={}, diagnostics={})",
-            self.files.len(),
-            self.orphans.len(),
-            self.diagnostics.len()
-        )
-    }
 }
 
 /// RAII guard that disables the Rust-side memoize transformation for

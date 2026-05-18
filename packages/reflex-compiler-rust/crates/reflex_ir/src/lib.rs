@@ -1,22 +1,18 @@
 //! IR enum types. See plan §3.2, §4.
 //!
 //! Every variant is `Copy`. Slices and string refs borrow the arena (`'a`).
-//! Public field access is allowed within the workspace; the plan's R4
-//! corollary (Salsa-tracked accessors) wraps these reads in `reflex_db`, but
-//! the underlying enum has to be matchable for the visitor pattern in `D6`.
+//! Public field access is allowed within the workspace; the underlying enum
+//! has to be matchable for the visitor pattern in `D6`.
 //!
-//! Wire-format compatibility: enum discriminants are explicitly assigned so
-//! the msgpack parser in `reflex_py` can read a `u8` kind byte and `match`
-//! straight into a constructor without lookup tables.
+//! The pyread path (Python `Component` → Rust via PyO3) is the only producer
+//! of these IR values; the legacy msgpack decoder has been removed.
 
 #![forbid(unsafe_code)]
 
 use reflex_intern::Symbol;
 
-pub mod parse;
 pub mod visitor;
 
-pub use parse::{parse_global_state, parse_page, parse_plugin_manifest, parse_theme, ParseError};
 pub use visitor::{walk_component, walk_event_handler, walk_match_arm, walk_page, walk_value, IrVisitor};
 
 /// Stable hash of a node's canonical bytes. Used as the Salsa cache key and as
@@ -132,9 +128,9 @@ pub struct MatchArm<'a> {
 /// The Component IR tree.
 ///
 /// `#[repr(C, u8)]` pins the discriminant to a `u8` and gives the layout a
-/// stable shape so the Salsa cache and msgpack decoder can rely on it. The
-/// remaining payload is laid out C-style, which trades a small amount of
-/// padding for predictable pointer-stride into slices of `Component`.
+/// stable shape. The remaining payload is laid out C-style, which trades a
+/// small amount of padding for predictable pointer-stride into slices of
+/// `Component`.
 #[repr(C, u8)]
 #[derive(Clone, Copy, Debug)]
 pub enum Component<'a> {
@@ -235,8 +231,8 @@ impl<'a> Component<'a> {
         }
     }
 
-    /// Wire-format discriminant. Matches the `kind` field in the msgpack
-    /// schema (§4.1).
+    /// Variant discriminant as a `u8`. Stable across builds because the
+    /// enum is `#[repr(C, u8)]`.
     #[inline]
     pub fn kind(&self) -> u8 {
         match self {
@@ -302,9 +298,9 @@ pub struct Theme<'a> {
 
 /// GlobalState IR (§4.3).
 ///
-/// `initial_state` and `client_storage` are kept as raw msgpack-encoded blobs
-/// because their shape is recursive `Any` — Rust never inspects them; it
-/// just splices them into the emitted JS shell as JSON literals.
+/// `initial_state` and `client_storage` are kept as raw JSON blobs because
+/// their shape is recursive `Any` — Rust never inspects them; it just splices
+/// them into the emitted JS shell as JSON literals.
 #[derive(Clone, Copy, Debug)]
 pub struct GlobalState<'a> {
     pub schema_version: u32,

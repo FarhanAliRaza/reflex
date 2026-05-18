@@ -306,15 +306,41 @@ fn is_js_identifier(s: &str) -> bool {
 mod tests {
     use super::*;
     use reflex_arena::Arena;
-    use reflex_ir::{parse::test_helpers::tiny_page_bytes, parse_page};
+    use reflex_ir::{Component, NodeId, SourceLoc, Value, VarData};
+
+    /// Build the same `<div id="x">hello</div>` tree the legacy
+    /// `tiny_page_bytes()` msgpack fixture produced, but directly as IR.
+    fn tiny_page_root<'a>(arena: &'a Arena) -> Component<'a> {
+        let text = Component::Text {
+            value: "hello",
+            id: NodeId(42),
+            source_loc: SourceLoc::SYNTHETIC,
+        };
+        let children = arena.bump().alloc_slice_copy(&[text]);
+        let props = arena.bump().alloc_slice_copy(&[(
+            reflex_intern::intern("id"),
+            Value::JsExpr {
+                expr: "x",
+                var_data: VarData::EMPTY,
+            },
+        )]);
+        Component::Element {
+            tag: reflex_intern::intern("div"),
+            props,
+            children,
+            event_handlers: &[],
+            hooks: &[],
+            id: NodeId(7),
+            source_loc: SourceLoc::SYNTHETIC,
+        }
+    }
 
     #[test]
     fn emits_tiny_page() {
         let arena = Arena::new();
-        let bytes = tiny_page_bytes();
-        let page = parse_page(&arena, &bytes).unwrap();
+        let root = tiny_page_root(&arena);
         let mut buf = CodeBuffer::new();
-        emit_component(&mut buf, page.root);
+        emit_component(&mut buf, &root);
         assert_eq!(buf.as_str(), "jsx(div, {id: x}, \"hello\")");
     }
 
@@ -375,11 +401,10 @@ mod tests {
         // The tiny page's nodes all use SourceLoc::SYNTHETIC, so the map
         // stays empty even with `Some(&mut map)`.
         let arena = Arena::new();
-        let bytes = tiny_page_bytes();
-        let page = parse_page(&arena, &bytes).unwrap();
+        let root = tiny_page_root(&arena);
         let mut buf = CodeBuffer::new();
         let mut map = SourceMap::new();
-        emit_component_with_map(&mut buf, page.root, Some(&mut map));
+        emit_component_with_map(&mut buf, &root, Some(&mut map));
         assert!(map.is_empty());
     }
 }
