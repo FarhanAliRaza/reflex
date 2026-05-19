@@ -11,8 +11,10 @@
 
 use reflex_intern::Symbol;
 
+pub mod parse;
 pub mod visitor;
 
+pub use parse::{parse_page, ParseError, SCHEMA_VERSION};
 pub use visitor::{walk_component, walk_event_handler, walk_match_arm, walk_page, walk_value, IrVisitor};
 
 /// Stable hash of a node's canonical bytes. Used as the Salsa cache key and as

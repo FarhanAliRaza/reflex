@@ -1,19 +1,19 @@
-//! PyO3 Component-tree reader. See plan §0b lever (a).
+//! Small PyO3-backed helpers that remain after the two-phase split.
 //!
-//! Replaces `reflex/compiler/ir/bridge.py` by walking Reflex `Component`
-//! PyObjects directly via PyO3 `getattr`. Each Python attribute access is
-//! ~100 ns (per spike measurement); a 165-node page costs ~80 µs, vs
-//! ~3.9 ms for the msgpack bridge.
+//! Phase 1 (`reflex.compiler.ir.bridge.page_to_ir` on the Python side)
+//! produces msgpack-packed IR; phase 2 (`reflex_codegen::emit_page` via
+//! `CompilerSession.compile_page_from_bytes`) walks the bytes and emits
+//! JSX. Neither phase needs to read Python `Component` PyObjects from
+//! Rust.
 //!
-//! The reader produces the same `reflex_ir::Component<'arena>` tree the
-//! msgpack parser produces, so downstream codegen is unchanged. Strings
-//! are arena-allocated; identifiers are interned.
+//! What still lives here:
 //!
-//! The pyo3 dep is feature-gated (default-on). `--no-default-features`
-//! builds skip pyo3 so the pure-Rust helpers in `text` can be unit-tested
-//! without libpython on the system linker — uv's snap-managed Python isn't
-//! visible to `cc`. End-to-end coverage of the PyO3 reader runs through
-//! `reflex_py`'s wheel tests (plan task #7).
+//! * [`memoize`] — `should_memoize` per-node decision, called from
+//!   `reflex.compiler.rust_memo.walk_and_memoize` during phase 1.
+//! * [`imports`] — `collect_all_imports` / `merge_imports_into`, the
+//!   walker used to harvest NPM packages for `bun install`.
+//! * [`pyo3_reader`] — the tiny shared helpers (`PyReadError`,
+//!   `class_name`, `py_str`) the two surfaces above depend on.
 
 #![forbid(unsafe_code)]
 
@@ -26,24 +26,13 @@ mod pyo3_reader;
 pub mod memoize;
 
 #[cfg(feature = "pyo3")]
-pub mod memo_bodies;
-
-#[cfg(feature = "pyo3")]
 pub mod imports;
 
 #[cfg(feature = "pyo3")]
-pub mod timing;
+pub use pyo3_reader::PyReadError;
 
 #[cfg(feature = "pyo3")]
-pub use pyo3_reader::{read_page, PyReadError, PyRefs};
-
-#[cfg(feature = "pyo3")]
-pub use memoize::{peek_memoize_for, should_memoize, MemoRefs, PeekResult};
+pub use memoize::{should_memoize, MemoRefs};
 
 #[cfg(feature = "pyo3")]
 pub use imports::{collect_all_imports, collect_all_imports_into, merge_imports_into};
-
-#[cfg(feature = "pyo3")]
-pub use timing::{
-    Counter as TimingCounter, Field as TimingField, PhaseTimings, Span as TimingSpan,
-};

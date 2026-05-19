@@ -11,12 +11,13 @@ Drives the auto-memoization pass for ``reflex run-rust``:
    original's children (passthrough) or none (snapshot).
 4. The wrapper replaces the original in the parent's children list.
 5. Each unique memo body (keyed by ``export_name``) gets emitted via
-   :meth:`CompilerSession.compile_memo_from_component` and written to
+   :meth:`CompilerSession.compile_memo_from_bytes` and written to
    ``.web/utils/components/<name>.jsx``.
-6. The transformed page tree then flows through the normal
-   :func:`compile_page_from_component` path, so the page module imports
-   ``<name>`` from ``$/utils/components/<name>`` and renders the wrapper
-   at the call site with the original children passed as JSX children.
+6. The transformed page tree then flows through the phase-1 bridge
+   (``page_to_ir``) and phase 2 (``compile_page_from_bytes``), so the
+   page module imports ``<name>`` from ``$/utils/components/<name>`` and
+   renders the wrapper at the call site with the original children
+   passed as JSX children.
 
 What this **does not yet match** vs the legacy
 :class:`MemoizeStatefulPlugin`:
@@ -100,7 +101,10 @@ def _wrap_with_memo(component: Any, memo_bodies: dict[str, Any]) -> Any:
         body = copy.copy(definition.component)
         if definition.passthrough_hole_child is not None:
             body.children = [definition.passthrough_hole_child]
-        memo_bodies[export_name] = (body, definition)
+        signature = (
+            "({ children })" if definition.passthrough_hole_child is not None else "()"
+        )
+        memo_bodies[export_name] = (body, signature)
 
     wrapper = factory()
     # Passthrough wrappers carry the original's children at the page-level
@@ -123,19 +127,27 @@ def emit_memo_modules(
         memo_bodies: ``{export_name: (body_component, definition)}`` map
             built by :func:`walk_and_memoize`.
         session: The compile session whose
-            :meth:`compile_memo_from_component` does the emit.
+            :meth:`compile_memo_from_bytes` does the emit.
         components_dir: Filesystem directory under ``.web/`` where each
             memo file lands. Created if missing.
 
     Returns:
         ``{export_name: written_path}`` for every emitted memo file.
     """
+    from reflex.compiler.ir.bridge import page_to_ir
+
     components_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {}
     for name, (body, signature) in memo_bodies.items():
         pre_hooks = _harvest_pre_hooks(body)
-        js = session.compile_memo_from_component(
-            name, signature, body, pre_hooks=pre_hooks
+        # Phase 1: bridge the memo body Component to IR bytes. The body
+        # already carries the {children} hole substitution for
+        # passthrough wrappers; that means the IR walker sees the same
+        # tree the legacy pyread path saw.
+        ir_bytes = page_to_ir(route="/__memo__", component=body)
+        # Phase 2: pure Rust — no PyO3 callbacks during emit.
+        js = session.compile_memo_from_bytes(
+            name, signature, ir_bytes, pre_hooks=pre_hooks
         )
         out_path = components_dir / f"{name}.jsx"
         out_path.write_text(js)

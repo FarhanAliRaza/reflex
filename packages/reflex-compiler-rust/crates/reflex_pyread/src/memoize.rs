@@ -13,70 +13,12 @@
 //!   matches the legacy plugin's per-node decision. Foundation for
 //!   phase 3, where wrapper construction moves to Rust too.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyDict, PyTuple};
+use pyo3::types::{PyAnyMethods, PyDict};
 
-use super::pyo3_reader::{class_name, py_str, PyReadError, PyRefs};
-
-/// Result of `peek_memoize_for` — the three pieces an auto-memoize
-/// passthrough wrapper exposes for codegen.
-///
-/// Fields:
-///
-/// * `export_name` — JS identifier the wrapper module is registered
-///   under. Caller interns it when building the IR memo node; we
-///   return `String` here so the interning policy stays with the
-///   caller (Part B of the Rust IR memoize port).
-/// * `body` — the lift-normalized body `Component`, returned as a
-///   live PyObject so the caller can walk it via `read_component`.
-/// * `signature` — either `"({ children })"` (passthrough wrapper
-///   that splices children) or `"()"` (no children hole). Matches
-///   `create_passthrough_component_memo`'s output 1:1.
-pub struct PeekResult<'py> {
-    pub export_name: String,
-    pub body: Bound<'py, PyAny>,
-    pub signature: String,
-}
-
-/// Bridge to `reflex.experimental.memo.peek_memoize`.
-///
-/// Calls the Python peek and unpacks the 3-tuple. The callable itself
-/// is pre-resolved on `PyRefs::new`; per-call cost is ~one `call1` plus
-/// three tuple-index extractions. Python-side exceptions propagate
-/// untouched.
-///
-/// Used by `read_page` (Phase 2 Part B) when a node has been flagged
-/// memoizable by `should_memoize`, to obtain the wrapper's export name
-/// and body for the JSX emission step without paying the cost of
-/// building a full `ExperimentalMemoComponentDefinition`.
-pub fn peek_memoize_for<'py>(
-    _py: Python<'py>,
-    component: &Bound<'py, PyAny>,
-    refs: &PyRefs<'py>,
-) -> PyResult<PeekResult<'py>> {
-    let result = refs.peek_memoize.call1((component,))?;
-    let tup: Bound<'py, PyTuple> = result.downcast_into().map_err(|e| {
-        pyo3::exceptions::PyTypeError::new_err(format!(
-            "peek_memoize: expected tuple result, got {e}",
-        ))
-    })?;
-    if tup.len() != 3 {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "peek_memoize: expected 3-tuple, got {}-tuple",
-            tup.len()
-        )));
-    }
-    let export_name: String = tup.get_item(0)?.extract()?;
-    let body = tup.get_item(1)?;
-    let signature: String = tup.get_item(2)?.extract()?;
-    Ok(PeekResult {
-        export_name,
-        body,
-        signature,
-    })
-}
+use super::pyo3_reader::{class_name, py_str, PyReadError};
 
 /// Memoize plugin's per-node decision, ported from
 /// `reflex.compiler.plugins.memoize._should_memoize`.
@@ -466,17 +408,22 @@ fn is_component_subclass(obj: &Bound<'_, PyAny>, refs: &MemoRefs<'_>) -> Result<
 
 /// Framework classes the memoize-decision walk uses.
 ///
-/// Built on top of `PyRefs` (Var/LiteralVar) — we cache the `Component`
-/// class here too so children/var_data.components can be filtered by
-/// type quickly. Building this once per page mirrors the cost story of
-/// pyread itself: ~10 µs lookup amortized across hundreds of nodes.
+/// Resolved once per page; `is_instance` calls against the cached
+/// classes are ~100 ns each (vs ~10 µs for re-importing).
 pub struct MemoRefs<'py> {
     pub var_cls: Bound<'py, PyAny>,
     pub component_cls: Bound<'py, PyAny>,
 }
 
 impl<'py> MemoRefs<'py> {
-    pub fn from_pyrefs(py: Python<'py>, pyrefs: &PyRefs<'py>) -> Result<Self, PyReadError> {
+    pub fn new(py: Python<'py>) -> Result<Self, PyReadError> {
+        let var_cls = py
+            .import_bound("reflex_base.vars.base")
+            .and_then(|m| m.getattr("Var"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.vars.base.Var",
+                source,
+            })?;
         let component_cls = py
             .import_bound("reflex_base.components.component")
             .and_then(|m| m.getattr("Component"))
@@ -485,15 +432,9 @@ impl<'py> MemoRefs<'py> {
                 source,
             })?;
         Ok(Self {
-            var_cls: pyrefs.var_cls.clone(),
+            var_cls,
             component_cls,
         })
     }
 }
 
-// Unused-import guard for the HashSet import — kept around for future
-// use (the legacy walk could be extended with per-page seen-sets).
-#[allow(dead_code)]
-fn _hash_set_marker() -> HashSet<usize> {
-    HashSet::new()
-}

@@ -35,6 +35,35 @@ from reflex.compiler.rust_memo import emit_memo_modules
 from reflex.compiler.session import CompilerSession
 
 
+def _union_imports(a: Any, b: Any) -> dict[str, list]:
+    """Merge two ``_get_all_imports()`` dicts, deduplicating per module.
+
+    ``ParsedImportDict`` values are lists of ``ImportVar`` records;
+    identity (tag, alias, install) decides equality. Falls back to
+    a tuple-keyed dedup so a single ``ImportVar`` only lands once
+    even if both inputs name it.
+    """
+    out: dict[str, list] = {}
+    seen: dict[str, set[tuple]] = {}
+    for source in (a, b):
+        if not source:
+            continue
+        for lib, ivs in source.items():
+            bucket = out.setdefault(lib, [])
+            keyset = seen.setdefault(lib, set())
+            for iv in ivs:
+                key = (
+                    getattr(iv, "tag", None),
+                    getattr(iv, "alias", None),
+                    getattr(iv, "install", None),
+                )
+                if key in keyset:
+                    continue
+                keyset.add(key)
+                bucket.append(iv)
+    return out
+
+
 def _route_to_ident(route: str) -> str:
     """Convert a Reflex route into a JS function identifier.
 
@@ -97,9 +126,14 @@ def compile_pages(
        evaluates the page callable, applies recursive theme styles, wraps
        in ``Fragment`` with title + meta. This is the only step Rust can't
        do — it's running user Python that builds the Component tree.
-    2. :meth:`CompilerSession.compile_page_from_component` — Rust pyread
-       walks the Component tree via PyO3 and emits JSX in one pass.
-    3. Write the result to ``.web/app/routes/*.jsx``.
+    2. :func:`reflex.compiler.rust_memo.walk_and_memoize` — substitute
+       memo wrappers into the tree (Python, uses
+       :meth:`CompilerSession.should_memoize` for the per-node decision).
+    3. :func:`reflex.compiler.ir.bridge.page_to_ir` — phase 1: serialize
+       the wrapped tree to msgpack-packed IR bytes.
+    4. :meth:`CompilerSession.compile_page_from_bytes` — phase 2: Rust
+       parses the IR and emits JSX. **No PyO3 callbacks during emit.**
+    5. Write the result to ``.web/app/routes/*.jsx``.
 
     Alongside JSX emission the function also harvests each evaluated
     page's ``_get_all_imports()`` so callers can hand the merged set to
@@ -135,6 +169,8 @@ def compile_pages(
         _resolve_radix_themes_plugin,
         compile_unevaluated_page,
     )
+    from reflex.compiler.ir.bridge import page_to_ir
+    from reflex.compiler.rust_memo import walk_and_memoize
     from reflex_base.compiler.templates import _RenderUtils, _render_hooks
     from reflex_base.components.dynamic import bundled_libraries
     from reflex_base.config import get_config
@@ -224,20 +260,50 @@ def compile_pages(
         # rust-emitted page is missing helpers like the markdown
         # ``ComponentMap_*`` closure.
         page_custom_code = list(component._get_all_custom_code())
-        page_hooks_body = _render_hooks(component._get_all_hooks())
-        rust_js = sess.compile_page_from_component(
+        # Drop the React-runtime hooks the Rust emitter declares
+        # unconditionally — leaving them in would re-declare
+        # ``addEvents`` / ``connectErrors`` / ``StateContexts.<key>`` and
+        # break the page module at parse time.
+        page_all_hooks = component._get_all_hooks()
+        page_hooks_body = _render_hooks({
+            hook: data
+            for hook, data in page_all_hooks.items()
+            if "useContext(StateContexts." not in hook
+            and "useContext(EventLoopContext)" not in hook
+        })
+        # Snapshot the page-level imports *before* memoize substitution.
+        # ``walk_and_memoize`` lifts inner components into memo body
+        # modules, so the wrapped tree's ``_get_all_imports()`` no longer
+        # carries the bindings the page module needs from those subtrees
+        # (ColorModeContext from markdown's color-mode hook,
+        # RadixThemesCode from markdown component_map closures, …).
+        pre_memo_imports = component._get_all_imports()
+        # Phase 1 — Python: run auto-memoize on the tree (decisions via
+        # ``sess.should_memoize``, wrapper substitution in Python). Then
+        # serialize the wrapped tree to msgpack IR bytes via
+        # ``page_to_ir``. After this point the page is just bytes.
+        page_memo_bodies: dict[str, Any] = {}
+        wrapped = walk_and_memoize(component, sess, page_memo_bodies)
+        # Post-memoize imports carry the wrapper bindings themselves —
+        # each memo wrapper class has ``library="$/utils/components/<name>"``
+        # and ``tag=<name>``, so the page module needs to import
+        # ``<name>`` from that path. Union with pre-memoize so we keep
+        # both lifted-subtree imports and wrapper-import refs.
+        page_extra_imports = _union_imports(
+            pre_memo_imports, wrapped._get_all_imports()
+        )
+        ir_bytes = page_to_ir(
+            route=route, component=wrapped, extra_imports=page_extra_imports
+        )
+        # Phase 2 — pure Rust: parse IR, emit JSX. No PyO3 callbacks
+        # during emit; the GIL is released for the parse + emit span.
+        rust_js = sess.compile_page_from_bytes(
             ident,
-            component,
-            route,
+            ir_bytes,
             custom_code=page_custom_code,
             hooks_body=page_hooks_body,
         )
-        # Phase 2 Part D: the Rust-side memoize transform populated the
-        # session's thread-local memo-body collector during the walk
-        # above. Drain into the outer dict so the downstream memo emit
-        # sees `{export_name: (body, signature)}` — same shape the
-        # legacy `walk_and_memoize` produced.
-        memo_bodies.update(sess.take_memo_bodies())
+        memo_bodies.update(page_memo_bodies)
 
         out_path = Path(compiler_utils.get_page_path(route))
         out_path.parent.mkdir(parents=True, exist_ok=True)

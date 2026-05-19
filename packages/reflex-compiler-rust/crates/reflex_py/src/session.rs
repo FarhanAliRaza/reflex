@@ -1,13 +1,18 @@
-//! `CompilerSession` — the real PyO3 entry point. See plan §3.4, D4.
+//! `CompilerSession` — the real PyO3 entry point.
 //!
 //! The Python side keeps a long-lived `CompilerSession` instance across
-//! reloads. `compile_page_from_component` is the live entry point: Python
-//! hands over a `Component` PyObject and Rust walks it via `reflex_pyread`,
-//! builds the IR in-arena, and emits JSX in one pass. The legacy
-//! `compile_page` / `compile_app` msgpack flow has been removed.
+//! reloads. Two-phase compile: Python builds the IR via
+//! `reflex.compiler.ir.bridge.page_to_ir` → bytes; Rust parses + emits
+//! via `compile_page_from_bytes` / `compile_memo_from_bytes` with no
+//! callbacks into Python during phase 2.
+//!
+//! A few PyO3 callbacks survive for orchestration *outside* of emit
+//! (per-page memoize decision via `should_memoize`, NPM-import harvest
+//! for `bun install` via `collect_all_imports*`). They run before the
+//! bridge produces bytes, never during emit.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::types::{PyBytes, PyDict};
 
 use reflex_arena::Arena;
 use reflex_codegen::{
@@ -15,11 +20,12 @@ use reflex_codegen::{
     emit_memo_module, emit_page_with_extras, emit_stateful_pages_json, emit_styles_root,
     emit_theme_module, CodeBuffer,
 };
+use reflex_ir::parse_page;
 use reflex_pyread::{
     collect_all_imports as pyread_collect_all_imports,
     collect_all_imports_into as pyread_collect_all_imports_into,
-    merge_imports_into as pyread_merge_imports_into, read_page,
-    should_memoize as memoize_should_memoize, MemoRefs, PyRefs,
+    merge_imports_into as pyread_merge_imports_into,
+    should_memoize as memoize_should_memoize, MemoRefs,
 };
 
 /// One per Python `reflex.compiler.session.CompilerSession`. Stateless from
@@ -33,53 +39,6 @@ impl CompilerSession {
     #[new]
     fn new() -> Self {
         Self {}
-    }
-
-    /// Compile a memo wrapper module from a Component PyObject.
-    ///
-    /// Mirrors `templates.memo_single_component_template` (plan §0b
-    /// lever (b3)). The Component should already have its `{children}`
-    /// hole substituted at the Python level (passthrough wrappers carry
-    /// a single `Bare(Var(_js_expr="children"))` child; snapshot bodies
-    /// own their full subtree). Pyread walks the tree; `emit_memo_module`
-    /// emits the `export const <name> = memo(...)` shell.
-    ///
-    /// Args:
-    ///     name: exported memo identifier.
-    ///     signature: parameter list spliced after `memo(`. Typical
-    ///         values are `"{ children }"` for passthroughs and `"()"`
-    ///         for snapshot bodies.
-    ///     component: the wrapper-component PyObject (already
-    ///         hole-substituted).
-    #[pyo3(signature = (name, signature, component, route="/__memo__", pre_hooks=""))]
-    fn compile_memo_from_component<'py>(
-        &self,
-        py: Python<'py>,
-        name: &str,
-        signature: &str,
-        component: &Bound<'py, PyAny>,
-        route: &str,
-        pre_hooks: &str,
-    ) -> PyResult<String> {
-        let refs = PyRefs::new(py)?;
-        let arena = Arena::new();
-        // Phase 2 Part D: the memoize flag defaults ON globally. The memo
-        // body's top-level node has the same shape as the original
-        // memoize-candidate Component (hash-parity guarantee), so it
-        // would re-trigger `should_memoize` here and recursively
-        // register itself — producing a self-import in the emitted
-        // module. Disable the Rust-side transform for this `read_page`
-        // call and restore the prior value via an RAII guard so a panic
-        // mid-walk doesn't leak the disabled state to the next page.
-        let _guard = MemoizeFlagGuard::disable();
-        let page = read_page(py, component, route, None, &[], &arena, &refs)?;
-        let mut buf = CodeBuffer::with_capacity(1024);
-        emit_memo_module(&mut buf, &page, name, signature, pre_hooks);
-        String::from_utf8(buf.into_bytes()).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "rust memo emit produced non-utf8: {e}"
-            ))
-        })
     }
 
     /// Emit the memo index module to `out_path`.
@@ -247,8 +206,7 @@ impl CompilerSession {
         py: Python<'py>,
         component: &Bound<'py, PyAny>,
     ) -> PyResult<bool> {
-        let pyrefs = PyRefs::new(py)?;
-        let refs = MemoRefs::from_pyrefs(py, &pyrefs)?;
+        let refs = MemoRefs::new(py)?;
         Ok(memoize_should_memoize(py, component, &refs)?)
     }
 
@@ -302,225 +260,98 @@ impl CompilerSession {
         pyread_merge_imports_into(py, target, source)
     }
 
-    /// Snapshot the Rust-side per-phase timings from the most recent
-    /// `compile_page_from_component` (or `read_page` directly). Returns
-    /// a `dict[str, int]` keyed by phase name with nanosecond totals.
+    /// Phase-2 memo entry point: compile a memo module from IR bytes.
     ///
-    /// Counters reset at the start of every `read_page`. Phase names
-    /// mirror the call sites in `pyo3_reader.rs`:
-    ///
-    /// * `class_name_ns` — `type(c).__name__` dispatch
-    /// * `resolve_tag_ns` — alias/tag/library reads in `resolve_tag_symbol`
-    /// * `import_alias_ns` — same attrs re-read in `import_alias_for`
-    /// * `needs_ref_ns` — `getattr("id")` check
-    /// * `read_props_ns`, `read_children_ns`, `read_event_handlers_ns`
-    /// * `read_var_data_ns` — Var._get_all_var_data + decode
-    /// * `harvest_register_ns` — RefCell mutations
-    /// * `emit_ns` — pure-Rust IR → JSX string build
-    /// * `read_page_total_ns` — end-to-end `read_page`
-    fn last_phase_timings_ns<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let t = reflex_pyread::timing::snapshot();
-        let d = PyDict::new_bound(py);
-        d.set_item("read_page_total_ns", t.read_page_total_ns)?;
-        d.set_item("emit_ns", t.emit_ns)?;
-        d.set_item("class_name_ns", t.class_name_ns)?;
-        d.set_item("resolve_tag_ns", t.resolve_tag_ns)?;
-        d.set_item("import_alias_ns", t.import_alias_ns)?;
-        d.set_item("needs_ref_ns", t.needs_ref_ns)?;
-        d.set_item("read_var_data_ns", t.read_var_data_ns)?;
-        d.set_item("harvest_register_ns", t.harvest_register_ns)?;
-        d.set_item("get_props_call_ns", t.get_props_call_ns)?;
-        d.set_item("prop_value_getattr_ns", t.prop_value_getattr_ns)?;
-        d.set_item("children_attr_ns", t.children_attr_ns)?;
-        d.set_item("event_triggers_attr_ns", t.event_triggers_attr_ns)?;
-        d.set_item("isinstance_var_ns", t.isinstance_var_ns)?;
-        d.set_item("value_literal_dispatch_ns", t.value_literal_dispatch_ns)?;
-        d.set_item("var_js_expr_attr_ns", t.var_js_expr_attr_ns)?;
-        // Counts.
-        d.set_item("node_count", t.node_count)?;
-        d.set_item("element_count", t.element_count)?;
-        d.set_item("var_count", t.var_count)?;
-        d.set_item("prop_count", t.prop_count)?;
-        d.set_item("event_handler_count", t.event_handler_count)?;
-        Ok(d)
-    }
-
-    /// Snapshot the per-sub-step timings recorded by the most recent
-    /// `collect_all_imports_into` call. Counters reset on every call so
-    /// the values reflect the single walk just executed.
-    ///
-    /// Returns a `dict[str, int]` with these keys:
-    ///
-    /// * `walk_total_ns` — end-to-end walk time.
-    /// * `get_imports_call_ns` — per-node `_get_imports()` PyO3 call.
-    /// * `lib_prefix_transform_ns` — `$/utils/...` library-name rewrite.
-    /// * `merge_into_target_ns` — appending into the caller's dict.
-    /// * `children_iter_ns` — `getattr("children")` + `iter()` setup.
-    /// * `prop_components_call_ns` — `_get_components_in_props()` call.
-    /// * `node_count`, `var_count`, `import_entry_count` — counters for
-    ///   per-unit cost derivation.
-    fn last_import_timings_ns<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let t = reflex_pyread::timing::import_timing::snapshot();
-        let d = PyDict::new_bound(py);
-        d.set_item("walk_total_ns", t.walk_total_ns)?;
-        d.set_item("get_imports_call_ns", t.get_imports_call_ns)?;
-        d.set_item("lib_prefix_transform_ns", t.lib_prefix_transform_ns)?;
-        d.set_item("merge_into_target_ns", t.merge_into_target_ns)?;
-        d.set_item("children_iter_ns", t.children_iter_ns)?;
-        d.set_item("prop_components_call_ns", t.prop_components_call_ns)?;
-        d.set_item("node_count", t.node_count)?;
-        d.set_item("var_count", t.var_count)?;
-        d.set_item("import_entry_count", t.import_entry_count)?;
-        Ok(d)
-    }
-
-    /// Toggle the Phase 2 Part B Rust-side memoize transformation.
-    ///
-    /// When `on` is `true`, the next `compile_page_from_component` call
-    /// will route memoize-candidate Components through the Rust
-    /// `read_page` walk (emitting `Component::MemoCall` IR nodes and
-    /// stashing wrapper bodies into the thread-local
-    /// `memo_bodies` collector). Defaults to **off** — Python's
-    /// `walk_and_memoize` still owns the transformation until Part D
-    /// flips the default; running both would double-wrap every
-    /// candidate.
-    ///
-    /// The flag is thread-local: flipping on one thread doesn't affect
-    /// another. Persists across `read_page` calls (the per-page reset
-    /// only touches the body collector, not this flag).
-    fn set_memoize_in_rust(&self, on: bool) {
-        reflex_pyread::memo_bodies::set_memoize_enabled(on);
-    }
-
-    /// Drain the per-page memo-body collector and return its contents
-    /// as a `dict[str, tuple[Component, str]]`.
-    ///
-    /// Phase 2 Part C of the Rust IR Memoize port. Phase 2 Part B's
-    /// `read_page` walk populates the thread-local
-    /// `reflex_pyread::memo_bodies` cell with one entry per auto-
-    /// memoize wrapper it encounters. After a successful
-    /// `compile_page_from_component` call, Phase 2 Part D drains the
-    /// collector via this method to recover the
-    /// `{export_name: (body_pyobj, signature)}` map the legacy
-    /// `walk_and_memoize` produced.
-    ///
-    /// Calling this clears the Rust-side state. Calling on an empty
-    /// collector returns an empty dict.
-    fn take_memo_bodies<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let drained = reflex_pyread::memo_bodies::drain();
-        let d = PyDict::new_bound(py);
-        for (name, body, signature) in drained {
-            // Tuple of (body PyObject, signature str) — mirrors the
-            // legacy `walk_and_memoize` value shape so Part D can drop
-            // into `rust_pipeline.compile_pages` unchanged.
-            let tup = PyTuple::new_bound(
-                py,
-                &[body.into_bound(py).into_any(), signature.into_py(py).into_bound(py)],
-            );
-            d.set_item(name, tup)?;
-        }
-        Ok(d)
-    }
-
-    /// Compile a single page directly from a Python `Component` PyObject —
-    /// the new lever-(a) entry point that bypasses `bridge.py` + msgpack.
-    ///
-    /// The reader walks `component` via PyO3 `getattr` (see plan §0b and
-    /// `reflex_pyread::read_page`), builds the IR in-arena, and emits JSX.
-    /// The cache is not consulted; D5's Salsa storage keys on msgpack
-    /// content hashes and the pyread path doesn't produce one. Hot reload
-    /// gains incremental caching later.
+    /// Mirror of [`compile_page_from_bytes`] but emits a memo wrapper
+    /// module (``export const <name> = memo(<signature> => { ... })``)
+    /// instead of a page module. The IR is built by the same
+    /// :func:`reflex.compiler.ir.bridge.page_to_ir` over the memo body
+    /// Component (with the ``{children}`` hole already substituted at
+    /// the Python level for passthrough wrappers).
     ///
     /// Args:
-    ///     route_ident: JS identifier used for the route export.
-    ///     component: the page's root `BaseComponent` instance.
-    ///     route: URL path (e.g. `/about`).
-    ///     title: optional document title.
-    ///     meta_tags: optional `[(name_or_property, content), …]` list.
-    #[pyo3(signature = (route_ident, component, route, title=None, meta_tags=None, custom_code=None, hooks_body=None))]
-    fn compile_page_from_component<'py>(
+    ///     name: exported memo identifier.
+    ///     signature: parameter list spliced after ``memo(`` (e.g.
+    ///         ``"({ children })"`` for passthroughs, ``"()"`` for
+    ///         snapshot bodies).
+    ///     ir_bytes: msgpack-packed IR for the memo body.
+    ///     pre_hooks: optional pre-rendered hook block harvested by
+    ///         Python (color-mode destructure, custom hooks).
+    #[pyo3(signature = (name, signature, ir_bytes, pre_hooks=""))]
+    fn compile_memo_from_bytes(
         &self,
-        py: Python<'py>,
-        route_ident: &str,
-        component: &Bound<'py, PyAny>,
-        route: &str,
-        title: Option<&str>,
-        meta_tags: Option<&Bound<'py, PyList>>,
-        custom_code: Option<Vec<String>>,
-        hooks_body: Option<&str>,
+        py: Python<'_>,
+        name: &str,
+        signature: &str,
+        ir_bytes: &Bound<'_, PyBytes>,
+        pre_hooks: &str,
     ) -> PyResult<String> {
-        let meta_pairs: Vec<(String, String)> = match meta_tags {
-            Some(list) => {
-                let mut out = Vec::with_capacity(list.len());
-                for item in list.iter() {
-                    let tup: Bound<PyTuple> = item.downcast_into()?;
-                    if tup.len() != 2 {
-                        return Err(pyo3::exceptions::PyValueError::new_err(
-                            "meta_tags entries must be (name, content) tuples",
-                        ));
-                    }
-                    let n: String = tup.get_item(0)?.extract()?;
-                    let c: String = tup.get_item(1)?.extract()?;
-                    out.push((n, c));
-                }
-                out
-            }
-            None => Vec::new(),
-        };
-
-        let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
-        let custom_code_refs: Vec<&str> = custom_code_owned.iter().map(String::as_str).collect();
-        let hooks = hooks_body.unwrap_or("");
-
-        // Per-page reset of the memo-body collector. Phase 2 Part B's
-        // `read_page` populates this cell as it constructs `MemoCall`
-        // IR nodes; Phase 2 Part D drains it via `take_memo_bodies()`
-        // after this method returns. Resetting here (not inside
-        // `read_page`) keeps recursive memo-body reads from clobbering
-        // the page-level collection.
-        reflex_pyread::memo_bodies::reset();
-
-        let refs = PyRefs::new(py)?;
-        let arena = Arena::new();
-        let page = read_page(py, component, route, title, &meta_pairs, &arena, &refs)?;
-        let mut buf = CodeBuffer::with_capacity(1024);
-        {
-            let _emit = reflex_pyread::TimingSpan::new(reflex_pyread::TimingField::Emit);
-            emit_page_with_extras(&mut buf, &page, route_ident, &custom_code_refs, hooks);
-        }
-        String::from_utf8(buf.into_bytes()).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "rust pyread emit produced non-utf8: {e}"
-            ))
+        let buf = ir_bytes.as_bytes().to_vec();
+        let name_owned = name.to_string();
+        let signature_owned = signature.to_string();
+        let pre_hooks_owned = pre_hooks.to_string();
+        py.allow_threads(|| -> PyResult<String> {
+            let arena = Arena::new();
+            let page = parse_page(&arena, &buf).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("ir parse failed: {e}"))
+            })?;
+            let mut out = CodeBuffer::with_capacity(1024);
+            emit_memo_module(&mut out, &page, &name_owned, &signature_owned, &pre_hooks_owned);
+            String::from_utf8(out.into_bytes()).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "rust emit produced non-utf8: {e}"
+                ))
+            })
         })
     }
 
-}
+    /// Phase-2 entry point: compile a page from already-serialized IR bytes.
+    ///
+    /// Pure two-phase model — Python produced the bytes via
+    /// `reflex.compiler.ir.bridge.page_to_ir`; this method parses the
+    /// msgpack into an in-arena `Page` and runs the same JSX emitter the
+    /// pyread path uses. **No PyO3 callbacks during emit**: route, title,
+    /// meta, component imports, state bindings, needs_ref are all read
+    /// from the IR itself. The GIL is released for the parse + emit
+    /// span so multiple pages can be compiled concurrently from
+    /// different threads.
+    ///
+    /// Args:
+    ///     route_ident: JS identifier used for the route export.
+    ///     ir_bytes: msgpack-packed Page IR (schema v2).
+    ///     custom_code: optional pre-rendered custom-code blocks.
+    ///     hooks_body: optional pre-rendered hooks body string.
+    #[pyo3(signature = (route_ident, ir_bytes, custom_code=None, hooks_body=None))]
+    fn compile_page_from_bytes(
+        &self,
+        py: Python<'_>,
+        route_ident: &str,
+        ir_bytes: &Bound<'_, PyBytes>,
+        custom_code: Option<Vec<String>>,
+        hooks_body: Option<&str>,
+    ) -> PyResult<String> {
+        let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
+        let hooks_owned = hooks_body.unwrap_or("").to_string();
+        // Copy the bytes out so we can drop the GIL before parsing — the
+        // parse + emit path is pure Rust and benefits from running while
+        // the next page is being serialized on the Python side.
+        let buf = ir_bytes.as_bytes().to_vec();
 
-/// RAII guard that disables the Rust-side memoize transformation for
-/// the lifetime of the value and restores the previous flag on drop.
-///
-/// Used by `compile_memo_from_component` to prevent the memo body's
-/// top-level node — which carries the same shape as the original
-/// memoize-candidate — from re-triggering `should_memoize` during the
-/// nested `read_page` call (which would produce a self-import in the
-/// emitted memo module). The guard pattern keeps the flag balanced
-/// across early returns and panics.
-struct MemoizeFlagGuard {
-    prev: bool,
-}
-
-impl MemoizeFlagGuard {
-    fn disable() -> Self {
-        let prev = reflex_pyread::memo_bodies::memoize_enabled();
-        reflex_pyread::memo_bodies::set_memoize_enabled(false);
-        Self { prev }
-    }
-}
-
-impl Drop for MemoizeFlagGuard {
-    fn drop(&mut self) {
-        reflex_pyread::memo_bodies::set_memoize_enabled(self.prev);
+        py.allow_threads(|| -> PyResult<String> {
+            let arena = Arena::new();
+            let page = parse_page(&arena, &buf).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("ir parse failed: {e}"))
+            })?;
+            let custom_code_refs: Vec<&str> =
+                custom_code_owned.iter().map(String::as_str).collect();
+            let mut out = CodeBuffer::with_capacity(1024);
+            emit_page_with_extras(&mut out, &page, route_ident, &custom_code_refs, &hooks_owned);
+            String::from_utf8(out.into_bytes()).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "rust emit produced non-utf8: {e}"
+                ))
+            })
+        })
     }
 }
 

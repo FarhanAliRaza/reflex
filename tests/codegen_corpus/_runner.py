@@ -82,14 +82,17 @@ def discover() -> list[Fixture]:
 
 
 def render_fixture(fixture: Fixture, session) -> str:
-    """Build the fixture's Component tree and compile it through pyread.
+    """Build the fixture's Component tree and compile via the two-phase path.
 
-    Pyread (the PyO3 Component reader, plan §0b lever (a)) walks the
-    Component PyObject directly — no msgpack hop. Output is byte-identical
-    to the legacy bridge path for every fixture in this corpus.
+    Phase 1 (Python): the bridge serializes the Component tree to
+    msgpack IR. Phase 2 (Rust): ``compile_page_from_bytes`` parses and
+    emits JSX without calling back into Python.
     """
+    from reflex.compiler.ir.bridge import page_to_ir
+
     component = fixture.build()
-    return session.compile_page_from_component(fixture.ident, component, fixture.route)
+    ir_bytes = page_to_ir(route=fixture.route, component=component)
+    return session.compile_page_from_bytes(fixture.ident, ir_bytes)
 
 
 def assert_or_update(fixture: Fixture, js: str) -> None:
