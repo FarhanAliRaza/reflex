@@ -252,6 +252,7 @@ _SUBMODULES: set[str] = {
     "config",
     "compiler",
     "plugins",
+    "notebook",
 }
 _SUBMOD_ATTRS: lazy_loader.SubmodAttrsType = _MAPPING
 _EXTRA_MAPPINGS: dict[str, str] = _COMPONENT_NAME_TO_PATH
