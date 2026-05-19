@@ -140,7 +140,7 @@ def get_upload_dir() -> Path:
     Returns:
         The directory where uploaded files are stored.
     """
-    Upload.is_used = True
+    Upload.is_used = Upload.is_used or 1
 
     uploaded_files_dir = environment.REFLEX_UPLOADED_FILES_DIR.get()
     uploaded_files_dir.mkdir(parents=True, exist_ok=True)
@@ -167,7 +167,7 @@ def get_upload_url(file_path: str | Var[str]) -> Var[str]:
     Returns:
         The URL of the uploaded file to be rendered from the frontend (as a str-encoded Var).
     """
-    Upload.is_used = True
+    Upload.is_used = Upload.is_used or 1
 
     return Var.create(f"{uploaded_files_url_prefix}/{file_path}")
 
@@ -259,8 +259,11 @@ class Upload(MemoizationLeaf):
         doc="Whether to disable using the space/enter keys to upload."
     )
 
-    # Marked True when any Upload component is created.
-    is_used: ClassVar[bool] = False
+    # Number of times Upload has been used (component instantiation or
+    # helper invocation) in this process. Read by telemetry as an upload
+    # usage counter and by ``App._add_optional_endpoints`` as a truthy
+    # "mount the upload endpoint" flag.
+    is_used: ClassVar[int] = 0
 
     # Fired when files are dropped.
     on_drop: EventHandler[_on_drop_args_spec]
@@ -286,8 +289,9 @@ class Upload(MemoizationLeaf):
         Returns:
             The upload component.
         """
-        # Mark the Upload component as used in the app.
-        cls.is_used = True
+        # Bump the usage counter on the base class so subclass.create() calls
+        # contribute to the same total telemetry reads.
+        Upload.is_used += 1
 
         props.setdefault("multiple", True)
 
@@ -467,9 +471,6 @@ class StyledUpload(Upload):
         props.setdefault("border", "1px dashed var(--accent-12)")
         props.setdefault("padding", "5em")
         props.setdefault("textAlign", "center")
-
-        # Mark the Upload component as used in the app.
-        Upload.is_used = True
 
         return super().create(
             *children,
