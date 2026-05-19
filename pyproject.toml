@@ -249,6 +249,7 @@ lint.flake8-bugbear.extend-immutable-calls = [
 "*/.templates/apps/blank/code/*" = ["INP001"]
 "*/blank.py" = ["I001"]
 "docs/package/scripts/*.py" = ["INP001"]
+"scripts/profile_*.py" = ["T201"]
 
 [tool.pytest.ini_options]
 filterwarnings = "ignore:fields may not start with an underscore:RuntimeWarning"

@@ -183,3 +183,74 @@ def test_markdown_format_component(key, component_map, expected):
     result = markdown.format_component_map()
     print(str(result[key]))
     assert str(result[key]) == expected
+
+
+@pytest.fixture
+def clear_markdown_custom_code_cache():
+    """Reset the Markdown custom-code cache around each test."""
+    Markdown._custom_code_cache.clear()
+    yield
+    Markdown._custom_code_cache.clear()
+
+
+def _heading_factory(value):
+    return Heading.create(value, as_="h2", size="5")
+
+
+def _box_factory(value):
+    return Box.create(value)
+
+
+def test_markdown_custom_code_cached_for_identical_component_map(
+    clear_markdown_custom_code_cache, monkeypatch
+):
+    """Two instances with identical component_map share a cached closure."""
+    build_calls = 0
+    original_build = Markdown._build_custom_code
+
+    def counting_build(self):
+        nonlocal build_calls
+        build_calls += 1
+        return original_build(self)
+
+    monkeypatch.setattr(Markdown, "_build_custom_code", counting_build)
+
+    md1 = Markdown.create("# one", component_map={"h2": _heading_factory})
+    md2 = Markdown.create("# two", component_map={"h2": _heading_factory})
+
+    code1 = md1._get_custom_code()
+    code2 = md2._get_custom_code()
+
+    assert code1 is not None
+    assert code1 == code2
+    assert md1.component_map_hash == md2.component_map_hash
+    assert build_calls == 1
+    assert list(Markdown._custom_code_cache) == [md1.component_map_hash]
+
+
+def test_markdown_custom_code_distinct_for_different_component_map(
+    clear_markdown_custom_code_cache,
+):
+    """Different component_map values produce distinct code and cache entries."""
+    md1 = Markdown.create("# one", component_map={"h2": _heading_factory})
+    md2 = Markdown.create("# one", component_map={"h2": _box_factory})
+
+    code1 = md1._get_custom_code()
+    code2 = md2._get_custom_code()
+
+    assert md1.component_map_hash != md2.component_map_hash
+    assert code1 != code2
+    assert set(Markdown._custom_code_cache) == {
+        md1.component_map_hash,
+        md2.component_map_hash,
+    }
+
+
+def test_markdown_custom_code_cache_returns_same_object(
+    clear_markdown_custom_code_cache,
+):
+    """Repeated calls on the same instance return the cached string object."""
+    md = Markdown.create("# one", component_map={"h2": _heading_factory})
+    first = md._get_custom_code()
+    second = md._get_custom_code()
+    assert first is second
