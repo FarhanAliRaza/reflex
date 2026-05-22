@@ -504,6 +504,82 @@ impl CompilerSession {
             .map_err(map_err)?;
         Ok(result)
     }
+
+    /// Phase-2 entry: compile a page from already-serialized IR bytes.
+    ///
+    /// The matching Python entry is
+    /// :func:`reflex.compiler.ir.bridge.page_to_ir`, which walks the
+    /// Component tree once and produces msgpack bytes. This method
+    /// parses those bytes into an in-arena `Page` and emits the JSX
+    /// module entirely in Rust — **no PyO3 callbacks during emit**.
+    /// The GIL is released for the parse + emit span so multiple pages
+    /// can compile concurrently from different threads.
+    #[pyo3(signature = (route_ident, ir_bytes, custom_code=None, hooks_body=None))]
+    fn compile_page_from_bytes(
+        &self,
+        py: Python<'_>,
+        route_ident: &str,
+        ir_bytes: &Bound<'_, PyBytes>,
+        custom_code: Option<Vec<String>>,
+        hooks_body: Option<&str>,
+    ) -> PyResult<String> {
+        let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
+        let hooks_owned = hooks_body.unwrap_or("").to_string();
+        let buf = ir_bytes.as_bytes().to_vec();
+        let route_ident_owned = route_ident.to_string();
+        py.allow_threads(move || -> PyResult<String> {
+            let arena = Arena::new();
+            let page = parse_page(&arena, &buf).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("ir parse failed: {e}"))
+            })?;
+            let custom_code_refs: Vec<&str> =
+                custom_code_owned.iter().map(String::as_str).collect();
+            let mut out = CodeBuffer::with_capacity(1024);
+            emit_page_with_extras(&mut out, &page, &route_ident_owned, &custom_code_refs, &hooks_owned);
+            String::from_utf8(out.into_bytes()).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "rust emit produced non-utf8: {e}"
+                ))
+            })
+        })
+    }
+
+    /// Phase-2 memo entry: compile a memo wrapper module from IR bytes.
+    ///
+    /// Mirrors :meth:`compile_page_from_bytes` but emits the
+    /// ``export const <name> = memo(<signature> => { ... })`` shell
+    /// instead of a page module. The body Component is walked once on
+    /// the Python side (with the ``{children}`` hole already
+    /// substituted at the call site for passthrough wrappers), and the
+    /// IR bytes carry every JSX value the emitter needs. **No PyO3
+    /// callbacks during emit**; GIL is released.
+    #[pyo3(signature = (name, signature, ir_bytes, pre_hooks=""))]
+    fn compile_memo_from_bytes(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        signature: &str,
+        ir_bytes: &Bound<'_, PyBytes>,
+        pre_hooks: &str,
+    ) -> PyResult<String> {
+        let buf = ir_bytes.as_bytes().to_vec();
+        let name_owned = name.to_string();
+        let signature_owned = signature.to_string();
+        let pre_hooks_owned = pre_hooks.to_string();
+        py.allow_threads(move || -> PyResult<String> {
+            let arena = Arena::new();
+            let page = parse_page(&arena, &buf).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("ir parse failed: {e}"))
+            })?;
+            let mut out = CodeBuffer::with_capacity(1024);
+            emit_memo_module(&mut out, &page, &name_owned, &signature_owned, &pre_hooks_owned);
+            String::from_utf8(out.into_bytes()).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "rust emit produced non-utf8: {e}"
+                ))
+            })
+        })
+    }
 }
 
 fn map_err(e: CompileError) -> PyErr {

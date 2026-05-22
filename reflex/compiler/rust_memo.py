@@ -77,7 +77,9 @@ def walk_and_memoize(
         return component
 
     # Recurse children first; wrappers may already replace deeper nodes.
-    new_children = [walk_and_memoize(c, session, memo_bodies) for c in component.children]
+    new_children = [
+        walk_and_memoize(c, session, memo_bodies) for c in component.children
+    ]
     if new_children != component.children:
         component.children = new_children
 
@@ -128,13 +130,18 @@ def emit_memo_modules(
     Returns:
         ``{export_name: written_path}`` for every emitted memo file.
     """
+    from reflex.compiler.ir.bridge import page_to_ir
+
     components_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {}
     for name, (body, definition) in memo_bodies.items():
         signature = _signature_for(definition)
         pre_hooks = _harvest_pre_hooks(body)
-        js = session.compile_memo_from_component(
-            name, signature, body, pre_hooks=pre_hooks
+        # Phase 1: walk the memo body Component once and pack to bytes.
+        ir_bytes = page_to_ir(route="/__memo__", component=body)
+        # Phase 2: pure-Rust parse + emit; no PyO3 callbacks.
+        js = session.compile_memo_from_bytes(
+            name, signature, ir_bytes, pre_hooks=pre_hooks
         )
         out_path = components_dir / f"{name}.jsx"
         out_path.write_text(js)

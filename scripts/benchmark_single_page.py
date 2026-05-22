@@ -182,7 +182,7 @@ class PhaseTimer:
             label = {
                 "python": "Python only",
                 "hybrid": "Rust + PyO3 callbacks",
-                "rust":   "pure Rust (no callbacks)",
+                "rust": "pure Rust (no callbacks)",
             }[kind]
             print(f"  {label:<28}{t:>8.2f} ms  ({pct:5.1f}%)")
         print()
@@ -228,6 +228,9 @@ def _instrumented_compile_pages(app, sess, timer: PhaseTimer, web_dir: Path) -> 
     memo_bodies: dict[str, object] = {}
     collected_app_wraps: dict[tuple[int, str], object] = {}
 
+    from reflex.compiler.ir.bridge import page_to_ir
+    from reflex.compiler.rust_pipeline import _union_imports
+
     for route, unev in app._unevaluated_pages.items():
         with timer.measure("compile_unevaluated_page", "python"):
             component = compile_unevaluated_page(route, unev, app.style, app.theme)
@@ -238,20 +241,38 @@ def _instrumented_compile_pages(app, sess, timer: PhaseTimer, web_dir: Path) -> 
         with timer.measure("_get_all_app_wrap_components", "python"):
             collected_app_wraps.update(component._get_all_app_wrap_components())
 
-        with timer.measure("walk_and_memoize", "python"):
-            component = walk_and_memoize(component, sess, memo_bodies)
-
         with timer.measure("_get_all_custom_code", "python"):
             page_custom_code = list(component._get_all_custom_code())
 
         with timer.measure("_get_all_hooks + _render_hooks", "python"):
-            page_hooks_body = _render_hooks(component._get_all_hooks())
+            page_all_hooks = component._get_all_hooks()
+            page_hooks_body = _render_hooks({
+                hook: data
+                for hook, data in page_all_hooks.items()
+                if "useContext(StateContexts." not in hook
+                and "useContext(EventLoopContext)" not in hook
+            })
 
-        with timer.measure("compile_page_from_component (Rust JSX emit)", "hybrid"):
-            rust_js = sess.compile_page_from_component(
+        with timer.measure("pre_memo _get_all_imports", "python"):
+            pre_memo_imports = component._get_all_imports()
+
+        with timer.measure("walk_and_memoize", "python"):
+            component = walk_and_memoize(component, sess, memo_bodies)
+
+        with timer.measure("union extra_imports", "python"):
+            page_extra_imports = _union_imports(
+                pre_memo_imports, component._get_all_imports()
+            )
+
+        with timer.measure("page_to_ir (Python walk + msgpack)", "python"):
+            ir_bytes = page_to_ir(
+                route=route, component=component, extra_imports=page_extra_imports
+            )
+
+        with timer.measure("compile_page_from_bytes (PURE RUST)", "rust"):
+            rust_js = sess.compile_page_from_bytes(
                 "Bench",
-                component,
-                route,
+                ir_bytes,
                 custom_code=page_custom_code,
                 hooks_body=page_hooks_body,
             )
@@ -268,10 +289,6 @@ def _instrumented_compile_pages(app, sess, timer: PhaseTimer, web_dir: Path) -> 
     components_dir = Path(compiler_utils.get_memo_components_dir())
     components_dir.mkdir(parents=True, exist_ok=True)
 
-    with timer.measure("memo body: collect_all_imports_into", "hybrid"):
-        for body, _definition in memo_bodies.values():
-            sess.collect_all_imports_into(all_imports, body)
-
     with timer.measure("memo body: _harvest_pre_hooks (Python walk)", "python"):
         prepared: list[tuple[str, str, object, str]] = []
         for name, (body, definition) in memo_bodies.items():
@@ -282,11 +299,17 @@ def _instrumented_compile_pages(app, sess, timer: PhaseTimer, web_dir: Path) -> 
                 _harvest_pre_hooks(body),
             ))
 
-    with timer.measure("memo body: compile_memo_from_component (Rust)", "hybrid"):
-        emitted_js: list[tuple[str, str]] = []
+    with timer.measure("memo body: page_to_ir (Python walk + msgpack)", "python"):
+        memo_bytes: list[tuple[str, str, bytes, str]] = []
         for name, signature, body, pre_hooks in prepared:
-            js = sess.compile_memo_from_component(
-                name, signature, body, pre_hooks=pre_hooks
+            ir_b = page_to_ir(route="/__memo__", component=body)
+            memo_bytes.append((name, signature, ir_b, pre_hooks))
+
+    with timer.measure("memo body: compile_memo_from_bytes (PURE RUST)", "rust"):
+        emitted_js: list[tuple[str, str]] = []
+        for name, signature, ir_b, pre_hooks in memo_bytes:
+            js = sess.compile_memo_from_bytes(
+                name, signature, ir_b, pre_hooks=pre_hooks
             )
             emitted_js.append((name, js))
 
@@ -354,13 +377,11 @@ def _compare_python_vs_rust(app, sess, runs: int) -> None:
         sess: the live Rust ``CompilerSession``.
         runs: number of timed iterations (one warmup discarded).
     """
-    from reflex.compiler import utils as compiler_utils
-    from reflex.compiler.compiler import (
-        _apply_common_imports,
-        compile_unevaluated_page,
-    )
     from reflex_base.compiler import templates as base_templates
     from reflex_base.compiler.templates import _render_hooks
+
+    from reflex.compiler import utils as compiler_utils
+    from reflex.compiler.compiler import _apply_common_imports, compile_unevaluated_page
 
     route, unev = next(iter(app._unevaluated_pages.items()))
 
@@ -452,14 +473,10 @@ def _compare_python_vs_rust(app, sess, runs: int) -> None:
         print()
         print(f"=== {label} ===")
         header = (
-            f"{'step':<44}"
-            f"{'median':>10}{'mean':>10}{'p95':>10}{'min':>10}{'max':>10}"
+            f"{'step':<44}{'median':>10}{'mean':>10}{'p95':>10}{'min':>10}{'max':>10}"
         )
         print(header)
-        print(
-            f"{'':<44}"
-            f"{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}"
-        )
+        print(f"{'':<44}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}{'(ms)':>10}")
         print("-" * len(header))
         total = 0.0
         for name, ns_samples in steps.items():
@@ -525,9 +542,7 @@ def _compare_python_vs_rust(app, sess, runs: int) -> None:
     total_ns = spans.get("read_page_total_ns", 0)
     emit_ns = spans.get("emit_ns", 0)
     sub_phases = [
-        (k, v)
-        for k, v in spans.items()
-        if k not in ("read_page_total_ns", "emit_ns")
+        (k, v) for k, v in spans.items() if k not in ("read_page_total_ns", "emit_ns")
     ]
     sub_phases.sort(key=lambda kv: kv[1], reverse=True)
 
@@ -565,17 +580,39 @@ def _compare_python_vs_rust(app, sess, runs: int) -> None:
             return "n/a"
         return f"{spans.get(span_key, 0) / c:.0f}"
 
-    print(f"  class_name_ns / element        = {percall('class_name_ns', 'element_count')}")
-    print(f"  resolve_tag_ns / element       = {percall('resolve_tag_ns', 'element_count')}")
-    print(f"  import_alias_ns / element      = {percall('import_alias_ns', 'element_count')}")
-    print(f"  get_props_call_ns / element    = {percall('get_props_call_ns', 'element_count')}")
-    print(f"  children_attr_ns / element     = {percall('children_attr_ns', 'element_count')}")
-    print(f"  event_triggers_attr_ns / elem  = {percall('event_triggers_attr_ns', 'element_count')}")
-    print(f"  needs_ref_ns / element         = {percall('needs_ref_ns', 'element_count')}")
-    print(f"  prop_value_getattr_ns / prop   = {percall('prop_value_getattr_ns', 'prop_count')}")
-    print(f"  isinstance_var_ns / prop       = {percall('isinstance_var_ns', 'prop_count')}")
-    print(f"  var_js_expr_attr_ns / var      = {percall('var_js_expr_attr_ns', 'var_count')}")
-    print(f"  read_var_data_ns / var         = {percall('read_var_data_ns', 'var_count')}")
+    print(
+        f"  class_name_ns / element        = {percall('class_name_ns', 'element_count')}"
+    )
+    print(
+        f"  resolve_tag_ns / element       = {percall('resolve_tag_ns', 'element_count')}"
+    )
+    print(
+        f"  import_alias_ns / element      = {percall('import_alias_ns', 'element_count')}"
+    )
+    print(
+        f"  get_props_call_ns / element    = {percall('get_props_call_ns', 'element_count')}"
+    )
+    print(
+        f"  children_attr_ns / element     = {percall('children_attr_ns', 'element_count')}"
+    )
+    print(
+        f"  event_triggers_attr_ns / elem  = {percall('event_triggers_attr_ns', 'element_count')}"
+    )
+    print(
+        f"  needs_ref_ns / element         = {percall('needs_ref_ns', 'element_count')}"
+    )
+    print(
+        f"  prop_value_getattr_ns / prop   = {percall('prop_value_getattr_ns', 'prop_count')}"
+    )
+    print(
+        f"  isinstance_var_ns / prop       = {percall('isinstance_var_ns', 'prop_count')}"
+    )
+    print(
+        f"  var_js_expr_attr_ns / var      = {percall('var_js_expr_attr_ns', 'var_count')}"
+    )
+    print(
+        f"  read_var_data_ns / var         = {percall('read_var_data_ns', 'var_count')}"
+    )
 
 
 def benchmark(runs: int = 10, scale: int = 1) -> None:

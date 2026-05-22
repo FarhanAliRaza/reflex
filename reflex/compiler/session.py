@@ -378,6 +378,73 @@ class CompilerSession:
         """
         self._inner.merge_imports_into(target, source)
 
+    def compile_page_from_bytes(
+        self,
+        route_ident: str,
+        ir_bytes: bytes,
+        *,
+        custom_code: list[str] | None = None,
+        hooks_body: str | None = None,
+    ) -> str:
+        """Phase-2 entry: compile a page from already-serialized IR bytes.
+
+        ``ir_bytes`` come from
+        :func:`reflex.compiler.ir.bridge.page_to_ir` — Phase 1, the only
+        Python work that touches the Component tree. This call dispatches
+        to the Rust side which parses + emits with **no PyO3 callbacks**
+        during emit. The GIL is released for the parse + emit span.
+
+        Args:
+            route_ident: JS identifier used for the route export.
+            ir_bytes: msgpack-packed Page IR (schema v2).
+            custom_code: optional pre-rendered custom-code blocks the
+                Python orchestrator harvested via ``_get_all_custom_code``.
+            hooks_body: optional pre-rendered hooks-body string from
+                ``_render_hooks(_get_all_hooks())``.
+
+        Returns:
+            Rendered JS source for the page module.
+        """
+        return str(
+            self._inner.compile_page_from_bytes(
+                route_ident,
+                ir_bytes,
+                list(custom_code) if custom_code else None,
+                hooks_body,
+            )
+        )
+
+    def compile_memo_from_bytes(
+        self,
+        name: str,
+        signature: str,
+        ir_bytes: bytes,
+        *,
+        pre_hooks: str = "",
+    ) -> str:
+        """Phase-2 memo entry: compile a memo module from IR bytes.
+
+        Memo equivalent of :meth:`compile_page_from_bytes`. The body
+        Component is serialized via
+        :func:`reflex.compiler.ir.bridge.page_to_ir` (with the
+        ``{children}`` hole already substituted for passthrough wrappers
+        at the Python call site).
+
+        Args:
+            name: exported memo identifier.
+            signature: parameter list spliced after ``memo(`` (e.g.
+                ``"({ children })"`` for passthroughs, ``"()"`` for
+                snapshot bodies).
+            ir_bytes: msgpack-packed IR for the memo body.
+            pre_hooks: optional pre-rendered hook block.
+
+        Returns:
+            Rendered JS source for the memo module.
+        """
+        return str(
+            self._inner.compile_memo_from_bytes(name, signature, ir_bytes, pre_hooks)
+        )
+
     def compile_page_from_component(
         self,
         route_ident: str,

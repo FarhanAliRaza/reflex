@@ -126,6 +126,10 @@ def compile_pages(
         ``ParsedImportDict`` for the whole compile, suitable to pass to
         :meth:`App._get_frontend_packages`.
     """
+    from reflex_base.compiler.templates import _render_hooks, _RenderUtils
+    from reflex_base.components.dynamic import bundled_libraries
+    from reflex_base.config import get_config
+
     from reflex.compiler import compiler as legacy_compiler
     from reflex.compiler import utils as legacy_utils
     from reflex.compiler.compiler import (
@@ -135,9 +139,6 @@ def compile_pages(
         _resolve_radix_themes_plugin,
         compile_unevaluated_page,
     )
-    from reflex_base.compiler.templates import _RenderUtils, _render_hooks
-    from reflex_base.components.dynamic import bundled_libraries
-    from reflex_base.config import get_config
 
     sess = session or CompilerSession()
 
@@ -209,24 +210,56 @@ def compile_pages(
         # wrapper set.
         collected_app_wraps.update(component._get_all_app_wrap_components())
 
-
-        # Memoize: substitute wrappers in-place; track each unique memo
-        # body for separate emission below.
-        component = walk_and_memoize(component, sess, memo_bodies)
-
         ident = _route_to_ident(route)
 
-        # Harvest custom-code blocks + render hooks for this page —
-        # mirrors what the legacy `page_template` splices via
-        # `_get_all_custom_code()` + `_render_hooks()`. Without this the
-        # rust-emitted page is missing helpers like the markdown
-        # ``ComponentMap_*`` closure.
+        # Harvest custom-code + hooks BEFORE memoize substitution. These
+        # are Python strings the Rust emit splices verbatim — they
+        # travel as args next to the IR bytes, no Component PyObjects
+        # cross the boundary during emit.
         page_custom_code = list(component._get_all_custom_code())
-        page_hooks_body = _render_hooks(component._get_all_hooks())
-        rust_js = sess.compile_page_from_component(
+        # Filter the React-runtime hooks Rust declares unconditionally
+        # (`useContext(StateContexts.<key>)` / `useContext(EventLoopContext)`)
+        # so they're not re-declared in the rendered hooks body.
+        page_all_hooks = component._get_all_hooks()
+        page_hooks_body = _render_hooks({
+            hook: data
+            for hook, data in page_all_hooks.items()
+            if "useContext(StateContexts." not in hook
+            and "useContext(EventLoopContext)" not in hook
+        })
+
+        # Pre-memoize `_get_all_imports()` captures every npm package the
+        # lifted subtrees use (markdown's ColorModeContext, etc.). After
+        # walk_and_memoize replaces candidates with wrappers, the
+        # wrapped tree's imports don't surface those — so union both.
+        pre_memo_imports = component._get_all_imports()
+
+        # Phase 1a — Python: substitute memo wrappers into the tree.
+        component = walk_and_memoize(component, sess, memo_bodies)
+
+        # Wrapper components carry `library="$/utils/components/<name>"`
+        # imports — combine with pre-memo so the page module imports
+        # both lifted-subtree symbols and wrapper-module symbols.
+        page_extra_imports = _union_imports(
+            pre_memo_imports, component._get_all_imports()
+        )
+
+        # Phase 1b — Python: walk the Component tree once and pack the
+        # full IR (tags, props, events, children, page-level imports,
+        # state bindings, needs_ref flag) to msgpack bytes. After this
+        # the page is just bytes; the Rust emit does not touch any
+        # Component / Var PyObjects.
+        from reflex.compiler.ir.bridge import page_to_ir
+
+        ir_bytes = page_to_ir(
+            route=route, component=component, extra_imports=page_extra_imports
+        )
+
+        # Phase 2 — pure Rust: parse + emit JSX. No PyO3 callbacks
+        # during emit; the GIL is released for the parse + emit span.
+        rust_js = sess.compile_page_from_bytes(
             ident,
-            component,
-            route,
+            ir_bytes,
             custom_code=page_custom_code,
             hooks_body=page_hooks_body,
         )
@@ -356,23 +389,21 @@ def _emit_static_artifacts(
     """
     import json
 
+    from reflex_base import constants as base_constants
+    from reflex_base.compiler.templates import _RenderUtils
     from reflex_base.components.component import (
         CUSTOM_COMPONENTS,
         evaluate_style_namespaces,
     )
     from reflex_base.config import get_config
     from reflex_base.constants import Dirs
-    from reflex_base.vars.base import LiteralVar
-
-    from reflex_base import constants as base_constants
-    from reflex_base.compiler.templates import _RenderUtils, _render_hooks
     from reflex_base.utils.format import json_dumps
+    from reflex_base.vars.base import LiteralVar
 
     from reflex.compiler import compiler as legacy_compiler
     from reflex.compiler import utils as legacy_utils
     from reflex.compiler.compiler import (
         SYSTEM_COLOR_MODE,
-        _normalize_library_name,
         _resolve_radix_themes_plugin,
         _resolve_root_stylesheets,
     )
@@ -472,7 +503,10 @@ def _emit_static_artifacts(
         except Exception:
             continue
         name = render["name"]
-        index_entries.append((name, legacy_compiler._memo_component_index_specifier(name)))
+        index_entries.append((
+            name,
+            legacy_compiler._memo_component_index_specifier(name),
+        ))
     index_path = compiler_utils.get_components_path()
     Path(index_path).parent.mkdir(parents=True, exist_ok=True)
     sess.compile_memo_index(index_entries, index_path)
@@ -564,3 +598,26 @@ def _write(path: str, code: str) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(code)
+
+
+def _union_imports(a: Mapping[str, list], b: Mapping[str, list]) -> dict[str, list]:
+    """Merge two ``ParsedImportDict`` shapes, preserving first-seen order.
+
+    The bridge needs the union of pre-memoize + post-memoize imports so
+    the page module imports both the wrapped subtree's symbols and the
+    memo wrapper module identifiers themselves.
+
+    Args:
+        a: first import dict (e.g. pre-memoize ``_get_all_imports()``).
+        b: second import dict (e.g. post-memoize).
+
+    Returns:
+        New ``dict[str, list]`` carrying the unioned entries.
+    """
+    out: dict[str, list] = {lib: list(items) for lib, items in a.items()}
+    for lib, items in b.items():
+        if lib in out:
+            out[lib].extend(items)
+        else:
+            out[lib] = list(items)
+    return out
