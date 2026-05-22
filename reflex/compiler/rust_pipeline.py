@@ -195,16 +195,6 @@ def compile_pages(
             # subclass.
             stateful_routes.append(route)
 
-        # Harvest imports BEFORE memoize substitution: the Rust walker
-        # mirrors ``_get_all_imports`` (children + ``_get_components_in_props``)
-        # so wrappers haven't yet replaced anything. We need the union so
-        # ``bun install`` still pulls in every npm package the original
-        # components reference. ``collect_all_imports_into`` mutates
-        # ``all_imports`` in place — the previous
-        # ``merge_imports(all_imports, ...)`` pattern rebuilt the dict
-        # once per page and was O(N²) in cumulative page count.
-        sess.collect_all_imports_into(all_imports, component)
-
         # Harvest app-wrap contributions from every component (Radix
         # ColorMode provider, theme wrap, toaster, etc.). The legacy
         # compile gathers these via `compile_ctx.app_wrap_components`
@@ -236,6 +226,14 @@ def compile_pages(
         # walk_and_memoize replaces candidates with wrappers, the
         # wrapped tree's imports don't surface those — so union both.
         pre_memo_imports = component._get_all_imports()
+
+        # Fold the pre-memo imports directly into the cross-page
+        # ``all_imports`` dict via the Rust prefix-transform helper.
+        # This replaces the previous ``collect_all_imports_into`` call
+        # which walked the Component tree a second time just to compute
+        # the same ``_get_all_imports`` shape — pure deletion of a
+        # redundant pass.
+        sess.merge_imports_into(all_imports, pre_memo_imports)
 
         # Phase 1a — Python: substitute memo wrappers into the tree.
         component = walk_and_memoize(component, sess, memo_bodies)
@@ -271,10 +269,12 @@ def compile_pages(
         written[route] = out_path
 
     # Emit each unique memo body as its own module file. Also harvest
-    # each body's imports for the ``bun install`` step.
+    # each body's imports for the ``bun install`` step using the
+    # already-computed Python ``_get_all_imports`` rather than walking
+    # the tree a second time via the Rust pyread helper.
     components_dir = Path(compiler_utils.get_memo_components_dir())
     for _name, (body, _definition) in memo_bodies.items():
-        sess.collect_all_imports_into(all_imports, body)
+        sess.merge_imports_into(all_imports, body._get_all_imports())
     emit_memo_modules(memo_bodies, sess, components_dir)
 
     # Emit `app/root.jsx` — the React Router root module. Python
@@ -290,7 +290,11 @@ def compile_pages(
 
     app_wrappers = _resolve_app_wrap_components(app, collected_app_wraps)
     app_root = app._app_root(app_wrappers)
-    sess.collect_all_imports_into(all_imports, app_root)
+    # Harvest app-root imports via the Python `_get_all_imports` (one
+    # tree walk) and fold the result into ``all_imports`` via the
+    # prefix-transform helper. Avoids the second tree walk the
+    # previous ``collect_all_imports_into`` pass did internally.
+    sess.merge_imports_into(all_imports, app_root._get_all_imports())
 
     # Harvest imports from every ``@rx.memo`` custom component for the
     # install step AND emit each component's standalone memo file —
