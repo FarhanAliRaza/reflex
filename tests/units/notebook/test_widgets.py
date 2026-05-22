@@ -95,3 +95,77 @@ def test_widget_value_persists_across_recreation():
     rt.update_widget_value(key, "C")
     rt._in_cell_counter = 0
     assert widgets.select(["A", "B", "C"], default="A", label="X") == "C"
+
+
+def test_maybe_display_skips_during_widget_change():
+    rt = get_runtime()
+    rt._executing_widget_change = True
+    calls: list[object] = []
+
+    def _fake_display(obj: object) -> None:
+        calls.append(obj)
+
+    original = widgets._try_import_display
+    widgets._try_import_display = lambda: _fake_display  # type: ignore[assignment]
+    try:
+        widgets._maybe_display(handle=object())
+    finally:
+        widgets._try_import_display = original  # type: ignore[assignment]
+        rt._executing_widget_change = False
+    assert calls == []
+
+
+def test_maybe_display_renders_on_initial_run():
+    calls: list[object] = []
+
+    def _fake_display(obj: object) -> None:
+        calls.append(obj)
+
+    original = widgets._try_import_display
+    widgets._try_import_display = lambda: _fake_display  # type: ignore[assignment]
+    try:
+        handle = object()
+        widgets._maybe_display(handle=handle)
+    finally:
+        widgets._try_import_display = original  # type: ignore[assignment]
+    assert calls == [handle]
+
+
+def _ipywidgets_or_skip():
+    ipw = widgets._try_import_ipywidgets()
+    if ipw is None:
+        pytest.skip("ipywidgets not installed")
+    return ipw
+
+
+def test_button_rebuild_does_not_duplicate_click_handler():
+    """Re-running a button cell must not stack additional on_click handlers.
+
+    Regression for the runaway loop where each rerun added another handler, so a
+    single user click eventually fanned out into many cascading reruns.
+    """
+    _ipywidgets_or_skip()
+    rt = get_runtime()
+    _new_cell()
+    widgets.button(label="Go")
+    handle = rt.widgets[0].handle
+    initial_callbacks = len(handle._click_handlers.callbacks)
+    for _ in range(5):
+        rt._in_cell_counter = 0
+        widgets.button(label="Go")
+    assert len(handle._click_handlers.callbacks) == initial_callbacks
+
+
+def test_select_rebuild_does_not_duplicate_observer():
+    """Re-running a select cell must not stack additional value observers."""
+    _ipywidgets_or_skip()
+    rt = get_runtime()
+    _new_cell()
+    widgets.select(["A", "B", "C"], default="A")
+    handle = rt.widgets[0].handle
+    initial = len(handle._trait_notifiers.get("value", {}).get("change", []))
+    for _ in range(5):
+        rt._in_cell_counter = 0
+        widgets.select(["A", "B", "C"], default="A")
+    after = len(handle._trait_notifiers.get("value", {}).get("change", []))
+    assert after == initial

@@ -6,9 +6,9 @@ from reflex.notebook import layout
 from reflex.notebook.runtime import get_runtime
 
 
-def test_row_returns_items_unchanged():
+def test_row_returns_none_to_suppress_displayhook():
     get_runtime().record_cell("c", cell_id="c1")
-    assert layout.row("a", "b", "c") == ("a", "b", "c")
+    assert layout.row("a", "b", "c") is None
 
 
 def test_row_records_layout_output():
@@ -24,5 +24,5 @@ def test_row_records_layout_output():
 def test_row_with_no_items():
     rt = get_runtime()
     rt.record_cell("c", cell_id="c1")
-    assert layout.row() == ()
+    layout.row()
     assert rt.outputs[0].kind == "row"

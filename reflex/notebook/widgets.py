@@ -78,14 +78,15 @@ def select(
     handle = None
     ipw = _try_import_ipywidgets()
     if ipw is not None:
-        handle = (
-            existing.handle
-            if existing is not None and existing.handle is not None
-            else ipw.Dropdown(options=list(options), value=initial, description=label)
-        )
+        if existing is not None and existing.handle is not None:
+            handle = existing.handle
+        else:
+            handle = ipw.Dropdown(
+                options=list(options), value=initial, description=label
+            )
+            _bind(lambda v: runtime.update_widget_value(key, v), handle)
         handle.options = list(options)
         handle.value = initial
-        _bind(lambda v: runtime.update_widget_value(key, v), handle)
     record = runtime.register_widget(
         key=key,
         kind="select",
@@ -143,16 +144,15 @@ def slider(
             min = int(min)
             max = int(max)
             step = int(step) or 1
-        handle = (
-            existing.handle
-            if existing is not None and existing.handle is not None
-            else cls(min=min, max=max, value=initial, step=step, description=label)
-        )
+        if existing is not None and existing.handle is not None:
+            handle = existing.handle
+        else:
+            handle = cls(min=min, max=max, value=initial, step=step, description=label)
+            _bind(lambda v: runtime.update_widget_value(key, v), handle)
         handle.min = min
         handle.max = max
         handle.step = step
         handle.value = initial
-        _bind(lambda v: runtime.update_widget_value(key, v), handle)
     record = runtime.register_widget(
         key=key,
         kind="slider",
@@ -188,14 +188,13 @@ def text_input(
     handle = None
     ipw = _try_import_ipywidgets()
     if ipw is not None:
-        handle = (
-            existing.handle
-            if existing is not None and existing.handle is not None
-            else ipw.Text(value=initial, description=label, placeholder=placeholder)
-        )
+        if existing is not None and existing.handle is not None:
+            handle = existing.handle
+        else:
+            handle = ipw.Text(value=initial, description=label, placeholder=placeholder)
+            _bind(lambda v: runtime.update_widget_value(key, v), handle)
         handle.value = initial
         handle.placeholder = placeholder
-        _bind(lambda v: runtime.update_widget_value(key, v), handle)
     record = runtime.register_widget(
         key=key,
         kind="text_input",
@@ -225,13 +224,12 @@ def checkbox(default: bool = False, *, label: str = "") -> bool:
     handle = None
     ipw = _try_import_ipywidgets()
     if ipw is not None:
-        handle = (
-            existing.handle
-            if existing is not None and existing.handle is not None
-            else ipw.Checkbox(value=initial, description=label)
-        )
+        if existing is not None and existing.handle is not None:
+            handle = existing.handle
+        else:
+            handle = ipw.Checkbox(value=initial, description=label)
+            _bind(lambda v: runtime.update_widget_value(key, v), handle)
         handle.value = initial
-        _bind(lambda v: runtime.update_widget_value(key, v), handle)
     record = runtime.register_widget(
         key=key,
         kind="checkbox",
@@ -269,13 +267,12 @@ def date_picker(
     handle = None
     ipw = _try_import_ipywidgets()
     if ipw is not None:
-        handle = (
-            existing.handle
-            if existing is not None and existing.handle is not None
-            else ipw.DatePicker(value=initial, description=label)
-        )
+        if existing is not None and existing.handle is not None:
+            handle = existing.handle
+        else:
+            handle = ipw.DatePicker(value=initial, description=label)
+            _bind(lambda v: runtime.update_widget_value(key, v), handle)
         handle.value = initial
-        _bind(lambda v: runtime.update_widget_value(key, v), handle)
     record = runtime.register_widget(
         key=key,
         kind="date_picker",
@@ -310,34 +307,35 @@ def file_upload(
     handle = None
     ipw = _try_import_ipywidgets()
     if ipw is not None:
-        handle = (
-            existing.handle
-            if existing is not None and existing.handle is not None
-            else ipw.FileUpload(description=label, accept=accept, multiple=False)
-        )
+        if existing is not None and existing.handle is not None:
+            handle = existing.handle
+        else:
+            handle = ipw.FileUpload(description=label, accept=accept, multiple=False)
 
-        def _on_upload(change: Any) -> None:
-            new = change.get("new")
-            if not new:
-                runtime.update_widget_value(key, None)
-                return
-            entry = (
-                new[0] if isinstance(new, (list, tuple)) else next(iter(new.values()))
-            )
-            payload = {
-                "name": entry.get("name")
-                if isinstance(entry, dict)
-                else getattr(entry, "name", ""),
-                "size": entry.get("size")
-                if isinstance(entry, dict)
-                else getattr(entry, "size", 0),
-                "content": entry.get("content")
-                if isinstance(entry, dict)
-                else getattr(entry, "content", b""),
-            }
-            runtime.update_widget_value(key, payload)
+            def _on_upload(change: Any) -> None:
+                new = change.get("new")
+                if not new:
+                    runtime.update_widget_value(key, None)
+                    return
+                entry = (
+                    new[0]
+                    if isinstance(new, (list, tuple))
+                    else next(iter(new.values()))
+                )
+                payload = {
+                    "name": entry.get("name")
+                    if isinstance(entry, dict)
+                    else getattr(entry, "name", ""),
+                    "size": entry.get("size")
+                    if isinstance(entry, dict)
+                    else getattr(entry, "size", 0),
+                    "content": entry.get("content")
+                    if isinstance(entry, dict)
+                    else getattr(entry, "content", b""),
+                }
+                runtime.update_widget_value(key, payload)
 
-        handle.observe(_on_upload, names="value")
+            handle.observe(_on_upload, names="value")
     record = runtime.register_widget(
         key=key,
         kind="file_upload",
@@ -366,22 +364,21 @@ def button(*, label: str = "Click") -> bool:
     handle = None
     ipw = _try_import_ipywidgets()
     if ipw is not None:
-        handle = (
-            existing.handle
-            if existing is not None and existing.handle is not None
-            else ipw.Button(description=label)
-        )
+        if existing is not None and existing.handle is not None:
+            handle = existing.handle
+        else:
+            handle = ipw.Button(description=label)
+
+            def _on_click(_btn: Any) -> None:
+                record = runtime._widgets.get(key)
+                if record is not None:
+                    record.options["_pending_click"] = True
+                runtime.update_widget_value(
+                    key, runtime._widgets[key].value + 1 if record else 1
+                )
+
+            handle.on_click(_on_click)
         handle.description = label
-
-        def _on_click(_btn: Any) -> None:
-            record = runtime._widgets.get(key)
-            if record is not None:
-                record.options["_pending_click"] = True
-            runtime.update_widget_value(
-                key, runtime._widgets[key].value + 1 if record else 1
-            )
-
-        handle.on_click(_on_click)
     record = runtime.register_widget(
         key=key,
         kind="button",
@@ -397,8 +394,17 @@ def button(*, label: str = "Click") -> bool:
 
 
 def _maybe_display(handle: Any) -> None:
-    """Display a widget handle if we have an IPython display available."""
+    """Display a widget handle on first cell run; skip during widget-triggered re-runs.
+
+    ipywidgets handles are persistent — once displayed they update in place via their
+    observers. Re-issuing ``display()`` on each re-execution would only append another
+    serialized copy to the notebook's cell output, which is what produced the duplicated
+    widget renders before this guard existed.
+    """
     if handle is None:
+        return
+    runtime = get_runtime()
+    if runtime._executing_widget_change:
         return
     display = _try_import_display()
     if display is not None:

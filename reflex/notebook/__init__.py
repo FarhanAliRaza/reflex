@@ -22,7 +22,7 @@ import types as _types
 from typing import Any
 
 from reflex.notebook.codegen import generate_app_source
-from reflex.notebook.deploy import deploy
+from reflex.notebook.deploy import current_launch, deploy, launch, stop
 from reflex.notebook.layout import row
 from reflex.notebook.outputs import display
 from reflex.notebook.runtime import (
@@ -50,6 +50,7 @@ __all__ = [
     "WidgetRecord",
     "button",
     "checkbox",
+    "current_launch",
     "date_picker",
     "deploy",
     "display",
@@ -57,10 +58,12 @@ __all__ = [
     "generate_app_source",
     "get_runtime",
     "init",
+    "launch",
     "reset_runtime",
     "row",
     "select",
     "slider",
+    "stop",
     "text_input",
     "view_source",
 ]

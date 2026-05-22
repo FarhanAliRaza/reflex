@@ -75,7 +75,25 @@ def test_display_records_output_on_runtime():
     assert all(o.cell_position == 0 for o in rt.outputs)
 
 
-def test_display_returns_input():
+def test_display_returns_none_to_suppress_displayhook():
     get_runtime().record_cell("c")
-    payload = {"a": 1}
-    assert outputs.display(payload) is payload
+    assert outputs.display({"a": 1}) is None
+
+
+def test_display_routes_into_cell_output_area_when_available():
+    rt = get_runtime()
+    rt.record_cell("c", cell_id="c1")
+
+    entered: list[object] = []
+
+    class FakeArea:
+        def __enter__(self) -> FakeArea:
+            entered.append(self)
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+    rt.ensure_output_area = lambda: FakeArea()  # type: ignore[method-assign]
+    outputs.display(42)
+    assert len(entered) == 1

@@ -13,20 +13,25 @@ from reflex.notebook.outputs import classify
 from reflex.notebook.runtime import get_runtime
 
 
-def row(*items: Any) -> tuple[Any, ...]:
+def row(*items: Any) -> None:
     """Display ``items`` in a horizontal row and record the layout.
+
+    Returns ``None`` so a trailing ``rx.notebook.row(...)`` at the end of a cell does
+    not trigger IPython's displayhook and emit a duplicate tuple repr alongside the
+    rendered row.
 
     Args:
         *items: The values to render side by side.
-
-    Returns:
-        The items, unchanged, so callers can chain.
     """
     runtime = get_runtime()
     kinds = [classify(item)[0] for item in items]
     runtime.record_output(kind="row", repr_hint=",".join(kinds))
-    _render_row(items)
-    return items
+    area = runtime.ensure_output_area()
+    if area is None:
+        _render_row(items)
+    else:
+        with area:
+            _render_row(items)
 
 
 def _render_row(items: tuple[Any, ...]) -> None:

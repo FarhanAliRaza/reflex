@@ -233,3 +233,88 @@ def test_pre_run_cell_event_records_source():
     rt._on_pre_run_cell(FakeInfo())
     assert rt.cells[0].source == "x = 1"
     assert rt.cells[0].cell_id == "abc"
+
+
+class _FakeOutputArea:
+    """Minimal stand-in for an ipywidgets.Output used in tests."""
+
+    def __init__(self) -> None:
+        self.cleared = 0
+        self.entered = 0
+
+    def clear_output(self, wait: bool = False) -> None:
+        self.cleared += 1
+
+    def __enter__(self) -> _FakeOutputArea:
+        self.entered += 1
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+
+def test_ensure_output_area_returns_none_without_current_cell():
+    rt = NotebookRuntime()
+    assert rt.ensure_output_area() is None
+
+
+def test_ensure_output_area_returns_none_without_ipywidgets(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "ipywidgets", None)
+    rt = NotebookRuntime()
+    rt.record_cell("c", cell_id="c1")
+    assert rt.ensure_output_area() is None
+
+
+def test_ensure_output_area_is_cached_per_cell():
+    rt = NotebookRuntime()
+    rt.record_cell("c", cell_id="c1")
+    area = _FakeOutputArea()
+    rt._cell_output_areas["c1"] = area
+    # Same cell -> cached area.
+    assert rt.ensure_output_area() is area
+    # Switching cells starts without a cached area for the new cell.
+    rt.record_cell("c2", cell_id="c2")
+    assert "c2" not in rt._cell_output_areas
+
+
+def test_record_cell_drops_stale_output_area_on_reexecution():
+    rt = NotebookRuntime()
+    rt.record_cell("c", cell_id="c1")
+    rt._cell_output_areas["c1"] = _FakeOutputArea()
+    rt.record_cell("c-edited", cell_id="c1")
+    assert "c1" not in rt._cell_output_areas
+
+
+def test_rerun_clears_each_cells_output_area():
+    rt = NotebookRuntime()
+
+    class FakeIPython:
+        events = type("E", (), {"register": lambda *_a, **_k: None})()
+
+        def run_cell(self, _source: str, **_: object) -> None:
+            return None
+
+    rt._ipython = FakeIPython()
+    rt._installed = True
+    rt.record_cell("widget cell", cell_id="c1")
+    key = rt.next_widget_key("select")
+    rt.register_widget(key=key, kind="select", label="X", value="A")
+    rt.record_cell("downstream", cell_id="c2")
+    area1, area2 = _FakeOutputArea(), _FakeOutputArea()
+    rt._cell_output_areas["c1"] = area1
+    rt._cell_output_areas["c2"] = area2
+    rt.update_widget_value(key, "B")
+    assert area1.cleared == 1
+    assert area2.cleared == 1
+
+
+def test_reset_clears_output_areas():
+    rt = NotebookRuntime()
+    rt.record_cell("c", cell_id="c1")
+    rt._cell_output_areas["c1"] = _FakeOutputArea()
+    rt.reset()
+    assert rt._cell_output_areas == {}

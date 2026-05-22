@@ -59,6 +59,7 @@ class NotebookRuntime:
         self._cell_order: list[str] = []
         self._widgets: dict[str, WidgetRecord] = {}
         self._outputs: list[OutputRecord] = []
+        self._cell_output_areas: dict[str, Any] = {}
         self._current_cell_id: str | None = None
         self._in_cell_counter: int = 0
         self._executing_widget_change: bool = False
@@ -125,6 +126,7 @@ class NotebookRuntime:
             self._cell_order.clear()
             self._widgets.clear()
             self._outputs.clear()
+            self._cell_output_areas.clear()
             self._current_cell_id = None
             self._in_cell_counter = 0
 
@@ -142,6 +144,7 @@ class NotebookRuntime:
         with self._lock:
             if cid in self._cells:
                 self._cell_order.remove(cid)
+                self._cell_output_areas.pop(cid, None)
             position = len(self._cell_order)
             record = CellRecord(cell_id=cid, source=source, position=position)
             self._cells[cid] = record
@@ -233,6 +236,35 @@ class NotebookRuntime:
             position = record.cell_position
         self._rerun_from(position)
 
+    def ensure_output_area(self) -> Any:
+        """Return the ``ipywidgets.Output`` container for the current cell, creating it on first call.
+
+        The container is displayed once inside the originating cell so that subsequent
+        re-executions can ``clear_output`` and re-render into the same region instead of
+        appending duplicate outputs to whichever cell triggered the re-run.
+
+        Returns:
+            The cell's Output widget, or None if there is no current cell or ipywidgets is
+            unavailable.
+        """
+        cid = self._current_cell_id
+        if cid is None:
+            return None
+        area = self._cell_output_areas.get(cid)
+        if area is not None:
+            return area
+        try:
+            import ipywidgets  # type: ignore[import-not-found]
+            from IPython.display import (
+                display as ip_display,  # pyright: ignore[reportMissingImports]
+            )
+        except ImportError:
+            return None
+        area = ipywidgets.Output()
+        self._cell_output_areas[cid] = area
+        ip_display(area)
+        return area
+
     def record_output(self, kind: str, repr_hint: str = "") -> None:
         """Record an output produced by the current cell.
 
@@ -291,6 +323,9 @@ class NotebookRuntime:
             for cell in cells:
                 self._current_cell_id = cell.cell_id
                 self._in_cell_counter = 0
+                area = self._cell_output_areas.get(cell.cell_id)
+                if area is not None:
+                    area.clear_output(wait=True)
                 self._ipython.run_cell(cell.source, store_history=False, silent=False)
         finally:
             self._executing_widget_change = False

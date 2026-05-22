@@ -19,21 +19,26 @@ from typing import Any
 from reflex.notebook.runtime import get_runtime
 
 
-def display(obj: Any) -> Any:
+def display(obj: Any) -> None:
     """Display ``obj`` using the most specific renderer available and record it.
+
+    Returns ``None`` so a trailing ``rx.notebook.display(...)`` at the end of a cell
+    does not trigger IPython's displayhook and render a second copy of the value
+    outside the cell's managed output area.
 
     Args:
         obj: The value to display. Pandas DataFrames, matplotlib figures, plotly figures,
             primitives, and any object exposing ``_repr_html_`` are recognized.
-
-    Returns:
-        The original object, so the function can be chained.
     """
     kind, repr_hint = classify(obj)
     runtime = get_runtime()
     runtime.record_output(kind=kind, repr_hint=repr_hint)
-    _render(obj, kind)
-    return obj
+    area = runtime.ensure_output_area()
+    if area is None:
+        _render(obj, kind)
+    else:
+        with area:
+            _render(obj, kind)
 
 
 def classify(obj: Any) -> tuple[str, str]:

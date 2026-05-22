@@ -120,6 +120,15 @@ def _emit_state(widgets: list[WidgetRecord]) -> list[str]:
     for widget in widgets:
         name = widget._gen_field  # type: ignore[attr-defined]
         py_type = _KIND_TO_TYPE.get(widget.kind, "str")
+        if widget.kind == "slider":
+            lines.extend([
+                f"{_INDENT}@rx.event",
+                f"{_INDENT}def set_{name}(self, value: list[{py_type}]):",
+                f'{_INDENT * 2}"""Update {name} from the bound slider."""',
+                f"{_INDENT * 2}self.{name} = value[0]",
+                "",
+            ])
+            continue
         lines.extend([
             f"{_INDENT}@rx.event",
             f"{_INDENT}def set_{name}(self, value: {py_type}):",
@@ -189,7 +198,7 @@ def _emit_widget_component(widget: WidgetRecord) -> tuple[str, str]:
         return f"{component}({choices!r}, {bind}, placeholder={label!r})", ""
     if widget.kind == "slider":
         slider_call = (
-            f"{component}({bind}, "
+            f"{component}(value=[State.{name}], on_change=State.set_{name}, "
             f"min={widget.options.get('min', 0)}, "
             f"max={widget.options.get('max', 100)}, "
             f"step={widget.options.get('step', 1)})"

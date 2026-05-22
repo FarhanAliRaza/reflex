@@ -65,3 +65,29 @@ def test_generate_app_source_unique_field_names_for_repeated_labels():
     ast.parse(source)
     assert source.count("def set_x(") == 1
     assert "def set_x_2(" in source
+
+
+def test_generate_app_source_slider_wraps_value_in_list():
+    """Radix Slider.value expects a Sequence, so codegen must wrap the float Var."""
+    rt = get_runtime()
+    rt.record_cell("c", cell_id="c1")
+    widgets.slider(0, 100, default=50, label="Threshold")
+    source = generate_app_source(rt, app_name="s")
+    ast.parse(source)
+    assert "value=[State.threshold]" in source
+    assert "def set_threshold(self, value: list[float])" in source
+    assert "self.threshold = value[0]" in source
+
+
+def test_generated_slider_compiles_as_reflex_component():
+    """Run the generated module and instantiate the page to catch type-level errors."""
+    import types
+
+    rt = get_runtime()
+    rt.record_cell("c", cell_id="c1")
+    widgets.slider(0, 100, default=50, label="Threshold")
+    source = generate_app_source(rt, app_name="slider_check")
+    module = types.ModuleType("slider_check_generated")
+    exec(compile(source, "<generated>", "exec"), module.__dict__)
+    component = module.index()
+    assert component is not None
