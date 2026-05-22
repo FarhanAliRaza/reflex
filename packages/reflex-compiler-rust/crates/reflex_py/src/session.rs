@@ -528,13 +528,16 @@ impl CompilerSession {
         let buf = ir_bytes.as_bytes().to_vec();
         let route_ident_owned = route_ident.to_string();
         py.allow_threads(move || -> PyResult<String> {
-            let arena = Arena::new();
+            // 4× heuristic mirrors `compile_page_with_sourcemap_inner` —
+            // saves the first 3-4 bump-page realloc cycles on a typical
+            // page; oversized pages just expand the arena later.
+            let arena = Arena::with_capacity(buf.len() * 4);
             let page = parse_page(&arena, &buf).map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!("ir parse failed: {e}"))
             })?;
             let custom_code_refs: Vec<&str> =
                 custom_code_owned.iter().map(String::as_str).collect();
-            let mut out = CodeBuffer::with_capacity(1024);
+            let mut out = CodeBuffer::with_capacity(buf.len() * 2);
             emit_page_with_extras(&mut out, &page, &route_ident_owned, &custom_code_refs, &hooks_owned);
             String::from_utf8(out.into_bytes()).map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!(
@@ -567,11 +570,12 @@ impl CompilerSession {
         let signature_owned = signature.to_string();
         let pre_hooks_owned = pre_hooks.to_string();
         py.allow_threads(move || -> PyResult<String> {
-            let arena = Arena::new();
+            // 4× heuristic — see `compile_page_from_bytes` above.
+            let arena = Arena::with_capacity(buf.len() * 4);
             let page = parse_page(&arena, &buf).map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!("ir parse failed: {e}"))
             })?;
-            let mut out = CodeBuffer::with_capacity(1024);
+            let mut out = CodeBuffer::with_capacity(buf.len() * 2);
             emit_memo_module(&mut out, &page, &name_owned, &signature_owned, &pre_hooks_owned);
             String::from_utf8(out.into_bytes()).map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!(

@@ -120,8 +120,7 @@ fn read_u32(buf: &mut &[u8]) -> Result<u32> {
 
 #[inline]
 fn read_u64(buf: &mut &[u8]) -> Result<u64> {
-    let raw: i128 = decode::read_int::<i128, _>(buf).map_err(map_msgpack)?;
-    u64::try_from(raw).map_err(|_| ParseError::IntOverflow("u64"))
+    decode::read_int::<u64, _>(buf).map_err(map_msgpack)
 }
 
 #[inline]
@@ -175,10 +174,7 @@ fn read_u8_or_nil(buf: &mut &[u8]) -> Result<Option<u8>> {
     if try_read_nil(buf)? {
         Ok(None)
     } else {
-        let n = decode::read_int::<u16, _>(buf).map_err(map_msgpack)?;
-        u8::try_from(n)
-            .map(Some)
-            .map_err(|_| ParseError::IntOverflow("u8"))
+        Ok(Some(read_u8(buf)?))
     }
 }
 
@@ -395,8 +391,7 @@ fn read_hook<'a>(arena: &'a Arena, buf: &mut &[u8]) -> Result<Hook<'a>> {
     }
     let code = arena.alloc_str(read_str_borrowed(buf)?);
     let deps = read_symbol_array(arena, buf)?;
-    let n = decode::read_int::<u16, _>(buf).map_err(map_msgpack)?;
-    let position = u8::try_from(n).map_err(|_| ParseError::IntOverflow("u8"))?;
+    let position = read_u8(buf)?;
     Ok(Hook {
         code,
         deps,

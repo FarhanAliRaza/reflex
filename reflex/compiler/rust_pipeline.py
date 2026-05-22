@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from reflex.compiler import utils as compiler_utils
+from reflex.compiler.ir.bridge import page_to_ir
 from reflex.compiler.rust_memo import emit_memo_modules, walk_and_memoize
 from reflex.compiler.session import CompilerSession
 
@@ -166,6 +167,10 @@ def compile_pages(
     if base_constants.Page404.SLUG not in app._unevaluated_pages:
         app.add_page(route=base_constants.Page404.SLUG)
 
+    # Hoisted: the per-page loop below references these every iteration;
+    # keeping the lookups local avoids re-walking `sys.modules` per page.
+    from reflex.state import all_base_state_classes
+
     written: dict[str, Path] = {}
     all_imports: dict[str, list] = {}
     memo_bodies: dict[str, Any] = {}
@@ -181,8 +186,6 @@ def compile_pages(
         # tree and emits the metadata via the IR's component nodes, so we
         # pass ``title=None``/``meta_tags=None`` to ``page_to_ir`` to avoid
         # double-emitting.
-        from reflex.state import all_base_state_classes
-
         n_states_before = len(all_base_state_classes)
         component = compile_unevaluated_page(route, unev, app.style, app.theme)
         if len(all_base_state_classes) > n_states_before:
@@ -249,8 +252,6 @@ def compile_pages(
         # state bindings, needs_ref flag) to msgpack bytes. After this
         # the page is just bytes; the Rust emit does not touch any
         # Component / Var PyObjects.
-        from reflex.compiler.ir.bridge import page_to_ir
-
         ir_bytes = page_to_ir(
             route=route, component=component, extra_imports=page_extra_imports
         )

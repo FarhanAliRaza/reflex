@@ -25,6 +25,9 @@
 //! the React runtime always imports the page via the default export named
 //! `Component`. Caller can override with [`emit_page_named`].
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use reflex_intern::{intern, resolve_unchecked, Symbol};
 use reflex_ir::Page;
 
@@ -228,6 +231,26 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("@emotion/react", "jsx"),
 ];
 
+/// Indices in `RUNTIME_IMPORTS_INTERNED` for the `react` aliases (anchored
+/// at the top) and the remaining baseline aliases (anchored at the bottom).
+const RUNTIME_REACT_END: usize = 3;
+
+/// Pre-interned `(module, alias)` pairs for `RUNTIME_IMPORTS`. Building this
+/// once via `OnceLock` saves ~16 interner-mutex acquisitions per page.
+fn runtime_imports_interned() -> &'static [(Symbol, Symbol)] {
+    static INTERNED: OnceLock<[(Symbol, Symbol); 8]> = OnceLock::new();
+    INTERNED.get_or_init(|| {
+        // SAFETY: array length matches `RUNTIME_IMPORTS` length above; the
+        // const assertion below would fire if they ever drift.
+        const _: [(); RUNTIME_IMPORTS.len()] = [(); 8];
+        let mut out: [(Symbol, Symbol); 8] = Default::default();
+        for (i, (m, a)) in RUNTIME_IMPORTS.iter().enumerate() {
+            out[i] = (intern(m), intern(a));
+        }
+        out
+    })
+}
+
 /// Emit imports for a page module by combining baseline runtime imports with
 /// the component-harvested `component_imports` from the IR, in that order.
 ///
@@ -237,23 +260,13 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
 /// appear in both sources collapse via the per-module dedup inside
 /// `emit_imports_grouped_by_module`.
 fn emit_combined_imports(buf: &mut CodeBuffer, component_imports: &[(Symbol, Symbol)]) {
+    let runtime = runtime_imports_interned();
     let mut combined: Vec<(Symbol, Symbol)> =
-        Vec::with_capacity(RUNTIME_IMPORTS.len() + component_imports.len());
+        Vec::with_capacity(runtime.len() + component_imports.len());
 
-    let runtime_react: Vec<(Symbol, Symbol)> = RUNTIME_IMPORTS
-        .iter()
-        .filter(|(m, _)| *m == "react")
-        .map(|(m, a)| (intern(m), intern(a)))
-        .collect();
-    let runtime_rest: Vec<(Symbol, Symbol)> = RUNTIME_IMPORTS
-        .iter()
-        .filter(|(m, _)| *m != "react")
-        .map(|(m, a)| (intern(m), intern(a)))
-        .collect();
-
-    combined.extend(runtime_react);
+    combined.extend_from_slice(&runtime[..RUNTIME_REACT_END]);
     combined.extend_from_slice(component_imports);
-    combined.extend(runtime_rest);
+    combined.extend_from_slice(&runtime[RUNTIME_REACT_END..]);
 
     emit_imports_grouped_by_module(buf, &combined);
 }
@@ -268,24 +281,27 @@ fn emit_imports_grouped_by_module(
     // group by module preserving first-seen order, and within each module
     // dedup the alias_spec list so the bridge can pass redundant entries
     // without producing `{ useState, useState }`.
-    let mut modules: Vec<Symbol> = Vec::new();
-    for (m, _) in imports {
-        if !modules.contains(m) {
+    //
+    // Pre-bucket aliases per module in a single linear pass so the
+    // emit loop is O(imports) instead of O(modules × imports). Within
+    // each bucket we dedup aliases via a `HashMap`-based set (Symbol
+    // is a `u32` — hashing is essentially free).
+    let mut modules: Vec<Symbol> = Vec::with_capacity(imports.len());
+    let mut buckets: HashMap<Symbol, Vec<Symbol>> = HashMap::with_capacity(imports.len());
+    for (m, alias) in imports {
+        let bucket = buckets.entry(*m).or_insert_with(|| {
             modules.push(*m);
+            Vec::new()
+        });
+        if !bucket.contains(alias) {
+            bucket.push(*alias);
         }
     }
     for module in modules {
-        let mut emitted: Vec<Symbol> = Vec::new();
+        let aliases = &buckets[&module];
         buf.write_str("import { ");
         let mut first = true;
-        for (m, alias) in imports {
-            if *m != module {
-                continue;
-            }
-            if emitted.contains(alias) {
-                continue;
-            }
-            emitted.push(*alias);
+        for alias in aliases {
             if !first {
                 buf.write_str(", ");
             }
