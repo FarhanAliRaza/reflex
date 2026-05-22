@@ -223,14 +223,19 @@ fn emit_prop_name(buf: &mut CodeBuffer, sym: reflex_intern::Symbol) {
     // snake_case (Python convention); the legacy emitter runs every
     // prop name through `to_camel_case`. Match that behaviour so
     // ``remark_plugins`` → ``remarkPlugins`` etc.
-    if name.contains('_') && is_js_identifier(name) {
-        write_camel_case(buf, name);
+    //
+    // One pass for both branches: check `is_js_identifier` once, then
+    // decide whether to camel-case or quote. The previous version
+    // ran `name.contains('_')` + `is_js_identifier` + `write_camel_case`
+    // for snake-cased names — three full scans of the byte string.
+    if !is_js_identifier(name) {
+        buf.write_js_string(name);
         return;
     }
-    if is_js_identifier(name) {
-        buf.write_str(name);
+    if name.contains('_') {
+        write_camel_case(buf, name);
     } else {
-        buf.write_js_string(name);
+        buf.write_str(name);
     }
 }
 
@@ -241,6 +246,30 @@ fn emit_prop_name(buf: &mut CodeBuffer, sym: reflex_intern::Symbol) {
 /// contain hyphens anyway, so `is_js_identifier` already excludes that
 /// case and we only need to handle ``_``.
 fn write_camel_case(buf: &mut CodeBuffer, name: &str) {
+    let bytes = name.as_bytes();
+    // Fast path: all-ASCII (>99% of prop names). Skip char_indices /
+    // to_uppercase machinery and just toggle the bit by hand.
+    if name.is_ascii() {
+        let mut after_underscore = false;
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'_' {
+                if i > 0 {
+                    after_underscore = true;
+                }
+                continue;
+            }
+            if after_underscore {
+                buf.write_byte(b.to_ascii_uppercase());
+                after_underscore = false;
+            } else {
+                buf.write_byte(b);
+            }
+        }
+        return;
+    }
+
+    // Slow path: non-ASCII chars need char-aware uppercase. Keep the
+    // generic path here so unicode prop names still round-trip.
     let mut after_underscore = false;
     for (i, ch) in name.char_indices() {
         if ch == '_' {
@@ -250,8 +279,6 @@ fn write_camel_case(buf: &mut CodeBuffer, name: &str) {
             continue;
         }
         if after_underscore {
-            // ASCII uppercase covers every JS-identifier byte we care
-            // about; non-ASCII passes through unchanged.
             for upper in ch.to_uppercase() {
                 let mut tmp = [0; 4];
                 buf.write_str(upper.encode_utf8(&mut tmp));
