@@ -17,9 +17,6 @@ classifiers = [
     "Programming Language :: Rust",
 ]
 
-[project.optional-dependencies]
-bench = ["msgpack>=1.0.7"]
-
 [tool.maturin]
 manifest-path = "crates/reflex_py/Cargo.toml"
 module-name = "reflex_compiler_rust._native"

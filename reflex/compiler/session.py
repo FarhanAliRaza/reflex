@@ -1,24 +1,21 @@
 """Python wrapper around the Rust ``CompilerSession``.
 
 The Rust side (``reflex_compiler_rust._native.CompilerSession``) holds the
-content-hash compile cache. This wrapper handles:
+content-hash compile cache. The supported caller path is
+:meth:`CompilerSession.compile_page_from_component_arena` — one PyO3
+round-trip that freezes a Component tree into a ``Snapshot`` arena,
+runs the in-Rust memoize pass, emits the page module + memo body
+modules, and harvests page-level imports.
 
-* A friendly error when the wheel can't be imported.
-* Conversion of :mod:`reflex.compiler.ir.builder` lists to msgpack bytes
-  (used by tests and benchmarks that still build IR through the Python
-  helpers).
-
-The supported caller path is :meth:`CompilerSession.compile_page_from_component`
-— the Rust pyread walk over a Component PyObject (plan §0b lever (a)).
-The IR-bytes entry points (:meth:`compile_page_ir`, :meth:`compile_app_ir`)
-remain available for the codegen-corpus IR-shape tests.
+After PR6 (planx.md cutover deletion) the msgpack tree-IR entry
+points are gone — there is no ``compile_page_ir``, ``compile_app_ir``,
+or ``compile_page_from_bytes`` shim left. Static-artifact writers
+(``compile_*_module``) and helper utilities
+(``collect_all_imports``, ``should_memoize``, ``write_if_changed``,
+``snapshot_stats``) stay.
 """
 
 from __future__ import annotations
-
-from collections.abc import Iterable, Sequence
-
-from reflex.compiler.ir import pack
 
 _WHEEL_MISSING = (
     "reflex_compiler_rust wheel not available — install it via "
@@ -54,86 +51,6 @@ class CompilerSession:
         return int(self._inner.cache_len())
 
     # ---- Compile entry points ----------------------------------------------
-
-    def compile_page_ir(self, route_ident: str, page_ir: list) -> str:
-        """Compile a pre-built IR tree to a JS source string.
-
-        Args:
-            route_ident: JS function name for the page module.
-            page_ir: the list-of-lists IR from :mod:`reflex.compiler.ir.builder`.
-
-        Returns:
-            Rendered JS source for the page module.
-        """
-        return self.compile_page_bytes(route_ident, pack.pack_page(page_ir))
-
-    def compile_page_bytes(self, route_ident: str, page_bytes: bytes) -> str:
-        """Compile pre-packed IR bytes to a JS source string."""
-        return str(self._inner.compile_page(route_ident, page_bytes))
-
-    def compile_page_with_sourcemap(
-        self, route_ident: str, page_ir: list
-    ) -> tuple[str, list[tuple[int, int, int, int]]]:
-        """Compile an IR tree and return ``(js, mappings)``.
-
-        Each mapping is ``(byte_offset, file_id, line, col)``. The cache is
-        bypassed — use this for diagnostic flows, not hot-reload.
-
-        Args:
-            route_ident: JS function name for the page module.
-            page_ir: the list-of-lists IR from :mod:`reflex.compiler.ir.builder`.
-
-        Returns:
-            ``(js, mappings)``.
-        """
-        js, mappings = self._inner.compile_page_with_sourcemap(
-            route_ident, pack.pack_page(page_ir)
-        )
-        return str(js), [tuple(m) for m in mappings]
-
-    def compile_memo_from_component(
-        self,
-        name: str,
-        signature: str,
-        component: object,
-        *,
-        route: str = "/__memo__",
-        pre_hooks: str = "",
-    ) -> str:
-        """Compile a memo wrapper module from a Component PyObject.
-
-        Mirrors :func:`reflex_base.compiler.templates.memo_single_component_template`
-        (plan §0b lever (b3)). The Component is expected to already carry
-        the ``{children}`` hole at the Python level (a passthrough wrapper
-        is e.g. ``rx.box(rx.text(children=...))`` where ``children`` is a
-        ``Var(_js_expr='children')`` — see
-        :func:`reflex.experimental.memo.create_passthrough_component_memo`).
-
-        Args:
-            name: exported memo identifier.
-            signature: parameter list spliced after ``memo(``. Use
-                ``"{ children }"`` for passthrough wrappers, ``"()"`` for
-                snapshot bodies.
-            component: the wrapper-component (already hole-substituted).
-            route: route value for the harvest pass; defaults to a
-                synthetic ``"/__memo__"`` since memos don't have routes.
-            pre_hooks: pre-rendered hook block (e.g.
-                ``const { resolvedColorMode } = useContext(ColorModeContext)``)
-                the Python orchestrator harvested from the memo body via
-                ``_get_all_hooks()``. Spliced between the state-context
-                hooks and ``return`` inside the memo body. The Rust
-                ``state_bindings`` + ``EventLoopContext`` lines are still
-                emitted unconditionally; the caller must filter those
-                hooks out of ``pre_hooks`` to avoid double-declarations.
-
-        Returns:
-            Rendered JS source for the memo module.
-        """
-        return str(
-            self._inner.compile_memo_from_component(
-                name, signature, component, route, pre_hooks
-            )
-        )
 
     def compile_memo_index(
         self, reexports: list[tuple[str, str]], out_path: str
@@ -293,6 +210,25 @@ class CompilerSession:
         """
         self._inner.compile_stateful_pages_marker(list(routes), out_path)
 
+    def should_memoize_arena_for_component(self, component: object) -> bool:
+        """PR3 parity helper: apply the Rust arena predicate to a
+        single ``Component``. Freezes the component, runs
+        ``should_memoize_arena`` on the snapshot root, returns the bool.
+
+        Used by ``tests/units/compiler/test_arena_parity.py`` to
+        compare against Python ``_should_memoize`` per node.
+        """
+        return bool(self._inner.should_memoize_arena_for_component(component))
+
+    def snapshot_stats(self, component: object) -> dict[str, int]:
+        """PR7 verification helper: freeze ``component`` and return a
+        small stats dict (``node_count``, ``var_data_len``,
+        ``vars_used_total``, ``unique_var_ids``) describing the
+        snapshot. The dedup tests assert
+        ``var_data_len == unique_var_ids`` once PR7 lands.
+        """
+        return dict(self._inner.snapshot_stats(component))
+
     def should_memoize(self, component: object) -> bool:
         """Run the Rust memoize-decision walk on a Reflex ``Component``.
 
@@ -377,119 +313,6 @@ class CompilerSession:
             source: ``ParsedImportDict`` whose entries get appended.
         """
         self._inner.merge_imports_into(target, source)
-
-    def compile_page_from_bytes(
-        self,
-        route_ident: str,
-        ir_bytes: bytes,
-        *,
-        custom_code: list[str] | None = None,
-        hooks_body: str | None = None,
-    ) -> str:
-        """Phase-2 entry: compile a page from already-serialized IR bytes.
-
-        ``ir_bytes`` come from
-        :func:`reflex.compiler.ir.bridge.page_to_ir` — Phase 1, the only
-        Python work that touches the Component tree. This call dispatches
-        to the Rust side which parses + emits with **no PyO3 callbacks**
-        during emit. The GIL is released for the parse + emit span.
-
-        Args:
-            route_ident: JS identifier used for the route export.
-            ir_bytes: msgpack-packed Page IR (schema v2).
-            custom_code: optional pre-rendered custom-code blocks the
-                Python orchestrator harvested via ``_get_all_custom_code``.
-            hooks_body: optional pre-rendered hooks-body string from
-                ``_render_hooks(_get_all_hooks())``.
-
-        Returns:
-            Rendered JS source for the page module.
-        """
-        return str(
-            self._inner.compile_page_from_bytes(
-                route_ident,
-                ir_bytes,
-                list(custom_code) if custom_code else None,
-                hooks_body,
-            )
-        )
-
-    def compile_memo_from_bytes(
-        self,
-        name: str,
-        signature: str,
-        ir_bytes: bytes,
-        *,
-        pre_hooks: str = "",
-    ) -> str:
-        """Phase-2 memo entry: compile a memo module from IR bytes.
-
-        Memo equivalent of :meth:`compile_page_from_bytes`. The body
-        Component is serialized via
-        :func:`reflex.compiler.ir.bridge.page_to_ir` (with the
-        ``{children}`` hole already substituted for passthrough wrappers
-        at the Python call site).
-
-        Args:
-            name: exported memo identifier.
-            signature: parameter list spliced after ``memo(`` (e.g.
-                ``"({ children })"`` for passthroughs, ``"()"`` for
-                snapshot bodies).
-            ir_bytes: msgpack-packed IR for the memo body.
-            pre_hooks: optional pre-rendered hook block.
-
-        Returns:
-            Rendered JS source for the memo module.
-        """
-        return str(
-            self._inner.compile_memo_from_bytes(name, signature, ir_bytes, pre_hooks)
-        )
-
-    def compile_page_from_component(
-        self,
-        route_ident: str,
-        component: object,
-        route: str,
-        *,
-        title: str | None = None,
-        meta_tags: list[tuple[str, str]] | None = None,
-        custom_code: list[str] | None = None,
-        hooks_body: str | None = None,
-    ) -> str:
-        """Compile a page directly from a Reflex ``Component`` PyObject.
-
-        The Rust side walks the Component tree via PyO3 ``getattr``
-        (``reflex_pyread``, plan §0b lever (a)) and emits JSX in one pass.
-        No msgpack hop.
-
-        Args:
-            route_ident: JS function name for the page module.
-            component: a ``reflex_base.components.component.BaseComponent``.
-            route: URL path served by the page.
-            title: optional document title.
-            meta_tags: optional ``[(name_or_property, content), …]``.
-            custom_code: optional component-contributed code blocks
-                (``_get_all_custom_code()``) spliced between the import
-                section and the ``export default function`` line.
-            hooks_body: optional pre-rendered hooks block inserted into
-                the component function body after the
-                ``useContext(EventLoopContext)`` line.
-
-        Returns:
-            Rendered JS source for the page module.
-        """
-        meta = list(meta_tags) if meta_tags else None
-        return str(
-            self._inner.compile_page_from_component(
-                route_ident,
-                component,
-                route,
-                title,
-                meta,
-                list(custom_code) if custom_code else None,
-                hooks_body,
-            )
-        )
 
     def compile_page_from_component_arena(
         self,
@@ -576,26 +399,3 @@ class CompilerSession:
             ``True`` if the file was written, ``False`` if skipped.
         """
         return bool(self._inner.write_if_changed(out_path, content))
-
-    def compile_app_ir(
-        self,
-        pages: Iterable[tuple[str, str, list]],
-        *,
-        theme: list | None = None,
-        global_state: list | None = None,
-        plugin_manifest: list | None = None,
-    ) -> object:
-        """Compile a whole app from IR. Returns the Rust ``CompiledOutput``."""
-        packed_pages: Sequence[tuple[str, str, bytes]] = [
-            (ident, route, pack.pack_page(page_ir)) for ident, route, page_ir in pages
-        ]
-        return self._inner.compile_app(
-            packed_pages,
-            theme=pack.pack_theme(theme) if theme is not None else None,
-            global_state=pack.pack_global_state(global_state)
-            if global_state is not None
-            else None,
-            plugin_manifest=pack.pack_plugin_manifest(plugin_manifest)
-            if plugin_manifest is not None
-            else None,
-        )

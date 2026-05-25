@@ -13,7 +13,7 @@ Stage definitions:
     py_mech   = time of legacy `compiler._compile_page(component)`
                 — the mechanical post-tree pipeline: `_get_all_*` walks,
                 `component.render()`, `templates.page_template(...)`.
-    pyread    = time of `CompilerSession.compile_page_from_component(...)`
+    pyread    = time of `CompilerSession.compile_page_from_component_arena(...)`
                 — PyO3 walk over the Component tree + IR build + JSX emit
                 in one pass (plan §0b lever (a)).
 
@@ -142,7 +142,7 @@ def benchmark(app_module: str, runs: int = 5) -> None:
                 f"P_{run_idx}_{route.replace('/', '_').strip('_') or 'index'}"
             )
             t4 = _ns()
-            _ = sess.compile_page_from_component(pyread_ident, wrapped, route)
+            _ = sess.compile_page_from_component_arena(wrapped, pyread_ident, route)
             t5 = _ns()
 
             per_stage["framework"].append(t1 - t0)

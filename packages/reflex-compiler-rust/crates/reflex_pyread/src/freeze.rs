@@ -22,7 +22,7 @@ use smallvec::SmallVec;
 use reflex_intern::{intern, Symbol};
 use reflex_ir::{
     HookEntry, ImportEntry, MemoizationDisposition, NodeFlags, NodeIdx, NodeKind, NodeSnapshot,
-    Snapshot, SnapshotBuilder,
+    Snapshot, SnapshotBuilder, VarDataEntry, VarDataRef,
 };
 
 use crate::pyo3_reader::{class_name, py_str, MemoModeCached, PyReadError, PyRefs};
@@ -44,6 +44,10 @@ pub fn freeze_component<'py>(
     root: &Bound<'py, PyAny>,
     refs: &PyRefs<'py>,
 ) -> Result<Snapshot, PyReadError> {
+    // PR7: each freeze starts with a fresh dedup table so a Var
+    // observed in a previous freeze doesn't alias into a wholly
+    // different snapshot's `var_data` index.
+    refs.var_data_dedup.borrow_mut().clear();
     let mut builder = SnapshotBuilder::new();
     let mut pending: Vec<(i32, String, Py<PyAny>)> = Vec::new();
     let root_idx = freeze_node(py, root, &mut builder, refs, &mut pending)?;
@@ -195,8 +199,15 @@ fn freeze_into_slot<'py>(
     // `(camelCasedTrigger, js_expr)` pairs. Other node kinds skip the
     // `_render()` call because their JSX shape doesn't carry props.
     let mut props_have_reactive_var = false;
+    let mut vars_used: SmallVec<[VarDataRef; 4]> = SmallVec::new();
     let (rendered_props, event_callbacks, style, rename_props) = if matches!(kind, NodeKind::Element) {
-        let props = read_rendered_props(component, refs, &mut props_have_reactive_var)?;
+        let props = read_rendered_props(
+            component,
+            refs,
+            builder,
+            &mut props_have_reactive_var,
+            &mut vars_used,
+        )?;
         let events = read_event_callbacks(component, refs)?;
         let style_sym = read_style(component, refs)?;
         let renames = read_rename_props(component)?;
@@ -206,12 +217,18 @@ fn freeze_into_slot<'py>(
     };
     let has_events = !event_callbacks.is_empty();
 
-    // PR2: Bare-contents reactivity. `read_rendered_props` doesn't run
-    // for Bare (it has no tag/props), but `_should_memoize` inspects
-    // `component.contents._get_all_var_data()`. Mirror that here so the
-    // memoize decision picks up Bare wrappers of state Vars.
+    // PR2 + PR7: Bare-contents reactivity + var-data dedup. The Bare
+    // path doesn't go through `read_rendered_props`; mirror the same
+    // checks on `component.contents` so the memoize decision picks up
+    // Bare wrappers of state Vars AND the Var's metadata gets deduped
+    // into `Snapshot.var_data`.
     let bare_has_reactive_contents = if cls == "Bare" {
         if let Ok(contents) = component.getattr("contents") {
+            if let Some(r) = register_var_data(&contents, builder, refs)? {
+                if !vars_used.contains(&r) {
+                    vars_used.push(r);
+                }
+            }
             var_has_reactive_data(&contents, refs).unwrap_or(false)
         } else {
             false
@@ -274,6 +291,7 @@ fn freeze_into_slot<'py>(
     node.ref_name = ref_name;
     node.hooks_internal = hooks_internal;
     node.hooks_user = hooks_user;
+    node.vars_used = vars_used;
     node.flags = flags;
     builder.fill(self_idx, node);
 
@@ -539,7 +557,9 @@ fn read_hook_position(vd: &Bound<'_, PyAny>) -> Option<u8> {
 fn read_rendered_props(
     component: &Bound<'_, PyAny>,
     refs: &PyRefs<'_>,
+    builder: &mut SnapshotBuilder,
     reactive_out: &mut bool,
+    vars_used_out: &mut SmallVec<[VarDataRef; 4]>,
 ) -> Result<SmallVec<[(Symbol, Symbol); 4]>, PyReadError> {
     let mut raw_pairs: SmallVec<[(String, Symbol); 4]> = SmallVec::new();
 
@@ -574,6 +594,13 @@ fn read_rendered_props(
                 if !*reactive_out && var_has_reactive_data(&value_obj, refs)? {
                     *reactive_out = true;
                 }
+                // PR7: dedup-register the Var's metadata into
+                // `Snapshot.var_data` (no-op for already-seen Vars).
+                if let Some(r) = register_var_data(&value_obj, builder, refs)? {
+                    if !vars_used_out.contains(&r) {
+                        vars_used_out.push(r);
+                    }
+                }
                 let expr = render_value_as_js(&value_obj, refs)?;
                 if expr.is_empty() {
                     continue;
@@ -593,6 +620,11 @@ fn read_rendered_props(
         };
         if !*reactive_out && var_has_reactive_data(&v, refs)? {
             *reactive_out = true;
+        }
+        if let Some(r) = register_var_data(&v, builder, refs)? {
+            if !vars_used_out.contains(&r) {
+                vars_used_out.push(r);
+            }
         }
         let expr = render_value_as_js(&v, refs)?;
         if expr.is_empty() {
@@ -622,6 +654,11 @@ fn read_rendered_props(
                             };
                             if !*reactive_out && var_has_reactive_data(&val, refs)? {
                                 *reactive_out = true;
+                            }
+                            if let Some(r) = register_var_data(&val, builder, refs)? {
+                                if !vars_used_out.contains(&r) {
+                                    vars_used_out.push(r);
+                                }
                             }
                             let expr = render_value_as_js(&val, refs)?;
                             if expr.is_empty() {
@@ -766,6 +803,191 @@ fn read_style(
     } else {
         Ok(intern(&expr))
     }
+}
+
+/// PR7: register a Var's `_get_all_var_data()` result in
+/// `Snapshot.var_data`, deduplicated by `id(var)`. Returns `Some(idx)`
+/// pointing at the entry (existing or freshly inserted) when the Var
+/// carries non-trivial metadata; `None` for non-Vars, empty var_data,
+/// or var_data that's all-empty buckets.
+///
+/// The dense backings (`var_hooks`, `var_imports`, `var_deps`,
+/// `var_components`) are appended in observation order; each new
+/// entry owns a `Range<u32>` slice. This matches the layout the plan's
+/// "Var-data dedup table" §PR7 describes.
+fn register_var_data(
+    value: &Bound<'_, PyAny>,
+    builder: &mut SnapshotBuilder,
+    refs: &PyRefs<'_>,
+) -> Result<Option<VarDataRef>, PyReadError> {
+    let is_var = match value.is_instance(&refs.var_cls) {
+        Ok(b) => b,
+        Err(_) => return Ok(None),
+    };
+    if !is_var {
+        return Ok(None);
+    }
+    let key = value.as_ptr() as usize;
+    if let Some(idx) = refs.var_data_dedup.borrow().get(&key) {
+        return Ok(Some(VarDataRef(*idx)));
+    }
+    let var_data = match value.call_method0("_get_all_var_data") {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    if var_data.is_none() {
+        return Ok(None);
+    }
+
+    // Pull each bucket eagerly into Rust-side Vec<Symbol> first; only
+    // commit to `snapshot.var_data` if at least one bucket is
+    // non-empty (matches `var_has_reactive_data`'s definition of
+    // "carries metadata worth deduping"). Pure-static pages then end
+    // up with `var_data_len == 0`.
+    let hooks_syms = pull_dict_keys(&var_data, "hooks");
+    let imports_pairs = pull_imports(&var_data);
+    let deps_syms = pull_iter_symbols(&var_data, "deps");
+    let components_syms = pull_iter_symbols(&var_data, "components");
+    let state_sym = pull_state_symbol(&var_data);
+    let position = pull_u8(&var_data, "position");
+
+    let any_nontrivial = !hooks_syms.is_empty()
+        || !imports_pairs.is_empty()
+        || !deps_syms.is_empty()
+        || !components_syms.is_empty()
+        || state_sym != Symbol::EMPTY;
+    if !any_nontrivial {
+        return Ok(None);
+    }
+
+    let snap = builder.snapshot_mut();
+    let hooks_start = snap.var_hooks.len() as u32;
+    snap.var_hooks.extend(hooks_syms);
+    let hooks_end = snap.var_hooks.len() as u32;
+    let imports_start = snap.var_imports.len() as u32;
+    snap.var_imports.extend(imports_pairs);
+    let imports_end = snap.var_imports.len() as u32;
+    let deps_start = snap.var_deps.len() as u32;
+    snap.var_deps.extend(deps_syms);
+    let deps_end = snap.var_deps.len() as u32;
+    let comps_start = snap.var_components.len() as u32;
+    snap.var_components.extend(components_syms);
+    let comps_end = snap.var_components.len() as u32;
+
+    let entry = VarDataEntry {
+        hooks: hooks_start..hooks_end,
+        imports: imports_start..imports_end,
+        deps: deps_start..deps_end,
+        components: comps_start..comps_end,
+        state: state_sym,
+        position: position.unwrap_or(u8::MAX),
+    };
+    let idx = snap.var_data.len() as u32;
+    snap.var_data.push(entry);
+    refs.var_data_dedup.borrow_mut().insert(key, idx);
+    Ok(Some(VarDataRef(idx)))
+}
+
+fn pull_dict_keys(var_data: &Bound<'_, PyAny>, attr: &str) -> Vec<Symbol> {
+    let mut out = Vec::new();
+    if let Ok(obj) = var_data.getattr(attr) {
+        if !obj.is_none() {
+            if let Ok(keys_iter) = obj.iter() {
+                for k in keys_iter.flatten() {
+                    if let Ok(s) = py_str(&k) {
+                        out.push(intern(&s));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn pull_imports(var_data: &Bound<'_, PyAny>) -> Vec<(Symbol, Symbol)> {
+    let mut out = Vec::new();
+    let Ok(obj) = var_data.getattr("imports") else { return out };
+    if obj.is_none() {
+        return out;
+    }
+    // `imports` is a mapping `{module: [ImportVar, ...]}` per
+    // `reflex_base.vars.base.VarData`. Mirror the JSX-block summary:
+    // one `(module, name)` pair per ImportVar where `name` falls back
+    // to alias/tag.
+    if let Ok(keys_iter) = obj.call_method0("items") {
+        if let Ok(it) = keys_iter.iter() {
+            for kv in it.flatten() {
+                let Ok(tup) = kv.downcast::<pyo3::types::PyTuple>() else { continue };
+                if tup.len() != 2 {
+                    continue;
+                }
+                let Ok(module_obj) = tup.get_item(0) else { continue };
+                let Ok(module) = py_str(&module_obj) else { continue };
+                let Ok(items) = tup.get_item(1) else { continue };
+                if items.is_none() {
+                    continue;
+                }
+                if let Ok(items_iter) = items.iter() {
+                    for iv in items_iter.flatten() {
+                        let name = iv
+                            .getattr("tag")
+                            .ok()
+                            .filter(|v| !v.is_none())
+                            .and_then(|v| py_str(&v).ok())
+                            .or_else(|| {
+                                iv.getattr("alias")
+                                    .ok()
+                                    .filter(|v| !v.is_none())
+                                    .and_then(|v| py_str(&v).ok())
+                            });
+                        if let Some(n) = name {
+                            out.push((intern(&module), intern(&n)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn pull_iter_symbols(var_data: &Bound<'_, PyAny>, attr: &str) -> Vec<Symbol> {
+    let mut out = Vec::new();
+    if let Ok(obj) = var_data.getattr(attr) {
+        if !obj.is_none() {
+            if let Ok(it) = obj.iter() {
+                for v in it.flatten() {
+                    if let Ok(s) = py_str(&v) {
+                        if !s.is_empty() {
+                            out.push(intern(&s));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn pull_state_symbol(var_data: &Bound<'_, PyAny>) -> Symbol {
+    let Ok(obj) = var_data.getattr("state") else { return Symbol::EMPTY };
+    if obj.is_none() {
+        return Symbol::EMPTY;
+    }
+    let Ok(s) = py_str(&obj) else { return Symbol::EMPTY };
+    if s.is_empty() {
+        Symbol::EMPTY
+    } else {
+        intern(&s)
+    }
+}
+
+fn pull_u8(var_data: &Bound<'_, PyAny>, attr: &str) -> Option<u8> {
+    let obj = var_data.getattr(attr).ok().filter(|v| !v.is_none())?;
+    if let Ok(p) = obj.extract::<u8>() {
+        return Some(p);
+    }
+    obj.getattr("value").ok().and_then(|v| v.extract::<u8>().ok())
 }
 
 /// Check whether `value` is a `Var` whose `_get_all_var_data()` carries

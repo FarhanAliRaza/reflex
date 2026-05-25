@@ -175,10 +175,10 @@ def compile_pages(
 
         # ``compile_unevaluated_page`` evaluates the page callable, applies
         # recursive theme styles, and wraps the root in ``Fragment`` with
-        # ``<title>``/``<meta>`` already attached. The bridge sees the wrapped
-        # tree and emits the metadata via the IR's component nodes, so we
-        # pass ``title=None``/``meta_tags=None`` to ``page_to_ir`` to avoid
-        # double-emitting.
+        # ``<title>``/``<meta>`` already attached. The arena entry point
+        # sees the wrapped tree and emits the metadata via the IR's
+        # component nodes, so we pass ``title=None``/``meta_tags=None``
+        # below to avoid double-emitting.
         from reflex.state import all_base_state_classes
 
         n_states_before = len(all_base_state_classes)
@@ -232,9 +232,8 @@ def compile_pages(
         # Memoize + emit lives entirely in Rust. One PyO3 round-trip:
         #   freeze → memoize_arena_pass → emit_page module +
         #   emit_memo_body modules → harvest imports.
-        # No Python `walk_and_memoize`, no msgpack `page_to_ir`, no
-        # per-body re-walk. GIL released for the in-arena transform +
-        # emit; freeze is the only PyO3 surface and runs once per page.
+        # GIL released for the in-arena transform + emit; freeze is
+        # the only PyO3 surface and runs once per page.
         (
             rust_js,
             arena_memo_bodies,

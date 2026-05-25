@@ -347,11 +347,7 @@ fn _native(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(walk_arena_emit, m)?)?;
     m.add_function(wrap_pyfunction!(walk_serde_emit, m)?)?;
 
-    // Schema version sanity (parsers agree with the wire format).
-    m.add("SCHEMA_VERSION", reflex_ir::parse::SCHEMA_VERSION)?;
-
     // The real compiler session.
     m.add_class::<session::CompilerSession>()?;
-    m.add_class::<session::CompiledOutput>()?;
     Ok(())
 }

@@ -75,14 +75,18 @@ def bench_one(fixture, runs: int) -> FixtureResult:
     sess.clear_cache()
     gc.collect()
     t0 = time.perf_counter_ns()
-    js = sess.compile_page_from_component(fixture.ident, component, fixture.route)
+    js, _bodies, _imports = sess.compile_page_from_component_arena(
+        component, fixture.ident, fixture.route
+    )
     cold_ns = time.perf_counter_ns() - t0
 
     # Warm: median of N subsequent runs, all hitting the cache.
     samples = []
     for _ in range(runs):
         t0 = time.perf_counter_ns()
-        sess.compile_page_from_component(fixture.ident, component, fixture.route)
+        sess.compile_page_from_component_arena(
+            component, fixture.ident, fixture.route
+        )
         samples.append(time.perf_counter_ns() - t0)
     samples.sort()
     warm_ns = samples[len(samples) // 2]

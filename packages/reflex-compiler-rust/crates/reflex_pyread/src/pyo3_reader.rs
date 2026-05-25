@@ -89,6 +89,12 @@ pub struct PyRefs<'py> {
     /// nodes hit a HashMap with the cached `(disposition_byte, recursive)`
     /// pair.
     pub memo_mode_cache: RefCell<HashMap<usize, MemoModeCached>>,
+    /// PR7 var-data dedup table. Maps ``id(var)`` → index into
+    /// ``Snapshot.var_data``. First time a Var is observed during the
+    /// freeze walk, a ``VarDataEntry`` is built and pushed; subsequent
+    /// observations reuse the same index. Scoped per ``freeze_component``
+    /// call so cross-page caching doesn't leak.
+    pub var_data_dedup: RefCell<HashMap<usize, u32>>,
 }
 
 /// Cached per-class memoization metadata; one entry per `type(component)`.
@@ -168,6 +174,7 @@ impl<'py> PyRefs<'py> {
             format_library_name,
             harvest: RefCell::new(HarvestState::default()),
             memo_mode_cache: RefCell::new(HashMap::with_capacity(32)),
+            var_data_dedup: RefCell::new(HashMap::with_capacity(32)),
         })
     }
 }
