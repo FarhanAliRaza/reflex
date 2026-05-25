@@ -505,8 +505,8 @@ def page_to_ir(
         extra_imports: optional ``ParsedImportDict`` to fold into the
             page module's import block. Use this to pass a pre-memoize
             ``_get_all_imports()`` so the import block stays correct
-            after :func:`reflex.compiler.rust_memo.walk_and_memoize`
-            substitutes memo wrappers into the tree.
+            after the Rust arena memoize pass substitutes memo
+            wrappers into the tree.
 
     Returns:
         msgpack-packed bytes. Hand this directly to phase-2 Rust.
