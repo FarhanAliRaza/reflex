@@ -21,10 +21,11 @@ use smallvec::SmallVec;
 
 use reflex_intern::{intern, Symbol};
 use reflex_ir::{
-    HookEntry, ImportEntry, NodeFlags, NodeIdx, NodeKind, NodeSnapshot, Snapshot, SnapshotBuilder,
+    HookEntry, ImportEntry, MemoizationDisposition, NodeFlags, NodeIdx, NodeKind, NodeSnapshot,
+    Snapshot, SnapshotBuilder,
 };
 
-use crate::pyo3_reader::{class_name, py_str, PyReadError, PyRefs};
+use crate::pyo3_reader::{class_name, py_str, MemoModeCached, PyReadError, PyRefs};
 
 /// Freeze a Component tree into a `Snapshot`.
 ///
@@ -60,6 +61,57 @@ pub fn freeze_component<'py>(
         });
     }
     Ok(builder.finish())
+}
+
+/// Read `_memoization_mode.{disposition, recursive}` once per Python
+/// class and cache the result on `PyRefs::memo_mode_cache`.
+///
+/// First-touch cost: 3 `getattr` calls (`_memoization_mode`,
+/// `.disposition`, `.recursive`) plus an `is "Foreach"` class-name
+/// match. Subsequent same-class nodes do a single `HashMap::get` keyed
+/// by `type(c) as *const _`.
+///
+/// Default if `_memoization_mode` is missing or unreadable: `Auto` +
+/// `recursive=true`. Matches the `MemoizationMode()` default in
+/// `reflex_base.constants.compiler`.
+fn lookup_memo_mode(
+    component: &Bound<'_, PyAny>,
+    refs: &PyRefs<'_>,
+) -> Result<MemoModeCached, PyReadError> {
+    let ty = component.get_type();
+    let ty_key = ty.as_ptr() as usize;
+    if let Some(cached) = refs.memo_mode_cache.borrow().get(&ty_key) {
+        return Ok(*cached);
+    }
+    let (disposition_byte, recursive) = match component.getattr("_memoization_mode") {
+        Ok(mode) if !mode.is_none() => {
+            let disp_str = mode
+                .getattr("disposition")
+                .and_then(|d| d.getattr("value"))
+                .and_then(|v| v.extract::<String>())
+                .unwrap_or_else(|_| "stateful".to_owned());
+            let recursive: bool = mode
+                .getattr("recursive")
+                .and_then(|r| r.extract())
+                .unwrap_or(true);
+            let disp = match disp_str.as_str() {
+                "never" => 1u8,
+                "always" => 2u8,
+                _ => 0u8,
+            };
+            (disp, recursive)
+        }
+        _ => (0u8, true),
+    };
+    let cls_name = ty.name().map(|n| n.to_string()).unwrap_or_default();
+    let is_foreach = cls_name == "Foreach";
+    let cached = MemoModeCached {
+        disposition_byte,
+        recursive,
+        is_foreach,
+    };
+    refs.memo_mode_cache.borrow_mut().insert(ty_key, cached);
+    Ok(cached)
 }
 
 /// Push a node + its descendants into `builder` and return the index of
@@ -142,8 +194,9 @@ fn freeze_into_slot<'py>(
     // `(name, js_expr)` pairs, plus event-trigger handlers as
     // `(camelCasedTrigger, js_expr)` pairs. Other node kinds skip the
     // `_render()` call because their JSX shape doesn't carry props.
+    let mut props_have_reactive_var = false;
     let (rendered_props, event_callbacks, style, rename_props) = if matches!(kind, NodeKind::Element) {
-        let props = read_rendered_props(component, refs)?;
+        let props = read_rendered_props(component, refs, &mut props_have_reactive_var)?;
         let events = read_event_callbacks(component, refs)?;
         let style_sym = read_style(component, refs)?;
         let renames = read_rename_props(component)?;
@@ -152,6 +205,20 @@ fn freeze_into_slot<'py>(
         (SmallVec::new(), SmallVec::new(), Symbol::EMPTY, SmallVec::new())
     };
     let has_events = !event_callbacks.is_empty();
+
+    // PR2: Bare-contents reactivity. `read_rendered_props` doesn't run
+    // for Bare (it has no tag/props), but `_should_memoize` inspects
+    // `component.contents._get_all_var_data()`. Mirror that here so the
+    // memoize decision picks up Bare wrappers of state Vars.
+    let bare_has_reactive_contents = if cls == "Bare" {
+        if let Ok(contents) = component.getattr("contents") {
+            var_has_reactive_data(&contents, refs).unwrap_or(false)
+        } else {
+            false
+        }
+    } else {
+        false
+    };
 
     let mut flags = NodeFlags::empty();
     if tag == Symbol::EMPTY {
@@ -163,8 +230,34 @@ fn freeze_into_slot<'py>(
     if has_events {
         flags.set(NodeFlags::HAS_EVENT_TRIGGERS);
     }
-    if !hooks_internal.is_empty() || !hooks_user.is_empty() {
+    if !hooks_internal.is_empty()
+        || !hooks_user.is_empty()
+        || props_have_reactive_var
+        || bare_has_reactive_contents
+    {
         flags.set(NodeFlags::HAS_STATE_OR_HOOKS);
+    }
+
+    // PR1: per-class MemoizationMode capture. Reads
+    // `_memoization_mode.disposition` + `_memoization_mode.recursive`
+    // once per Python type and caches on `PyRefs`. Subsequent same-class
+    // nodes hit the cache without any `getattr`. Sets:
+    //   * `MemoizationDisposition::{Auto, Never, Always}` (bits 5-6).
+    //   * `IS_SNAPSHOT_BOUNDARY` when `recursive=False`
+    //     (i.e. `is_snapshot_boundary(component)` in Python).
+    //   * `IS_STRUCTURAL_MEMO_CHILD` when the class is `Foreach`
+    //     (mirrors `_is_structural_memoization_child`).
+    let mode = lookup_memo_mode(component, refs)?;
+    flags.set_memoization_disposition(match mode.disposition_byte {
+        1 => MemoizationDisposition::Never,
+        2 => MemoizationDisposition::Always,
+        _ => MemoizationDisposition::Auto,
+    });
+    if !mode.recursive {
+        flags.set(NodeFlags::IS_SNAPSHOT_BOUNDARY);
+    }
+    if mode.is_foreach {
+        flags.set(NodeFlags::IS_STRUCTURAL_MEMO_CHILD);
     }
 
     let mut node = NodeSnapshot::default();
@@ -446,6 +539,7 @@ fn read_hook_position(vd: &Bound<'_, PyAny>) -> Option<u8> {
 fn read_rendered_props(
     component: &Bound<'_, PyAny>,
     refs: &PyRefs<'_>,
+    reactive_out: &mut bool,
 ) -> Result<SmallVec<[(Symbol, Symbol); 4]>, PyReadError> {
     let mut raw_pairs: SmallVec<[(String, Symbol); 4]> = SmallVec::new();
 
@@ -472,6 +566,14 @@ fn read_rendered_props(
                 if value_obj.is_none() {
                     continue;
                 }
+                // PR2: piggy-back the reactive-Var check on the prop
+                // walk so we don't traverse the prop list twice. Cost
+                // is one `_get_all_var_data()` call per Var prop the
+                // loop already touches (~1 µs after Python's
+                // `@functools.cache` warms up).
+                if !*reactive_out && var_has_reactive_data(&value_obj, refs)? {
+                    *reactive_out = true;
+                }
                 let expr = render_value_as_js(&value_obj, refs)?;
                 if expr.is_empty() {
                     continue;
@@ -489,6 +591,9 @@ fn read_rendered_props(
             Ok(v) if !v.is_none() => v,
             _ => continue,
         };
+        if !*reactive_out && var_has_reactive_data(&v, refs)? {
+            *reactive_out = true;
+        }
         let expr = render_value_as_js(&v, refs)?;
         if expr.is_empty() {
             continue;
@@ -515,6 +620,9 @@ fn read_rendered_props(
                                 Ok(v) => v,
                                 Err(_) => continue,
                             };
+                            if !*reactive_out && var_has_reactive_data(&val, refs)? {
+                                *reactive_out = true;
+                            }
                             let expr = render_value_as_js(&val, refs)?;
                             if expr.is_empty() {
                                 continue;
@@ -658,6 +766,146 @@ fn read_style(
     } else {
         Ok(intern(&expr))
     }
+}
+
+/// Check whether `value` is a `Var` whose `_get_all_var_data()` carries
+/// reactive state, hooks, or embedded reactive components.
+///
+/// PR2: this is the per-prop / per-Bare-contents check that makes
+/// `should_memoize_arena` accurate against the Python predicate. Mirrors
+/// the per-Var loop in `_should_memoize` (memoize.py:174–182). Called
+/// from `read_rendered_props` once per prop Var the freeze already
+/// touches, and from the Bare-contents branch below.
+///
+/// Returns `true` when:
+///
+/// * `var_data.state` is non-empty (the Var reads from a state class)
+/// * `var_data.hooks` is non-empty (the Var introduces a React hook)
+/// * Any `var_data.components` entry has reactive descendants
+///   (recursive `_subtree_has_reactive_data` check)
+///
+/// `_get_all_var_data` is `@functools.cache`-decorated on the Var class,
+/// so repeated calls for the same Var are sub-µs after the first.
+fn var_has_reactive_data(
+    value: &Bound<'_, PyAny>,
+    refs: &PyRefs<'_>,
+) -> Result<bool, PyReadError> {
+    let is_var = match value.is_instance(&refs.var_cls) {
+        Ok(b) => b,
+        Err(_) => return Ok(false),
+    };
+    if !is_var {
+        return Ok(false);
+    }
+    let var_data = match value.call_method0("_get_all_var_data") {
+        Ok(v) => v,
+        Err(_) => return Ok(false),
+    };
+    if var_data.is_none() {
+        return Ok(false);
+    }
+    // `state` is a string (state class identifier or ""); non-empty
+    // means reactive.
+    if let Ok(state) = var_data.getattr("state") {
+        if !state.is_none() {
+            if let Ok(s) = py_str(&state) {
+                if !s.is_empty() {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    // `hooks` is a dict-like; non-empty means reactive.
+    if let Ok(hooks) = var_data.getattr("hooks") {
+        if !hooks.is_none() {
+            let is_empty = hooks
+                .call_method0("__len__")
+                .ok()
+                .and_then(|n| n.extract::<usize>().ok())
+                .map(|n| n == 0)
+                .unwrap_or(true);
+            if !is_empty {
+                return Ok(true);
+            }
+        }
+    }
+    // `components` is a sequence of Component instances embedded in
+    // the Var's value. Recurse into each; their reactivity bubbles via
+    // `_subtree_has_reactive_data` in Python. We mirror that with a
+    // bounded depth-first check on each embedded component.
+    if let Ok(components) = var_data.getattr("components") {
+        if !components.is_none() {
+            if let Ok(iter) = components.iter() {
+                for c_res in iter {
+                    let c = match c_res {
+                        Ok(o) => o,
+                        Err(_) => continue,
+                    };
+                    if subtree_has_reactive_data(&c, refs, 0)? {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Mirror `reflex.compiler.plugins.memoize._subtree_has_reactive_data`
+/// for a Component instance embedded inside a Var's `var_data.components`.
+///
+/// Used only by `var_has_reactive_data` — the embedded-Component case
+/// the page tree walk doesn't otherwise visit. Bounded by a recursion
+/// depth cap so a pathological circular embedding doesn't blow the
+/// stack; in practice user code never nests deeper than ~5.
+fn subtree_has_reactive_data(
+    component: &Bound<'_, PyAny>,
+    refs: &PyRefs<'_>,
+    depth: u8,
+) -> Result<bool, PyReadError> {
+    if depth > 8 {
+        return Ok(false);
+    }
+    // Check the component's own prop Vars and event triggers.
+    if let Ok(vars_iter) = component.call_method1("_get_vars", (false,)) {
+        if let Ok(iter) = vars_iter.iter() {
+            for v_res in iter {
+                let v = match v_res {
+                    Ok(o) => o,
+                    Err(_) => continue,
+                };
+                if var_has_reactive_data(&v, refs)? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    if let Ok(triggers) = component.getattr("event_triggers") {
+        let is_empty = triggers
+            .call_method0("__len__")
+            .ok()
+            .and_then(|n| n.extract::<usize>().ok())
+            .map(|n| n == 0)
+            .unwrap_or(true);
+        if !is_empty {
+            return Ok(true);
+        }
+    }
+    // Recurse into children.
+    if let Ok(children) = component.getattr("children") {
+        if let Ok(iter) = children.iter() {
+            for c_res in iter {
+                let c = match c_res {
+                    Ok(o) => o,
+                    Err(_) => continue,
+                };
+                if subtree_has_reactive_data(&c, refs, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Render any Python value into its JS expression form via

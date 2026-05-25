@@ -12,7 +12,7 @@
 //! the msgpack parser builds — so downstream codegen needs no changes.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use pyo3::prelude::*;
 use pyo3::types::{
@@ -83,6 +83,24 @@ pub struct PyRefs<'py> {
     /// every borrow is scoped to a single registration to avoid
     /// runtime aliasing panics.
     pub harvest: RefCell<HarvestState>,
+    /// Per-class memoization metadata cache keyed by `type(component) as *const _`.
+    /// Avoids repeated `_memoization_mode.disposition` / `recursive` getattr
+    /// chains for nodes of the same class. First lookup populates; later
+    /// nodes hit a HashMap with the cached `(disposition_byte, recursive)`
+    /// pair.
+    pub memo_mode_cache: RefCell<HashMap<usize, MemoModeCached>>,
+}
+
+/// Cached per-class memoization metadata; one entry per `type(component)`.
+///
+/// `disposition_byte` is `0` (Auto/STATEFUL), `1` (Never), or `2` (Always);
+/// it maps 1:1 onto `reflex_ir::MemoizationDisposition`. `recursive=false`
+/// makes the class a snapshot boundary.
+#[derive(Clone, Copy, Debug)]
+pub struct MemoModeCached {
+    pub disposition_byte: u8,
+    pub recursive: bool,
+    pub is_foreach: bool,
 }
 
 /// Page-level data the bridge collects during `read_page`. Equivalent to
@@ -149,6 +167,7 @@ impl<'py> PyRefs<'py> {
             literal_var_cls,
             format_library_name,
             harvest: RefCell::new(HarvestState::default()),
+            memo_mode_cache: RefCell::new(HashMap::with_capacity(32)),
         })
     }
 }

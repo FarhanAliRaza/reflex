@@ -12,3 +12,5 @@ reflex_intern = { workspace = true }
 bumpalo       = { workspace = true }
 rmp           = { workspace = true }
 thiserror     = { workspace = true }
+smallvec      = { version = "1.13", features = ["union"] }
+xxhash-rust   = { workspace = true }
