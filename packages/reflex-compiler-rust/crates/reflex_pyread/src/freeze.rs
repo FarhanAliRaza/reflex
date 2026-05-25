@@ -89,7 +89,11 @@ fn merge_prop_components_imports<'py>(
     component: &Bound<'py, PyAny>,
     refs: &PyRefs<'py>,
 ) -> Result<(), PyReadError> {
-    let Ok(prop_components) = component.call_method0("_get_components_in_props") else {
+    let Ok(prop_components) = refs.call_cached0(
+        component,
+        refs.attrs.m_get_components_in_props.bind(py),
+        |c| &mut c.get_components_in_props,
+    ) else {
         return Ok(());
     };
     let Ok(it) = prop_components.iter() else {
@@ -100,7 +104,11 @@ fn merge_prop_components_imports<'py>(
         if !refs.imports_seen.borrow_mut().insert(id) {
             continue;
         }
-        let Ok(imports_obj) = c.call_method0("_get_imports") else { continue };
+        let Ok(imports_obj) = refs.call_cached0(
+            &c,
+            refs.attrs.m_get_imports.bind(py),
+            |h| &mut h.get_imports,
+        ) else { continue };
         let Ok(imports_dict) = imports_obj.downcast::<pyo3::types::PyDict>() else { continue };
         merge_imports_dict_into_bun(py, &imports_dict, refs);
         // Recurse: prop-components can themselves have prop-components.
@@ -165,20 +173,21 @@ fn lookup_memo_mode(
     component: &Bound<'_, PyAny>,
     refs: &PyRefs<'_>,
 ) -> Result<MemoModeCached, PyReadError> {
+    let py = component.py();
     let ty = component.get_type();
     let ty_key = ty.as_ptr() as usize;
     if let Some(cached) = refs.memo_mode_cache.borrow().get(&ty_key) {
         return Ok(*cached);
     }
-    let (disposition_byte, recursive) = match component.getattr("_memoization_mode") {
+    let (disposition_byte, recursive) = match component.getattr(refs.attrs.memoization_mode.bind(py)) {
         Ok(mode) if !mode.is_none() => {
             let disp_str = mode
-                .getattr("disposition")
-                .and_then(|d| d.getattr("value"))
+                .getattr(refs.attrs.disposition.bind(py))
+                .and_then(|d| d.getattr(refs.attrs.value.bind(py)))
                 .and_then(|v| v.extract::<String>())
                 .unwrap_or_else(|_| "stateful".to_owned());
             let recursive: bool = mode
-                .getattr("recursive")
+                .getattr(refs.attrs.recursive.bind(py))
                 .and_then(|r| r.extract())
                 .unwrap_or(true);
             let disp = match disp_str.as_str() {
@@ -237,7 +246,7 @@ fn freeze_into_slot<'py>(
     builder.set_pyid(self_idx, component.as_ptr() as usize);
     let cls = class_name(component)?;
     let (kind, tag) = classify(component, &cls, refs)?;
-    let style_key = read_qualname(component)?;
+    let style_key = read_qualname(component, refs)?;
 
     // Pre-reserve a contiguous block of slots for the direct children
     // BEFORE recursing into any of them. Each child's descendants land
@@ -264,7 +273,7 @@ fn freeze_into_slot<'py>(
     // The actual freeze happens after the page tree finishes — see
     // `freeze_component`'s drain loop — so page nodes' `children`
     // ranges stay contiguous within the page subtree.
-    collect_app_wraps_into_queue(py, component, builder, pending)?;
+    collect_app_wraps_into_queue(py, component, builder, refs, pending)?;
 
     // Stage 1 per-node harvests. Each call is exactly once per Component;
     // the result is cached on the Component side (`_get_imports` /
@@ -275,11 +284,11 @@ fn freeze_into_slot<'py>(
     // their imports still need to land in the bun-install dict.
     // Visit them once per `id(component)`.
     merge_prop_components_imports(py, component, refs)?;
-    let custom_code = read_custom_code(component)?;
-    let dynamic_imports = read_dynamic_imports(component)?;
+    let custom_code = read_custom_code(component, refs)?;
+    let dynamic_imports = read_dynamic_imports(component, refs)?;
     let ref_name = read_ref_name(component)?;
-    let hooks_internal = read_hooks_dict(component, "_get_hooks_internal")?;
-    let hooks_user = read_hooks_user(component)?;
+    let hooks_internal = read_hooks_internal(component, refs)?;
+    let hooks_user = read_hooks_user(component, refs)?;
 
     // Stage 4 per-node render-time harvests. Element nodes capture
     // `Tag.props` (already camelCased + LiteralVar-wrapped) as
@@ -298,7 +307,7 @@ fn freeze_into_slot<'py>(
         )?;
         let events = read_event_callbacks(component, refs)?;
         let style_sym = read_style(component, refs)?;
-        let renames = read_rename_props(component)?;
+        let renames = read_rename_props(component, refs)?;
         (props, events, style_sym, renames)
     } else {
         (SmallVec::new(), SmallVec::new(), Symbol::EMPTY, SmallVec::new())
@@ -311,7 +320,7 @@ fn freeze_into_slot<'py>(
     // Bare wrappers of state Vars AND the Var's metadata gets deduped
     // into `Snapshot.var_data`.
     let bare_has_reactive_contents = if cls == "Bare" {
-        if let Ok(contents) = component.getattr("contents") {
+        if let Ok(contents) = component.getattr(refs.attrs.contents.bind(py)) {
             if let Some(r) = register_var_data(&contents, builder, refs)? {
                 if !vars_used.contains(&r) {
                     vars_used.push(r);
@@ -415,9 +424,23 @@ fn read_imports_summary<'py>(
     refs: &PyRefs<'py>,
 ) -> Result<SmallVec<[ImportEntry; 4]>, PyReadError> {
     let mut out: SmallVec<[ImportEntry; 4]> = SmallVec::new();
-    let imports_obj = match component.call_method0("_get_imports") {
-        Ok(v) => v,
-        Err(_) => return Ok(out),
+    // Cached method handle for `_get_imports` — first encounter per
+    // class resolves the unbound method on the type; subsequent same-
+    // class nodes call it via the cached handle, skipping the
+    // bound-method allocation + MRO walk that `call_method0` does.
+    let imports_obj = match refs.cached_method(
+        component,
+        refs.attrs.m_get_imports.bind(py),
+        |c| &mut c.get_imports,
+    ) {
+        Some(unbound) => match unbound.bind(py).call1((component,)) {
+            Ok(v) => v,
+            Err(_) => return Ok(out),
+        },
+        None => match component.call_method0(refs.attrs.m_get_imports.bind(py)) {
+            Ok(v) => v,
+            Err(_) => return Ok(out),
+        },
     };
     let imports_dict: Bound<'_, PyDict> = match imports_obj.downcast_into() {
         Ok(d) => d,
@@ -450,10 +473,10 @@ fn read_imports_summary<'py>(
             continue;
         };
         for entry in items_list.iter() {
-            let tag = entry.getattr("tag").ok().filter(|v| !v.is_none());
-            let alias = entry.getattr("alias").ok().filter(|v| !v.is_none());
+            let tag = entry.getattr(refs.attrs.tag.bind(py)).ok().filter(|v| !v.is_none());
+            let alias = entry.getattr(refs.attrs.alias.bind(py)).ok().filter(|v| !v.is_none());
             let render = entry
-                .getattr("render")
+                .getattr(refs.attrs.render.bind(py))
                 .ok()
                 .and_then(|v| if v.is_none() { None } else { Some(v) });
             // `render=False` import vars are install-only (dependencies
@@ -491,8 +514,16 @@ fn read_imports_summary<'py>(
 }
 
 /// Read `_get_custom_code()` → `Symbol::EMPTY` when None or empty.
-fn read_custom_code(component: &Bound<'_, PyAny>) -> Result<Symbol, PyReadError> {
-    let v = match component.call_method0("_get_custom_code") {
+fn read_custom_code<'py>(
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
+) -> Result<Symbol, PyReadError> {
+    let py = component.py();
+    let v = match refs.call_cached0(
+        component,
+        refs.attrs.m_get_custom_code.bind(py),
+        |c| &mut c.get_custom_code,
+    ) {
         Ok(v) => v,
         Err(_) => return Ok(Symbol::EMPTY),
     };
@@ -510,11 +541,17 @@ fn read_custom_code(component: &Bound<'_, PyAny>) -> Result<Symbol, PyReadError>
 /// Read `_get_dynamic_imports()`. Returns `str | None` per-component;
 /// the snapshot stores it as a single-element SmallVec for uniformity
 /// with the aggregate walk's output shape.
-fn read_dynamic_imports(
-    component: &Bound<'_, PyAny>,
+fn read_dynamic_imports<'py>(
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
 ) -> Result<SmallVec<[Symbol; 1]>, PyReadError> {
+    let py = component.py();
     let mut out: SmallVec<[Symbol; 1]> = SmallVec::new();
-    let v = match component.call_method0("_get_dynamic_imports") {
+    let v = match refs.call_cached0(
+        component,
+        refs.attrs.m_get_dynamic_imports.bind(py),
+        |c| &mut c.get_dynamic_imports,
+    ) {
         Ok(v) => v,
         Err(_) => return Ok(out),
     };
@@ -564,15 +601,20 @@ fn read_ref_name(component: &Bound<'_, PyAny>) -> Result<Symbol, PyReadError> {
 /// hook source fragments; values carry the position bucket
 /// (`Hooks.HookPosition` — INTERNAL/PRE_TRIGGER/POST_TRIGGER) used for
 /// sorting at codegen time.
-fn read_hooks_dict<const N: usize>(
-    component: &Bound<'_, PyAny>,
-    method: &str,
+fn read_hooks_internal<'py, const N: usize>(
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
 ) -> Result<SmallVec<[HookEntry; N]>, PyReadError>
 where
     [HookEntry; N]: smallvec::Array<Item = HookEntry>,
 {
+    let py = component.py();
     let mut out: SmallVec<[HookEntry; N]> = SmallVec::new();
-    let v = match component.call_method0(method) {
+    let v = match refs.call_cached0(
+        component,
+        refs.attrs.m_get_hooks_internal.bind(py),
+        |c| &mut c.get_hooks_internal,
+    ) {
         Ok(v) => v,
         Err(_) => return Ok(out),
     };
@@ -597,12 +639,18 @@ where
 /// User hook buckets: `_get_hooks()` returns a single optional string
 /// (an override point on `Component`); `_get_added_hooks()` returns a
 /// dict keyed by hook code. Union both into `hooks_user`.
-fn read_hooks_user(
-    component: &Bound<'_, PyAny>,
+fn read_hooks_user<'py>(
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
 ) -> Result<SmallVec<[HookEntry; 1]>, PyReadError> {
+    let py = component.py();
     let mut out: SmallVec<[HookEntry; 1]> = SmallVec::new();
     // `_get_hooks()` → str | Var | None.
-    if let Ok(v) = component.call_method0("_get_hooks") {
+    if let Ok(v) = refs.call_cached0(
+        component,
+        refs.attrs.m_get_hooks.bind(py),
+        |c| &mut c.get_hooks,
+    ) {
         if !v.is_none() {
             let s = py_str(&v).unwrap_or_default();
             if !s.is_empty() {
@@ -611,7 +659,11 @@ fn read_hooks_user(
         }
     }
     // `_get_added_hooks()` → dict[str, VarData | None].
-    if let Ok(v) = component.call_method0("_get_added_hooks") {
+    if let Ok(v) = refs.call_cached0(
+        component,
+        refs.attrs.m_get_added_hooks.bind(py),
+        |c| &mut c.get_added_hooks,
+    ) {
         if !v.is_none() {
             if let Ok(d) = v.downcast::<PyDict>() {
                 for (k, vd) in d.iter() {
@@ -657,10 +709,15 @@ fn read_rendered_props(
     reactive_out: &mut bool,
     vars_used_out: &mut SmallVec<[VarDataRef; 4]>,
 ) -> Result<SmallVec<[(Symbol, Symbol); 4]>, PyReadError> {
+    let py = component.py();
     let mut raw_pairs: SmallVec<[(String, Symbol); 4]> = SmallVec::new();
 
     // ---- Dataclass fields via `Component.get_props()` ------------------
-    if let Ok(prop_names_obj) = component.call_method0("get_props") {
+    if let Ok(prop_names_obj) = refs.call_cached0(
+        component,
+        refs.attrs.m_get_props.bind(py),
+        |c| &mut c.get_props,
+    ) {
         if let Ok(iter) = prop_names_obj.iter() {
             for name_res in iter {
                 let name_obj = match name_res {
@@ -730,7 +787,7 @@ fn read_rendered_props(
     }
 
     // ---- `custom_attrs` extra entries ---------------------------------
-    if let Ok(custom) = component.getattr("custom_attrs") {
+    if let Ok(custom) = component.getattr(refs.attrs.custom_attrs.bind(py)) {
         if !custom.is_none() {
             if let Ok(mapping) = custom.downcast::<pyo3::types::PyMapping>() {
                 if let Ok(keys) = mapping.keys() {
@@ -786,11 +843,13 @@ fn read_rendered_props(
 /// Read `component._rename_props` into a `(old, new)` pair list. Used by
 /// the snapshot's `rename_props[node_idx]` slot so the emit pass can
 /// apply the rename to the sorted, merged prop list per node.
-pub(crate) fn read_rename_props(
-    component: &Bound<'_, PyAny>,
+pub(crate) fn read_rename_props<'py>(
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
 ) -> Result<SmallVec<[(Symbol, Symbol); 1]>, PyReadError> {
+    let py = component.py();
     let mut out: SmallVec<[(Symbol, Symbol); 1]> = SmallVec::new();
-    let rename_obj = match component.getattr("_rename_props") {
+    let rename_obj = match component.getattr(refs.attrs.rename_props.bind(py)) {
         Ok(v) if !v.is_none() => v,
         _ => return Ok(out),
     };
@@ -844,8 +903,9 @@ fn read_event_callbacks(
     component: &Bound<'_, PyAny>,
     refs: &PyRefs<'_>,
 ) -> Result<SmallVec<[(Symbol, Symbol); 2]>, PyReadError> {
+    let py = component.py();
     let mut out: SmallVec<[(Symbol, Symbol); 2]> = SmallVec::new();
-    let triggers = match component.getattr("event_triggers") {
+    let triggers = match component.getattr(refs.attrs.event_triggers.bind(py)) {
         Ok(t) if !t.is_none() => t,
         _ => return Ok(out),
     };
@@ -874,7 +934,12 @@ fn read_style(
     component: &Bound<'_, PyAny>,
     refs: &PyRefs<'_>,
 ) -> Result<Symbol, PyReadError> {
-    let style_obj = match component.call_method0("_get_style") {
+    let py = component.py();
+    let style_obj = match refs.call_cached0(
+        component,
+        refs.attrs.m_get_style.bind(py),
+        |c| &mut c.get_style,
+    ) {
         Ok(s) => s,
         Err(_) => return Ok(Symbol::EMPTY),
     };
@@ -927,7 +992,12 @@ fn register_var_data(
     if let Some(idx) = refs.var_data_dedup.borrow().get(&key) {
         return Ok(Some(VarDataRef(*idx)));
     }
-    let var_data = match value.call_method0("_get_all_var_data") {
+    let py = value.py();
+    let var_data = match refs.call_cached0(
+        value,
+        refs.attrs.m_get_all_var_data.bind(py),
+        |c| &mut c.get_all_var_data,
+    ) {
         Ok(v) => v,
         Err(_) => return Ok(None),
     };
@@ -941,10 +1011,10 @@ fn register_var_data(
     // "carries metadata worth deduping"). Pure-static pages then end
     // up with `var_data_len == 0`.
     let hooks_syms = pull_dict_keys(&var_data, "hooks");
-    let imports_pairs = pull_imports(&var_data);
+    let imports_pairs = pull_imports(&var_data, refs);
     let deps_syms = pull_iter_symbols(&var_data, "deps");
     let components_syms = pull_iter_symbols(&var_data, "components");
-    let state_sym = pull_state_symbol(&var_data);
+    let state_sym = pull_state_symbol(&var_data, refs);
     let position = pull_u8(&var_data, "position");
 
     let any_nontrivial = !hooks_syms.is_empty()
@@ -1000,9 +1070,10 @@ fn pull_dict_keys(var_data: &Bound<'_, PyAny>, attr: &str) -> Vec<Symbol> {
     out
 }
 
-fn pull_imports(var_data: &Bound<'_, PyAny>) -> Vec<(Symbol, Symbol)> {
+fn pull_imports<'py>(var_data: &Bound<'py, PyAny>, refs: &PyRefs<'py>) -> Vec<(Symbol, Symbol)> {
+    let py = var_data.py();
     let mut out = Vec::new();
-    let Ok(obj) = var_data.getattr("imports") else { return out };
+    let Ok(obj) = var_data.getattr(refs.attrs.imports.bind(py)) else { return out };
     if obj.is_none() {
         return out;
     }
@@ -1026,12 +1097,12 @@ fn pull_imports(var_data: &Bound<'_, PyAny>) -> Vec<(Symbol, Symbol)> {
                 if let Ok(items_iter) = items.iter() {
                     for iv in items_iter.flatten() {
                         let name = iv
-                            .getattr("tag")
+                            .getattr(refs.attrs.tag.bind(py))
                             .ok()
                             .filter(|v| !v.is_none())
                             .and_then(|v| py_str(&v).ok())
                             .or_else(|| {
-                                iv.getattr("alias")
+                                iv.getattr(refs.attrs.alias.bind(py))
                                     .ok()
                                     .filter(|v| !v.is_none())
                                     .and_then(|v| py_str(&v).ok())
@@ -1065,8 +1136,9 @@ fn pull_iter_symbols(var_data: &Bound<'_, PyAny>, attr: &str) -> Vec<Symbol> {
     out
 }
 
-fn pull_state_symbol(var_data: &Bound<'_, PyAny>) -> Symbol {
-    let Ok(obj) = var_data.getattr("state") else { return Symbol::EMPTY };
+fn pull_state_symbol<'py>(var_data: &Bound<'py, PyAny>, refs: &PyRefs<'py>) -> Symbol {
+    let py = var_data.py();
+    let Ok(obj) = var_data.getattr(refs.attrs.state.bind(py)) else { return Symbol::EMPTY };
     if obj.is_none() {
         return Symbol::EMPTY;
     }
@@ -1115,7 +1187,12 @@ fn var_has_reactive_data(
     if !is_var {
         return Ok(false);
     }
-    let var_data = match value.call_method0("_get_all_var_data") {
+    let py = value.py();
+    let var_data = match refs.call_cached0(
+        value,
+        refs.attrs.m_get_all_var_data.bind(py),
+        |c| &mut c.get_all_var_data,
+    ) {
         Ok(v) => v,
         Err(_) => return Ok(false),
     };
@@ -1124,7 +1201,7 @@ fn var_has_reactive_data(
     }
     // `state` is a string (state class identifier or ""); non-empty
     // means reactive.
-    if let Ok(state) = var_data.getattr("state") {
+    if let Ok(state) = var_data.getattr(refs.attrs.state.bind(py)) {
         if !state.is_none() {
             if let Ok(s) = py_str(&state) {
                 if !s.is_empty() {
@@ -1134,7 +1211,7 @@ fn var_has_reactive_data(
         }
     }
     // `hooks` is a dict-like; non-empty means reactive.
-    if let Ok(hooks) = var_data.getattr("hooks") {
+    if let Ok(hooks) = var_data.getattr(refs.attrs.hooks.bind(py)) {
         if !hooks.is_none() {
             let is_empty = hooks
                 .call_method0("__len__")
@@ -1151,7 +1228,7 @@ fn var_has_reactive_data(
     // the Var's value. Recurse into each; their reactivity bubbles via
     // `_subtree_has_reactive_data` in Python. We mirror that with a
     // bounded depth-first check on each embedded component.
-    if let Ok(components) = var_data.getattr("components") {
+    if let Ok(components) = var_data.getattr(refs.attrs.components.bind(py)) {
         if !components.is_none() {
             if let Ok(iter) = components.iter() {
                 for c_res in iter {
@@ -1176,11 +1253,12 @@ fn var_has_reactive_data(
 /// the page tree walk doesn't otherwise visit. Bounded by a recursion
 /// depth cap so a pathological circular embedding doesn't blow the
 /// stack; in practice user code never nests deeper than ~5.
-fn subtree_has_reactive_data(
-    component: &Bound<'_, PyAny>,
-    refs: &PyRefs<'_>,
+fn subtree_has_reactive_data<'py>(
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
     depth: u8,
 ) -> Result<bool, PyReadError> {
+    let py = component.py();
     if depth > 8 {
         return Ok(false);
     }
@@ -1198,7 +1276,7 @@ fn subtree_has_reactive_data(
             }
         }
     }
-    if let Ok(triggers) = component.getattr("event_triggers") {
+    if let Ok(triggers) = component.getattr(refs.attrs.event_triggers.bind(py)) {
         let is_empty = triggers
             .call_method0("__len__")
             .ok()
@@ -1210,7 +1288,7 @@ fn subtree_has_reactive_data(
         }
     }
     // Recurse into children.
-    if let Ok(children) = component.getattr("children") {
+    if let Ok(children) = component.getattr(refs.attrs.children.bind(py)) {
         if let Ok(iter) = children.iter() {
             for c_res in iter {
                 let c = match c_res {
@@ -1234,10 +1312,11 @@ fn subtree_has_reactive_data(
 /// — that single PyO3 method call costs ~50 µs and fires once per
 /// non-Var prop value (and once per non-Var event handler), which on
 /// a typical page adds up to 3–5 ms of pure boundary overhead.
-fn render_value_as_js(
-    value: &Bound<'_, PyAny>,
-    refs: &PyRefs<'_>,
+fn render_value_as_js<'py>(
+    value: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
 ) -> Result<String, PyReadError> {
+    let py = value.py();
     if value.is_none() {
         return Ok(String::new());
     }
@@ -1249,7 +1328,7 @@ fn render_value_as_js(
         })?;
     if is_var {
         let expr = value
-            .getattr("_js_expr")
+            .getattr(refs.attrs.js_expr.bind(py))
             .map_err(|source| PyReadError::Attr {
                 attr: "Var._js_expr",
                 source,
@@ -1296,7 +1375,7 @@ fn render_value_as_js(
         return Ok(String::new());
     }
     // Wrapped value is normally a Var; pull its `_js_expr`.
-    if let Ok(expr) = wrapped.getattr("_js_expr") {
+    if let Ok(expr) = wrapped.getattr(refs.attrs.js_expr.bind(py)) {
         return py_str(&expr);
     }
     // Last-ditch: stringify.
@@ -1432,9 +1511,14 @@ fn collect_app_wraps_into_queue<'py>(
     py: Python<'py>,
     component: &Bound<'py, PyAny>,
     builder: &mut SnapshotBuilder,
+    refs: &PyRefs<'py>,
     pending: &mut Vec<(i32, String, Py<PyAny>)>,
 ) -> Result<(), PyReadError> {
-    let wraps_obj = match component.call_method0("_get_app_wrap_components") {
+    let wraps_obj = match refs.call_cached0(
+        component,
+        refs.attrs.m_get_app_wrap_components.bind(py),
+        |c| &mut c.get_app_wrap_components,
+    ) {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -1479,7 +1563,7 @@ fn collect_app_wraps_into_queue<'py>(
 /// deferred to a follow-on Stage 5 sub-task because they need
 /// per-arm pairing with the just-pushed child indices.
 fn populate_control_flow<'py>(
-    _py: Python<'py>,
+    py: Python<'py>,
     component: &Bound<'py, PyAny>,
     kind: NodeKind,
     self_idx: NodeIdx,
@@ -1494,14 +1578,14 @@ fn populate_control_flow<'py>(
             // case needs decoding from the `"…"` JS form to the raw
             // text — otherwise the emit would write the escape sequence
             // verbatim instead of the glyph (e.g. `"−"` vs `"−"`).
-            if let Ok(contents) = component.getattr("contents") {
+            if let Ok(contents) = component.getattr(refs.attrs.contents.bind(py)) {
                 if !contents.is_none() {
                     let is_var = contents
                         .is_instance(&refs.var_cls)
                         .unwrap_or(false);
                     let s = if is_var {
                         contents
-                            .getattr("_js_expr")
+                            .getattr(refs.attrs.js_expr.bind(py))
                             .ok()
                             .and_then(|e| py_str(&e).ok())
                             .and_then(|expr| crate::text::decode_js_string_literal(&expr))
@@ -1523,7 +1607,7 @@ fn populate_control_flow<'py>(
             // The Bare wraps a `Var` whose `_js_expr` is the inline
             // expression.  Re-extract the var here (matches the
             // classification step's instance check).
-            if let Ok(contents) = component.getattr("contents") {
+            if let Ok(contents) = component.getattr(refs.attrs.contents.bind(py)) {
                 if !contents.is_none() {
                     let expr = render_value_as_js(&contents, refs)?;
                     if !expr.is_empty() {
@@ -1537,7 +1621,7 @@ fn populate_control_flow<'py>(
             }
         }
         NodeKind::Cond => {
-            if let Ok(cond) = component.getattr("cond") {
+            if let Ok(cond) = component.getattr(refs.attrs.cond.bind(py)) {
                 let expr = render_value_as_js(&cond, refs)?;
                 if !expr.is_empty() {
                     builder
@@ -1549,7 +1633,7 @@ fn populate_control_flow<'py>(
             }
         }
         NodeKind::Foreach => {
-            if let Ok(iterable) = component.getattr("iterable") {
+            if let Ok(iterable) = component.getattr(refs.attrs.iterable.bind(py)) {
                 let expr = render_value_as_js(&iterable, refs)?;
                 if !expr.is_empty() {
                     builder
@@ -1561,7 +1645,7 @@ fn populate_control_flow<'py>(
             }
         }
         NodeKind::Match => {
-            if let Ok(cond) = component.getattr("cond") {
+            if let Ok(cond) = component.getattr(refs.attrs.cond.bind(py)) {
                 let expr = render_value_as_js(&cond, refs)?;
                 if !expr.is_empty() {
                     builder
@@ -1616,7 +1700,7 @@ fn freeze_children_iter<'py>(
     pending: &mut Vec<(i32, String, Py<PyAny>)>,
 ) -> Result<(NodeIdx, NodeIdx), PyReadError> {
     let start = builder.next_idx();
-    let children_obj = match component.getattr("children") {
+    let children_obj = match component.getattr(refs.attrs.children.bind(py)) {
         Ok(v) if !v.is_none() => v,
         _ => return Ok((start, start)),
     };
@@ -1771,7 +1855,7 @@ fn classify(
         _ => NodeKind::Element,
     };
     let tag = if matches!(kind, NodeKind::Element) {
-        read_tag(component)?
+        read_tag(component, refs)?
     } else {
         Symbol::EMPTY
     };
@@ -1783,11 +1867,12 @@ fn classify(
 /// string literal (e.g. `"−"`) get decoded to Text so the output
 /// is the raw glyph instead of the escape sequence — mirrors
 /// `pyo3_reader::read_bare`'s `decode_js_string_literal` step.
-fn classify_bare(
-    component: &Bound<'_, PyAny>,
-    refs: &PyRefs<'_>,
+fn classify_bare<'py>(
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
 ) -> Result<NodeKind, PyReadError> {
-    let contents = match component.getattr("contents") {
+    let py = component.py();
+    let contents = match component.getattr(refs.attrs.contents.bind(py)) {
         Ok(v) if !v.is_none() => v,
         _ => return Ok(NodeKind::Text),
     };
@@ -1802,7 +1887,7 @@ fn classify_bare(
     }
     // Var contents whose JS form is `"..."` — a literal — decodes to
     // the inner text and emits as Text. Anything else stays as Expr.
-    if let Ok(expr_obj) = contents.getattr("_js_expr") {
+    if let Ok(expr_obj) = contents.getattr(refs.attrs.js_expr.bind(py)) {
         let expr_str = py_str(&expr_obj).unwrap_or_default();
         if crate::text::decode_js_string_literal(&expr_str).is_some() {
             return Ok(NodeKind::Text);
@@ -1817,9 +1902,10 @@ fn classify_bare(
 /// (no library set + `_is_tag_in_global_scope` truthy) — e.g.
 /// `"title"`, `"meta"`, `"div"`. The emit treats `"…"` symbols as
 /// pre-quoted tag literals.
-fn read_tag(component: &Bound<'_, PyAny>) -> Result<Symbol, PyReadError> {
-    let alias = component.getattr("alias").ok().filter(|v| !v.is_none());
-    let tag = component.getattr("tag").ok().filter(|v| !v.is_none());
+fn read_tag(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<Symbol, PyReadError> {
+    let py = component.py();
+    let alias = component.getattr(refs.attrs.alias.bind(py)).ok().filter(|v| !v.is_none());
+    let tag = component.getattr(refs.attrs.tag.bind(py)).ok().filter(|v| !v.is_none());
     let raw_name = match (alias, tag) {
         (Some(a), _) => py_str(&a)?,
         (None, Some(t)) => py_str(&t)?,
@@ -1829,8 +1915,8 @@ fn read_tag(component: &Bound<'_, PyAny>) -> Result<Symbol, PyReadError> {
     if trimmed.is_empty() {
         return Ok(Symbol::EMPTY);
     }
-    let library = component.getattr("library").ok().filter(|v| !v.is_none());
-    let is_global_scope = match component.getattr("_is_tag_in_global_scope") {
+    let library = component.getattr(refs.attrs.library.bind(py)).ok().filter(|v| !v.is_none());
+    let is_global_scope = match component.getattr(refs.attrs.is_tag_in_global_scope.bind(py)) {
         Ok(v) => v.is_truthy().unwrap_or(false),
         Err(_) => false,
     };
@@ -1844,9 +1930,13 @@ fn read_tag(component: &Bound<'_, PyAny>) -> Result<Symbol, PyReadError> {
 
 /// `type(component).__qualname__`. Used as the `style_key` so stage 5's
 /// app-style merge can look up `App.style[<qualname>]` for each node.
-fn read_qualname(component: &Bound<'_, PyAny>) -> Result<Symbol, PyReadError> {
+fn read_qualname<'py>(
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
+) -> Result<Symbol, PyReadError> {
+    let py = component.py();
     let ty = component.get_type();
-    if let Ok(q) = ty.getattr("__qualname__") {
+    if let Ok(q) = ty.getattr(refs.attrs.qualname.bind(py)) {
         if let Ok(s) = py_str(&q) {
             return Ok(intern(&s));
         }
