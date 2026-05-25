@@ -23,6 +23,9 @@ pub mod text;
 mod pyo3_reader;
 
 #[cfg(feature = "pyo3")]
+pub mod freeze;
+
+#[cfg(feature = "pyo3")]
 pub mod memoize;
 
 #[cfg(feature = "pyo3")]
@@ -32,7 +35,10 @@ pub mod imports;
 pub mod timing;
 
 #[cfg(feature = "pyo3")]
-pub use pyo3_reader::{read_page, PyReadError, PyRefs};
+pub use freeze::freeze_component;
+
+#[cfg(feature = "pyo3")]
+pub use pyo3_reader::{read_page, MemoModeCached, PyReadError, PyRefs};
 
 #[cfg(feature = "pyo3")]
 pub use memoize::{should_memoize, MemoRefs};

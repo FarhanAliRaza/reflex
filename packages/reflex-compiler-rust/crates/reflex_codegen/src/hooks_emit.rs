@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 use reflex_intern::{resolve_unchecked, Symbol};
-use reflex_ir::{HookEntry, Snapshot};
+use reflex_ir::{HookEntry, NodeIdx, Snapshot};
 
 /// Returns `(internal, pre_trigger, post_trigger, memo)` joined into one
 /// `\n`-separated string in the legacy order. `memo` lines are spliced
@@ -52,6 +52,60 @@ fn bucket_hooks(snapshot: &Snapshot) -> (Vec<Symbol>, Vec<Symbol>, Vec<Symbol>) 
     (internal, pre, post)
 }
 
+/// PR4: hooks emit restricted to the subtree rooted at `root`. Used
+/// by `emit_memo_module_from_snapshot` so a memo body only sees the
+/// `useState`/`useCallback`/etc. declarations for the nodes it owns —
+/// not the entire page's hook set.
+///
+/// Mirrors `render_hooks` (page-global) but walks only the subtree DFS
+/// following `node.children` ranges. The traversal does NOT follow
+/// `wrap_redirects` — a body's subtree is the original captured
+/// content, not the synthetic wrapper.
+pub fn render_hooks_for_subtree(snapshot: &Snapshot, root: NodeIdx, memo_lines: &[&str]) -> String {
+    let (internal, pre_trigger, post_trigger) = bucket_subtree_hooks(snapshot, root);
+    let mut out = String::with_capacity(estimate_size(&internal, &pre_trigger, &post_trigger));
+    write_bucket(&mut out, &internal);
+    out.push('\n');
+    write_bucket(&mut out, &pre_trigger);
+    out.push('\n');
+    if !memo_lines.is_empty() {
+        for (i, line) in memo_lines.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(line);
+        }
+    }
+    out.push('\n');
+    write_bucket(&mut out, &post_trigger);
+    out
+}
+
+fn bucket_subtree_hooks(
+    snapshot: &Snapshot,
+    root: NodeIdx,
+) -> (Vec<Symbol>, Vec<Symbol>, Vec<Symbol>) {
+    let mut seen: HashSet<Symbol> = HashSet::new();
+    let mut internal: Vec<Symbol> = Vec::new();
+    let mut pre: Vec<Symbol> = Vec::new();
+    let mut post: Vec<Symbol> = Vec::new();
+    let mut stack: Vec<NodeIdx> = vec![root];
+    while let Some(idx) = stack.pop() {
+        // Defensive bounds check — bad freeze input shouldn't panic.
+        if (idx as usize) >= snapshot.nodes.len() {
+            continue;
+        }
+        let node = snapshot.node(idx);
+        for h in node.hooks_internal.iter().chain(node.hooks_user.iter()) {
+            push_bucket(&mut seen, &mut internal, &mut pre, &mut post, *h);
+        }
+        for child in node.children.clone() {
+            stack.push(child);
+        }
+    }
+    (internal, pre, post)
+}
+
 fn push_bucket(
     seen: &mut HashSet<Symbol>,
     internal: &mut Vec<Symbol>,
@@ -63,6 +117,17 @@ fn push_bucket(
         return;
     }
     if !seen.insert(h.code) {
+        return;
+    }
+    // PR4: skip the page-shell hooks Rust emits unconditionally
+    // (`useContext(StateContexts.…)`, `useContext(EventLoopContext)`).
+    // The freeze pass captures these in `hooks_user`/`hooks_internal`
+    // for parity with the Python `_get_hooks` aggregation; the page +
+    // memo module emitters then would double-declare them. Mirrors the
+    // filter in `rust_pipeline.py::compile_pages` that strips the same
+    // lines before sending `hooks_body` to the legacy emit path.
+    let code = reflex_intern::resolve_unchecked(h.code);
+    if code.contains("useContext(StateContexts.") || code.contains("useContext(EventLoopContext)") {
         return;
     }
     match h.position {

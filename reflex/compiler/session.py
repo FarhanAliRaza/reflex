@@ -491,6 +491,92 @@ class CompilerSession:
             )
         )
 
+    def compile_page_from_component_arena(
+        self,
+        component: object,
+        route_ident: str,
+        route: str,
+        *,
+        title: str | None = None,
+        meta_tags: list[tuple[str, str]] | None = None,
+        custom_code: list[str] | None = None,
+        hooks_body: str | None = None,
+    ) -> tuple[str, list[tuple[str, str]], dict[str, list]]:
+        """PR4: arena-path page compile (planx.md cutover).
+
+        Drives the full Component → JSX pipeline in one PyO3 call:
+
+        1. ``freeze_component`` walks the Component tree into a
+           ``Snapshot`` arena (single PyO3 walk).
+        2. ``memoize_arena_pass`` inserts wrapper redirects + registers
+           memo bodies (pure Rust, GIL released).
+        3. ``emit_page_module_from_snapshot`` emits the page JSX.
+        4. ``emit_memo_module_from_snapshot`` emits each unique memo
+           body.
+        5. ``pyread::collect_all_imports`` harvests the page-level
+           import dict for the ``bun install`` step.
+
+        Replaces the legacy ``walk_and_memoize`` (Python) +
+        ``page_to_ir`` (Python msgpack) + ``compile_page_from_bytes``
+        (Rust parse) chain — three crossings collapse to one.
+
+        Args:
+            component: the page's root ``BaseComponent`` instance.
+            route_ident: JS identifier exported as ``__reflex_route_ident``.
+            route: URL path emitted as ``__reflex_route``.
+            title: optional document title.
+            meta_tags: optional ``[(name_or_property, content), …]``.
+            custom_code: caller-supplied custom-code blocks spliced
+                between imports and the function shell. Per-node
+                ``_get_all_custom_code()`` blocks are harvested from
+                the snapshot automatically — pass extras here only for
+                hand-rolled headers.
+            hooks_body: caller-supplied hooks string spliced between
+                the state-context lines and ``return``. Per-node
+                ``hooks_internal``/``hooks_user`` are harvested from
+                the snapshot automatically.
+
+        Returns:
+            ``(page_js, memo_bodies, imports)``:
+
+            * ``page_js`` — full page module source.
+            * ``memo_bodies`` — list of ``(name, jsx_source)`` for each
+              unique memo body (already deduped by subtree_hash).
+            * ``imports`` — page-level harvested import dict matching
+              ``Component._get_all_imports()`` shape.
+        """
+        meta = list(meta_tags) if meta_tags else None
+        page_js, bodies, imports_dict = self._inner.compile_page_from_component_arena(
+            component,
+            route_ident,
+            route,
+            title,
+            meta,
+            list(custom_code) if custom_code else None,
+            hooks_body,
+        )
+        return str(page_js), [(str(n), str(j)) for n, j in bodies], imports_dict
+
+    def write_if_changed(self, out_path: str, content: str) -> bool:
+        """PR0 skip-if-unchanged write.
+
+        Writes ``content`` to ``out_path`` only when the existing
+        file's bytes differ. Returns ``True`` if the file was actually
+        written, ``False`` when the existing contents already matched.
+        Use this in place of ``pathlib.Path.write_text`` for compile
+        outputs that may be regenerated unchanged — Vite HMR and
+        file-watcher hooks key off mtime, so a no-op write still
+        triggers a downstream reload.
+
+        Args:
+            out_path: absolute filesystem path.
+            content: file body.
+
+        Returns:
+            ``True`` if the file was written, ``False`` if skipped.
+        """
+        return bool(self._inner.write_if_changed(out_path, content))
+
     def compile_app_ir(
         self,
         pages: Iterable[tuple[str, str, list]],

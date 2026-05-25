@@ -21,6 +21,7 @@ thiserror       = { workspace = true }
 reflex_ir       = { workspace = true }
 reflex_arena    = { workspace = true }
 reflex_intern   = { workspace = true }
+smallvec        = { version = "1.13", features = ["union"] }
 
 [features]
 default = ["pyo3"]

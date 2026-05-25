@@ -25,6 +25,7 @@ the PyO3 component reader (``reflex_pyread``).
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -33,6 +34,19 @@ from typing import Any
 from reflex.compiler import utils as compiler_utils
 from reflex.compiler.rust_memo import emit_memo_modules, walk_and_memoize
 from reflex.compiler.session import CompilerSession
+
+
+def _arena_pages_enabled() -> bool:
+    """PR4/PR5 cutover gate.
+
+    When ``REFLEX_RUST_ARENA_PAGES=1`` (the default once parity ships),
+    each page goes through ``compile_page_from_component_arena`` —
+    one PyO3 call that freezes, memoize-passes, and emits everything in
+    pure Rust. The legacy ``walk_and_memoize`` + ``page_to_ir`` +
+    ``compile_page_from_bytes`` path stays reachable via ``=0`` until
+    the diff-harness has been green for a release cycle.
+    """
+    return os.environ.get("REFLEX_RUST_ARENA_PAGES", "0") == "1"
 
 
 def _route_to_ident(route: str) -> str:
@@ -228,53 +242,79 @@ def compile_pages(
             and "useContext(EventLoopContext)" not in hook
         })
 
-        # Pre-memoize `_get_all_imports()` captures every npm package the
-        # lifted subtrees use (markdown's ColorModeContext, etc.). After
-        # walk_and_memoize replaces candidates with wrappers, the
-        # wrapped tree's imports don't surface those — so union both.
-        pre_memo_imports = component._get_all_imports()
-
-        # Phase 1a — Python: substitute memo wrappers into the tree.
-        component = walk_and_memoize(component, sess, memo_bodies)
-
-        # Wrapper components carry `library="$/utils/components/<name>"`
-        # imports — combine with pre-memo so the page module imports
-        # both lifted-subtree symbols and wrapper-module symbols.
-        page_extra_imports = _union_imports(
-            pre_memo_imports, component._get_all_imports()
-        )
-
-        # Phase 1b — Python: walk the Component tree once and pack the
-        # full IR (tags, props, events, children, page-level imports,
-        # state bindings, needs_ref flag) to msgpack bytes. After this
-        # the page is just bytes; the Rust emit does not touch any
-        # Component / Var PyObjects.
-        from reflex.compiler.ir.bridge import page_to_ir
-
-        ir_bytes = page_to_ir(
-            route=route, component=component, extra_imports=page_extra_imports
-        )
-
-        # Phase 2 — pure Rust: parse + emit JSX. No PyO3 callbacks
-        # during emit; the GIL is released for the parse + emit span.
-        rust_js = sess.compile_page_from_bytes(
-            ident,
-            ir_bytes,
-            custom_code=page_custom_code,
-            hooks_body=page_hooks_body,
-        )
-
         out_path = Path(compiler_utils.get_page_path(route))
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(rust_js)
+
+        if _arena_pages_enabled():
+            # PR4 cutover path. One PyO3 round-trip does:
+            #   freeze → memoize_arena_pass → emit_page +
+            #   emit_memo_bodies → harvest imports.
+            # No `walk_and_memoize`, no `page_to_ir` msgpack, no
+            # per-body re-walk. The GIL is released for the in-arena
+            # transform + emit; freeze itself reads Python attrs once.
+            (
+                rust_js,
+                arena_memo_bodies,
+                page_imports,
+            ) = sess.compile_page_from_component_arena(
+                component,
+                ident,
+                route,
+                title=None,
+                meta_tags=None,
+                custom_code=page_custom_code,
+                hooks_body=page_hooks_body,
+            )
+            sess.merge_imports_into(all_imports, page_imports)
+            # Stash arena-emitted memo body JSX so the post-loop write
+            # step flushes each unique name to disk. Dedup by name —
+            # bodies hashed identically across pages collide here too.
+            for name, jsx in arena_memo_bodies:
+                memo_bodies.setdefault(name, ("__arena__", jsx))
+        else:
+            # Legacy path: Python walk_and_memoize + page_to_ir +
+            # compile_page_from_bytes. Kept while the parity oracle +
+            # diff harness validate the arena cutover.
+            pre_memo_imports = component._get_all_imports()
+            component = walk_and_memoize(component, sess, memo_bodies)
+            page_extra_imports = _union_imports(
+                pre_memo_imports, component._get_all_imports()
+            )
+
+            from reflex.compiler.ir.bridge import page_to_ir
+
+            ir_bytes = page_to_ir(
+                route=route, component=component, extra_imports=page_extra_imports
+            )
+            rust_js = sess.compile_page_from_bytes(
+                ident,
+                ir_bytes,
+                custom_code=page_custom_code,
+                hooks_body=page_hooks_body,
+            )
+
+        sess.write_if_changed(str(out_path), rust_js)
         written[route] = out_path
 
     # Emit each unique memo body as its own module file. Also harvest
     # each body's imports for the ``bun install`` step.
     components_dir = Path(compiler_utils.get_memo_components_dir())
-    for _name, (body, _definition) in memo_bodies.items():
-        sess.collect_all_imports_into(all_imports, body)
-    emit_memo_modules(memo_bodies, sess, components_dir)
+    components_dir.mkdir(parents=True, exist_ok=True)
+    legacy_memo_bodies: dict[str, Any] = {}
+    arena_memo_bodies: dict[str, str] = {}
+    for name, payload in memo_bodies.items():
+        # Arena path stashes ``(\"__arena__\", jsx_text)``; legacy stashes
+        # ``(body_component, definition)``.
+        if isinstance(payload, tuple) and len(payload) == 2 and payload[0] == "__arena__":
+            arena_memo_bodies[name] = payload[1]
+        else:
+            legacy_memo_bodies[name] = payload
+            body = payload[0] if isinstance(payload, tuple) else payload
+            sess.collect_all_imports_into(all_imports, body)
+    if legacy_memo_bodies:
+        emit_memo_modules(legacy_memo_bodies, sess, components_dir)
+    for name, jsx in arena_memo_bodies.items():
+        sess.write_if_changed(str(components_dir / f"{name}.jsx"), jsx)
 
     # Emit `app/root.jsx` — the React Router root module. Python
     # composes the app-wrap chain + renders all the dynamic strings the
@@ -594,10 +634,23 @@ def _emit_static_artifacts(
 
 
 def _write(path: str, code: str) -> None:
-    """Write a compile-output ``(path, code)`` tuple to disk."""
+    """Write a compile-output ``(path, code)`` tuple to disk, skipping
+    the actual write when the existing file already matches.
+
+    PR0 skip-if-unchanged: a single ``fstat`` + ``read_bytes`` compare
+    avoids touching mtime when the contents are identical, so Vite HMR
+    and other file-watcher hooks stay quiet on idempotent rebuilds.
+    """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(code)
+    encoded = code.encode("utf-8")
+    try:
+        existing = p.stat()
+        if existing.st_size == len(encoded) and p.read_bytes() == encoded:
+            return
+    except OSError:
+        pass
+    p.write_bytes(encoded)
 
 
 def _union_imports(a: Mapping[str, list], b: Mapping[str, list]) -> dict[str, list]:

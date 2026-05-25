@@ -42,7 +42,10 @@ pub use memoize_pass::{
     collect_memo_candidates, memoize_arena_pass, rewrite_memo_body_event_triggers,
 };
 pub use page::{emit_page, emit_page_with_extras, emit_page_with_map};
-pub use page_from_snapshot::{emit_jsx_from_snapshot, emit_memo_body_jsx};
+pub use page_from_snapshot::{
+    emit_jsx_from_snapshot, emit_memo_body_jsx, emit_memo_module_from_snapshot,
+    emit_page_module_from_snapshot,
+};
 pub use sourcemap::SourceMap;
 pub use static_artifacts::{emit_stateful_pages_json, emit_styles_root, emit_theme_module};
 pub use theme::emit_theme;
