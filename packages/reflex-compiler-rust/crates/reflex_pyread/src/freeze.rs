@@ -19,6 +19,8 @@ use pyo3::types::{PyAnyMethods, PyDict, PyList};
 
 use smallvec::SmallVec;
 
+use pyo3::types::PyString;
+
 use reflex_intern::{intern, Symbol};
 use reflex_ir::{
     HookEntry, ImportEntry, MemoizationDisposition, NodeFlags, NodeIdx, NodeKind, NodeSnapshot,
@@ -26,6 +28,86 @@ use reflex_ir::{
 };
 
 use crate::pyo3_reader::{class_name, py_str, MemoModeCached, PyReadError, PyRefs};
+
+const ALIAS_PREFIXES: &[&str] = &["/utils/", "/components/", "/styles/", "/public/"];
+
+fn apply_alias_prefix(lib: &str) -> String {
+    if ALIAS_PREFIXES.iter().any(|p| lib.starts_with(p)) {
+        let mut out = String::with_capacity(lib.len() + 1);
+        out.push('$');
+        out.push_str(lib);
+        out
+    } else {
+        lib.to_owned()
+    }
+}
+
+/// PR7 follow-through: merge an already-fetched `_get_imports()` dict
+/// into the `PyRefs::bun_imports` accumulator with the `$/utils/...`
+/// alias-prefix transform applied. Called inline from
+/// `read_imports_summary` so the single `_get_imports()` call powers
+/// both the per-node (module, name) summary AND the page-level
+/// ImportVar dict — no second `_get_imports` call per Component.
+fn merge_imports_dict_into_bun<'py>(
+    py: Python<'py>,
+    imports_dict: &Bound<'py, pyo3::types::PyDict>,
+    refs: &PyRefs<'py>,
+) {
+    let Some(target_unbound) = refs.bun_imports.borrow().as_ref().map(|d| d.clone_ref(py))
+    else {
+        return;
+    };
+    let target = target_unbound.bind(py);
+    for (lib_obj, items_obj) in imports_dict.iter() {
+        let Ok(lib_py) = lib_obj.downcast::<PyString>() else { continue };
+        let Ok(lib_str) = lib_py.to_str() else { continue };
+        let new_lib = apply_alias_prefix(lib_str);
+        let Ok(items_list) = items_obj.downcast::<pyo3::types::PyList>() else { continue };
+        match target.get_item(&new_lib).ok().flatten() {
+            Some(existing) => {
+                if let Ok(existing_list) = existing.downcast::<pyo3::types::PyList>() {
+                    let _ = existing_list.call_method1("extend", (items_list,));
+                }
+            }
+            None => {
+                let new_list = pyo3::types::PyList::empty_bound(py);
+                let _ = new_list.call_method1("extend", (items_list,));
+                let _ = target.set_item(&new_lib, new_list);
+            }
+        }
+    }
+}
+
+/// PR7 follow-through: walk `component._get_components_in_props()`
+/// and merge each prop-Component's `_get_imports()` into the
+/// bun-install accumulator. Deduped by `id(component)` against
+/// `PyRefs::imports_seen`. Components embedded in Var values aren't
+/// in the snapshot tree, so they don't get covered by the per-node
+/// `read_imports_summary` call.
+fn merge_prop_components_imports<'py>(
+    py: Python<'py>,
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
+) -> Result<(), PyReadError> {
+    let Ok(prop_components) = component.call_method0("_get_components_in_props") else {
+        return Ok(());
+    };
+    let Ok(it) = prop_components.iter() else {
+        return Ok(());
+    };
+    for c in it.flatten() {
+        let id = c.as_ptr() as usize;
+        if !refs.imports_seen.borrow_mut().insert(id) {
+            continue;
+        }
+        let Ok(imports_obj) = c.call_method0("_get_imports") else { continue };
+        let Ok(imports_dict) = imports_obj.downcast::<pyo3::types::PyDict>() else { continue };
+        merge_imports_dict_into_bun(py, &imports_dict, refs);
+        // Recurse: prop-components can themselves have prop-components.
+        merge_prop_components_imports(py, &c, refs)?;
+    }
+    Ok(())
+}
 
 /// Freeze a Component tree into a `Snapshot`.
 ///
@@ -48,6 +130,7 @@ pub fn freeze_component<'py>(
     // observed in a previous freeze doesn't alias into a wholly
     // different snapshot's `var_data` index.
     refs.var_data_dedup.borrow_mut().clear();
+    refs.imports_seen.borrow_mut().clear();
     let mut builder = SnapshotBuilder::new();
     let mut pending: Vec<(i32, String, Py<PyAny>)> = Vec::new();
     let root_idx = freeze_node(py, root, &mut builder, refs, &mut pending)?;
@@ -186,7 +269,12 @@ fn freeze_into_slot<'py>(
     // Stage 1 per-node harvests. Each call is exactly once per Component;
     // the result is cached on the Component side (`_get_imports` /
     // `_get_hooks_*` decorate with `@functools.cache`-equivalent).
-    let imports = read_imports_summary(component, refs)?;
+    let imports = read_imports_summary(py, component, refs)?;
+    // PR7 follow-through: prop-Components (Components embedded in Var
+    // values for props) aren't visited by the snapshot tree walk, but
+    // their imports still need to land in the bun-install dict.
+    // Visit them once per `id(component)`.
+    merge_prop_components_imports(py, component, refs)?;
     let custom_code = read_custom_code(component)?;
     let dynamic_imports = read_dynamic_imports(component)?;
     let ref_name = read_ref_name(component)?;
@@ -321,11 +409,11 @@ fn freeze_into_slot<'py>(
 /// `<tag> as <alias>`; when only one of the two is present, that one is
 /// used. Entries with neither tag nor alias (side-effect imports) are
 /// skipped — the JSX block doesn't reference them.
-fn read_imports_summary(
-    component: &Bound<'_, PyAny>,
-    refs: &PyRefs<'_>,
+fn read_imports_summary<'py>(
+    py: Python<'py>,
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
 ) -> Result<SmallVec<[ImportEntry; 4]>, PyReadError> {
-    let _ = refs;
     let mut out: SmallVec<[ImportEntry; 4]> = SmallVec::new();
     let imports_obj = match component.call_method0("_get_imports") {
         Ok(v) => v,
@@ -335,6 +423,14 @@ fn read_imports_summary(
         Ok(d) => d,
         Err(_) => return Ok(out),
     };
+    // PR7 follow-through: single `_get_imports()` call powers both
+    // outputs. Merge into the bun-install accumulator here so the
+    // arena entry doesn't need a separate `collect_all_imports`
+    // tree walk. `imports_seen` dedup happens at the caller
+    // (per-node freeze loop guarantees one call per snapshot node).
+    if refs.imports_seen.borrow_mut().insert(component.as_ptr() as usize) {
+        merge_imports_dict_into_bun(py, &imports_dict, refs);
+    }
     for (lib_obj, items_obj) in imports_dict.iter() {
         let lib = py_str(&lib_obj)?;
         if lib.is_empty() {

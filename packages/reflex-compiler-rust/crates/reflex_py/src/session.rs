@@ -449,13 +449,19 @@ impl CompilerSession {
         let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
         let hooks_owned = hooks_body.unwrap_or("").to_string();
 
-        // PyO3-bound phase: freeze the component tree + harvest the
-        // per-page imports dict that callers still need for the
-        // `bun install` step. After this borrow ends we release the
-        // GIL for the pure-Rust transform + emit.
+        // PyO3-bound phase: freeze the component tree AND harvest the
+        // per-page imports dict in the same walk. The accumulator
+        // dict is stashed on `PyRefs::bun_imports` before freeze
+        // runs; `accumulate_bun_imports` merges each Component's
+        // `_get_imports()` into it inline, deduped by `id(component)`.
+        // No separate `collect_all_imports` tree walk — eliminates
+        // the second `_get_imports * N` PyO3 boundary cost (planx.md
+        // PR7 follow-through).
         let refs = PyRefs::new(py)?;
+        let imports_dict = PyDict::new_bound(py);
+        *refs.bun_imports.borrow_mut() = Some(imports_dict.clone().unbind());
         let snapshot = freeze_component(py, component, &refs)?;
-        let imports_dict = pyread_collect_all_imports(py, component)?;
+        *refs.bun_imports.borrow_mut() = None;
 
         // Release the GIL for the in-arena memoize + emit. None of the
         // following calls touch Python state — they read Snapshot,

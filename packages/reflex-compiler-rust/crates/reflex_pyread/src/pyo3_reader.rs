@@ -95,6 +95,17 @@ pub struct PyRefs<'py> {
     /// observations reuse the same index. Scoped per ``freeze_component``
     /// call so cross-page caching doesn't leak.
     pub var_data_dedup: RefCell<HashMap<usize, u32>>,
+    /// PR7 follow-through: bun-install imports accumulator harvested
+    /// inline during freeze. Each Component visited contributes its
+    /// ``_get_imports()`` entries to this ``dict[str, list[ImportVar]]``
+    /// (alias-prefix transform applied), and ``_get_components_in_props``
+    /// recursion catches Components embedded in Var values that the
+    /// snapshot tree walk doesn't visit. Visited components are
+    /// tracked in ``imports_seen`` so `_get_imports` runs at most
+    /// once per Component per ``freeze_component`` call — eliminates
+    /// the separate ``collect_all_imports`` tree walk.
+    pub bun_imports: RefCell<Option<Py<PyDict>>>,
+    pub imports_seen: RefCell<HashSet<usize>>,
 }
 
 /// Cached per-class memoization metadata; one entry per `type(component)`.
@@ -175,6 +186,8 @@ impl<'py> PyRefs<'py> {
             harvest: RefCell::new(HarvestState::default()),
             memo_mode_cache: RefCell::new(HashMap::with_capacity(32)),
             var_data_dedup: RefCell::new(HashMap::with_capacity(32)),
+            bun_imports: RefCell::new(None),
+            imports_seen: RefCell::new(HashSet::with_capacity(64)),
         })
     }
 }
