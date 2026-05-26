@@ -82,14 +82,18 @@ def discover() -> list[Fixture]:
 
 
 def render_fixture(fixture: Fixture, session) -> str:
-    """Build the fixture's Component tree and compile it through pyread.
+    """Build the fixture's Component tree and compile it through the
+    arena pipeline (planx.md PR4 cutover).
 
-    Pyread (the PyO3 Component reader, plan §0b lever (a)) walks the
-    Component PyObject directly — no msgpack hop. Output is byte-identical
-    to the legacy bridge path for every fixture in this corpus.
+    ``compile_page_from_component_arena`` freezes the Component into a
+    ``Snapshot``, runs the in-Rust memoize pass, and emits the page
+    module — no msgpack hop, no Python ``walk_and_memoize``.
     """
     component = fixture.build()
-    return session.compile_page_from_component(fixture.ident, component, fixture.route)
+    page_js, _bodies, _imports = session.compile_page_from_component_arena(
+        component, fixture.ident, fixture.route
+    )
+    return page_js
 
 
 def assert_or_update(fixture: Fixture, js: str) -> None:

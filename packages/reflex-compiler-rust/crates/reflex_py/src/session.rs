@@ -9,32 +9,51 @@
 //! Salsa caching lands in D5. Until then every call rebuilds — the
 //! `content_hash` ferried over the wire is recorded but unused.
 
-use std::collections::HashMap;
-
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
-use reflex_arena::Arena;
 use reflex_codegen::{
-    emit_app_root, emit_app_root_module, emit_context, emit_context_module,
-    emit_document_root_module, emit_memo_index, emit_memo_module, emit_page,
-    emit_page_with_extras, emit_page_with_map, emit_stateful_pages_json, emit_styles_root,
-    emit_theme, emit_theme_module, emit_vite_config, CodeBuffer, SourceMap,
+    emit_app_root_module, emit_context_module, emit_document_root_module, emit_memo_index,
+    emit_memo_module_from_snapshot, emit_page_module_from_snapshot, emit_stateful_pages_json,
+    emit_styles_root, emit_theme_module, memoize_arena_pass, CodeBuffer,
 };
 use reflex_db::CompilerDb;
-use reflex_ir::{parse_global_state, parse_page, parse_plugin_manifest, parse_theme};
 use reflex_pyread::{
     collect_all_imports as pyread_collect_all_imports,
     collect_all_imports_into as pyread_collect_all_imports_into,
-    merge_imports_into as pyread_merge_imports_into, read_page,
-    should_memoize as memoize_should_memoize, MemoRefs, PyRefs,
+    freeze_component, freeze_component_with_class_cache,
+    merge_imports_into as pyread_merge_imports_into,
+    should_memoize as memoize_should_memoize, ClassMetadataCache, MemoRefs, PyRefs,
 };
 
 /// One per Python `reflex.compiler.session.CompilerSession`. Holds the
 /// content-hash-keyed compile cache (D5) so hot-reload is incremental.
-#[pyclass]
+///
+/// `unsendable` because the session owns ``Rc<RefCell<...>>`` caches —
+/// safe under the GIL (single-threaded access) but not `Send`. PyO3
+/// blocks sharing across Python threads at runtime.
+#[pyclass(unsendable)]
 pub struct CompilerSession {
     db: CompilerDb,
+    /// Long-lived per-Component-class metadata cache. Lives across
+    /// `compile_page_from_component_arena` calls so warm sessions skip
+    /// per-class introspection (planx.md options B + C). Wrapped in
+    /// `Rc<RefCell>` for interior mutability + sharing with the
+    /// per-call `PyRefs`.
+    class_metadata: std::rc::Rc<std::cell::RefCell<ClassMetadataCache>>,
+    /// PyO3 boundary-crossing counter incremented by the freeze pass.
+    /// Exposed via `freeze_pyo3_call_count()` for the perf-regression
+    /// tests; sees ~15-20 crossings per Component pre-A, ≤4 post-A.
+    freeze_crossings: std::rc::Rc<std::cell::Cell<u64>>,
+    /// Count of `(class, method)` pairs the skip-list cache has
+    /// elided. Exposed for the C test.
+    freeze_trivial_skips: std::rc::Rc<std::cell::Cell<u64>>,
+    /// B: direct-from-Rust `get_props` / `_rename_props` call counts.
+    /// Distinct from Python-internal calls (e.g. `_get_imports` →
+    /// `_get_vars` → `get_props`) which our class cache can't
+    /// suppress.
+    direct_get_props_calls: std::rc::Rc<std::cell::Cell<u64>>,
+    direct_rename_props_reads: std::rc::Rc<std::cell::Cell<u64>>,
 }
 
 #[pymethods]
@@ -43,12 +62,81 @@ impl CompilerSession {
     fn new() -> Self {
         Self {
             db: CompilerDb::new(),
+            class_metadata: std::rc::Rc::new(std::cell::RefCell::new(
+                ClassMetadataCache::with_capacity(32),
+            )),
+            freeze_crossings: std::rc::Rc::new(std::cell::Cell::new(0)),
+            freeze_trivial_skips: std::rc::Rc::new(std::cell::Cell::new(0)),
+            direct_get_props_calls: std::rc::Rc::new(std::cell::Cell::new(0)),
+            direct_rename_props_reads: std::rc::Rc::new(std::cell::Cell::new(0)),
         }
+    }
+
+    /// B: direct-from-Rust `get_props` invocations this session. Lets
+    /// tests distinguish Rust-controlled calls from Python-internal
+    /// ones (e.g. `_get_imports` → `_get_vars` → `get_props`) that
+    /// our class cache cannot suppress.
+    fn direct_get_props_calls(&self) -> u64 {
+        self.direct_get_props_calls.get()
+    }
+
+    fn reset_direct_get_props_calls(&self) {
+        self.direct_get_props_calls.set(0);
+    }
+
+    /// B: direct-from-Rust `_rename_props` reads this session.
+    fn direct_rename_props_reads(&self) -> u64 {
+        self.direct_rename_props_reads.get()
+    }
+
+    fn reset_direct_rename_props_reads(&self) {
+        self.direct_rename_props_reads.set(0);
+    }
+
+    /// Diagnostic: count of cached classes currently in the
+    /// per-session metadata cache. Used by tests to verify B has
+    /// landed (presence of attr also serves as the contract pin).
+    fn class_metadata_cache_size(&self) -> usize {
+        self.class_metadata.borrow().len()
+    }
+
+    /// PyO3 boundary crossings during freeze since the last reset.
+    /// Used by the A perf-regression test.
+    fn freeze_pyo3_call_count(&self) -> u64 {
+        self.freeze_crossings.get()
+    }
+
+    fn reset_freeze_pyo3_call_count(&self) {
+        self.freeze_crossings.set(0);
+    }
+
+    /// Count of `(class, method)` pairs the skip-list cache has
+    /// elided in this session. C contract pin.
+    fn freeze_trivial_skip_count(&self) -> u64 {
+        self.freeze_trivial_skips.get()
     }
 
     /// Cap the page cache. Pass `None` for unbounded.
     fn set_cache_capacity(&self, cap: Option<usize>) {
         self.db.set_cache_capacity(cap);
+    }
+
+    /// PR0: write `content` to `out_path` only when the existing file's
+    /// bytes differ. Returns `True` when the file was actually written,
+    /// `False` when the existing contents already matched.
+    ///
+    /// Use this in place of `pathlib.Path.write_text` for any compile
+    /// output that may be regenerated unchanged on a hot reload. Vite's
+    /// dev server watches mtime; an unconditional write triggers an
+    /// HMR cascade even when the bytes are identical.
+    fn write_if_changed(&self, out_path: &str, content: &str) -> PyResult<bool> {
+        let bytes = content.as_bytes();
+        if file_matches(out_path, bytes) {
+            return Ok(false);
+        }
+        std::fs::write(out_path, bytes)
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("{out_path}: {e}")))?;
+        Ok(true)
     }
 
     /// Drop all cached page renders. Equivalent to creating a new session.
@@ -59,82 +147,6 @@ impl CompilerSession {
     /// Number of cached page renders. Useful for tests + diagnostics.
     fn cache_len(&self) -> usize {
         self.db.cache_len()
-    }
-
-    /// Compile a single page's IR bytes to a JS source string. The Python side
-    /// passes `(route_ident, page_ir_bytes)`; we return the rendered module
-    /// source.
-    ///
-    /// This is the single-page fast path used by hot-reload. `compile_app`
-    /// below batches over many pages and produces auxiliary artifacts.
-    fn compile_page(
-        &self,
-        py: Python<'_>,
-        route_ident: &str,
-        page_bytes: &Bound<'_, PyBytes>,
-    ) -> PyResult<String> {
-        let bytes = page_bytes.as_bytes().to_vec();
-        let route_ident = route_ident.to_owned();
-        let db = self.db.clone();
-        py.allow_threads(move || {
-            db.emit_page(&route_ident, &bytes)
-                .map(|s| s.as_ref().to_owned())
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
-        })
-    }
-
-    /// Compile one page and also return its source map. The cache is bypassed
-    /// (it stores only the rendered string, not the map). Use when you need
-    /// diagnostic back-mapping; use `compile_page` for hot-reload.
-    ///
-    /// Returns `(rendered_js, [(offset, file_id, line, col), ...])`.
-    fn compile_page_with_sourcemap(
-        &self,
-        py: Python<'_>,
-        route_ident: &str,
-        page_bytes: &Bound<'_, PyBytes>,
-    ) -> PyResult<(String, Vec<(u32, u32, u32, u32)>)> {
-        let bytes = page_bytes.as_bytes().to_vec();
-        let route_ident = route_ident.to_owned();
-        py.allow_threads(move || compile_page_with_sourcemap_inner(&route_ident, &bytes))
-    }
-
-    /// Compile a memo wrapper module from a Component PyObject.
-    ///
-    /// Mirrors `templates.memo_single_component_template` (plan §0b
-    /// lever (b3)). The Component should already have its `{children}`
-    /// hole substituted at the Python level (passthrough wrappers carry
-    /// a single `Bare(Var(_js_expr="children"))` child; snapshot bodies
-    /// own their full subtree). Pyread walks the tree; `emit_memo_module`
-    /// emits the `export const <name> = memo(...)` shell.
-    ///
-    /// Args:
-    ///     name: exported memo identifier.
-    ///     signature: parameter list spliced after `memo(`. Typical
-    ///         values are `"{ children }"` for passthroughs and `"()"`
-    ///         for snapshot bodies.
-    ///     component: the wrapper-component PyObject (already
-    ///         hole-substituted).
-    #[pyo3(signature = (name, signature, component, route="/__memo__", pre_hooks=""))]
-    fn compile_memo_from_component<'py>(
-        &self,
-        py: Python<'py>,
-        name: &str,
-        signature: &str,
-        component: &Bound<'py, PyAny>,
-        route: &str,
-        pre_hooks: &str,
-    ) -> PyResult<String> {
-        let refs = PyRefs::new(py)?;
-        let arena = Arena::new();
-        let page = read_page(py, component, route, None, &[], &arena, &refs)?;
-        let mut buf = CodeBuffer::with_capacity(1024);
-        emit_memo_module(&mut buf, &page, name, signature, pre_hooks);
-        String::from_utf8(buf.into_bytes()).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "rust memo emit produced non-utf8: {e}"
-            ))
-        })
     }
 
     /// Emit the memo index module to `out_path`.
@@ -284,6 +296,59 @@ impl CompilerSession {
         })
     }
 
+    /// PR3 parity entry point. Freezes ``component`` into a one-node
+    /// arena snapshot and applies ``should_memoize_arena`` to the
+    /// root. Used by the parity oracle test
+    /// (``tests/units/compiler/test_arena_parity.py``) to compare the
+    /// Rust predicate against Python ``_should_memoize`` on real
+    /// Component fixtures — without spinning up a full page compile.
+    fn should_memoize_arena_for_component<'py>(
+        &self,
+        py: Python<'py>,
+        component: &Bound<'py, PyAny>,
+    ) -> PyResult<bool> {
+        let refs = PyRefs::new(py)?;
+        let snapshot = freeze_component(py, component, &refs)?;
+        if snapshot.nodes.is_empty() {
+            return Ok(false);
+        }
+        Ok(reflex_codegen::should_memoize_arena(&snapshot, snapshot.root))
+    }
+
+    /// PR7 verification helper. Returns a stats dict from a freshly
+    /// frozen ``component``: ``node_count``, ``var_data_len``,
+    /// ``vars_used_total``, ``unique_var_ids``. The dedup tests rely
+    /// on ``var_data_len == unique_var_ids`` and
+    /// ``vars_used_total >= var_data_len``.
+    fn snapshot_stats<'py>(
+        &self,
+        py: Python<'py>,
+        component: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let refs = PyRefs::new(py)?;
+        let snapshot = freeze_component(py, component, &refs)?;
+        let node_count = snapshot.nodes.len();
+        let var_data_len = snapshot.var_data.len();
+        let vars_used_total: usize = snapshot.nodes.iter().map(|n| n.vars_used.len()).sum();
+        // `unique_var_ids` counts the distinct snapshot indices stored
+        // in any node's `vars_used` SmallVec. Equals `var_data_len`
+        // once dedup lands; without dedup it would equal
+        // `vars_used_total`.
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for n in &snapshot.nodes {
+            for r in &n.vars_used {
+                seen.insert(r.0);
+            }
+        }
+        let unique_var_ids = seen.len();
+        let d = PyDict::new_bound(py);
+        d.set_item("node_count", node_count)?;
+        d.set_item("var_data_len", var_data_len)?;
+        d.set_item("vars_used_total", vars_used_total)?;
+        d.set_item("unique_var_ids", unique_var_ids)?;
+        Ok(d)
+    }
+
     /// Run the memoize-decision walk on a Component PyObject.
     ///
     /// Ports `reflex.compiler.plugins.memoize._should_memoize` to Rust
@@ -400,33 +465,43 @@ impl CompilerSession {
         Ok(d)
     }
 
-    /// Compile a single page directly from a Python `Component` PyObject —
-    /// the new lever-(a) entry point that bypasses `bridge.py` + msgpack.
+    /// PR4: full-arena page compile. Freezes `component` into a
+    /// `Snapshot`, runs `memoize_arena_pass` to insert wrapper
+    /// redirects + register memo bodies, then emits the page JSX and
+    /// each memo body module — all in Rust, GIL released after the
+    /// PyO3 freeze walk.
     ///
-    /// The reader walks `component` via PyO3 `getattr` (see plan §0b and
-    /// `reflex_pyread::read_page`), builds the IR in-arena, and emits JSX.
-    /// The cache is not consulted; D5's Salsa storage keys on msgpack
-    /// content hashes and the pyread path doesn't produce one. Hot reload
-    /// gains incremental caching later.
+    /// Returns `(page_js, memo_bodies, imports)` where:
     ///
-    /// Args:
-    ///     route_ident: JS identifier used for the route export.
-    ///     component: the page's root `BaseComponent` instance.
-    ///     route: URL path (e.g. `/about`).
-    ///     title: optional document title.
-    ///     meta_tags: optional `[(name_or_property, content), …]` list.
-    #[pyo3(signature = (route_ident, component, route, title=None, meta_tags=None, custom_code=None, hooks_body=None))]
-    fn compile_page_from_component<'py>(
+    /// * `page_js` is the rendered `.web/app/routes/<route>.jsx`
+    ///   contents (full module: imports + `export default function
+    ///   Component()` shell + memoize wrappers at call sites).
+    /// * `memo_bodies` is a list of `(name, jsx)` for each unique
+    ///   memoize body. The Python caller writes each to
+    ///   `.web/utils/components/<name>.jsx`.
+    /// * `imports` is the page-level harvested import dict (matches
+    ///   the shape `Component._get_all_imports()` produces) so the
+    ///   `bun install` step still sees every npm package.
+    ///
+    /// Replaces, in one PyO3 round-trip, the legacy pipeline of:
+    ///
+    /// 1. Python `walk_and_memoize(component)` (recursive tree walk +
+    ///    `Component.create` per wrapper + `_compute_memo_tag` hash chain)
+    /// 2. Python `page_to_ir(component)` (msgpack pack)
+    /// 3. Rust `compile_page_from_bytes` (msgpack parse + emit)
+    /// 4. Python `emit_memo_modules` (per-body re-walk + render)
+    #[pyo3(signature = (component, route_ident, route, title=None, meta_tags=None, custom_code=None, hooks_body=None))]
+    fn compile_page_from_component_arena<'py>(
         &self,
         py: Python<'py>,
-        route_ident: &str,
         component: &Bound<'py, PyAny>,
+        route_ident: &str,
         route: &str,
         title: Option<&str>,
         meta_tags: Option<&Bound<'py, PyList>>,
         custom_code: Option<Vec<String>>,
         hooks_body: Option<&str>,
-    ) -> PyResult<String> {
+    ) -> PyResult<(String, Vec<(String, String)>, Bound<'py, PyDict>)> {
         let meta_pairs: Vec<(String, String)> = match meta_tags {
             Some(list) => {
                 let mut out = Vec::with_capacity(list.len());
@@ -447,317 +522,147 @@ impl CompilerSession {
         };
 
         let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
-        let custom_code_refs: Vec<&str> = custom_code_owned.iter().map(String::as_str).collect();
-        let hooks = hooks_body.unwrap_or("");
-
-        let refs = PyRefs::new(py)?;
-        let arena = Arena::new();
-        let page = read_page(py, component, route, title, &meta_pairs, &arena, &refs)?;
-        let mut buf = CodeBuffer::with_capacity(1024);
-        {
-            let _emit = reflex_pyread::TimingSpan::new(reflex_pyread::TimingField::Emit);
-            emit_page_with_extras(&mut buf, &page, route_ident, &custom_code_refs, hooks);
-        }
-        String::from_utf8(buf.into_bytes()).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "rust pyread emit produced non-utf8: {e}"
-            ))
-        })
-    }
-
-    /// Compile a whole app. Returns a `CompiledOutput` whose `files` dict maps
-    /// output paths (relative to the Vite project root) to UTF-8 byte blobs.
-    ///
-    /// `pages`: list of `(route_ident, route_path, page_ir_bytes)` triples.
-    /// `theme`: optional theme IR bytes.
-    /// `global_state`: optional global-state IR bytes.
-    /// `plugin_manifest`: optional plugin-manifest IR bytes.
-    #[pyo3(signature = (pages, theme=None, global_state=None, plugin_manifest=None))]
-    fn compile_app(
-        &self,
-        py: Python<'_>,
-        pages: &Bound<'_, PyList>,
-        theme: Option<&Bound<'_, PyBytes>>,
-        global_state: Option<&Bound<'_, PyBytes>>,
-        plugin_manifest: Option<&Bound<'_, PyBytes>>,
-    ) -> PyResult<CompiledOutput> {
-        let mut page_inputs: Vec<(String, String, Vec<u8>)> = Vec::with_capacity(pages.len());
-        for item in pages.iter() {
-            let tup: Bound<PyTuple> = item.downcast_into()?;
-            if tup.len() != 3 {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "each page entry must be (route_ident, route_path, ir_bytes)",
-                ));
-            }
-            let ident: String = tup.get_item(0)?.extract()?;
-            let route: String = tup.get_item(1)?.extract()?;
-            let bytes: Vec<u8> = tup.get_item(2)?.extract::<&[u8]>()?.to_vec();
-            page_inputs.push((ident, route, bytes));
-        }
-        let theme_bytes = theme.map(|b| b.as_bytes().to_vec());
-        let state_bytes = global_state.map(|b| b.as_bytes().to_vec());
-        let plugin_bytes = plugin_manifest.map(|b| b.as_bytes().to_vec());
-
-        let db = self.db.clone();
-        let result = py
-            .allow_threads(move || compile_app_inner(&db, page_inputs, theme_bytes, state_bytes, plugin_bytes))
-            .map_err(map_err)?;
-        Ok(result)
-    }
-
-    /// Phase-2 entry: compile a page from already-serialized IR bytes.
-    ///
-    /// The matching Python entry is
-    /// :func:`reflex.compiler.ir.bridge.page_to_ir`, which walks the
-    /// Component tree once and produces msgpack bytes. This method
-    /// parses those bytes into an in-arena `Page` and emits the JSX
-    /// module entirely in Rust — **no PyO3 callbacks during emit**.
-    /// The GIL is released for the parse + emit span so multiple pages
-    /// can compile concurrently from different threads.
-    #[pyo3(signature = (route_ident, ir_bytes, custom_code=None, hooks_body=None))]
-    fn compile_page_from_bytes(
-        &self,
-        py: Python<'_>,
-        route_ident: &str,
-        ir_bytes: &Bound<'_, PyBytes>,
-        custom_code: Option<Vec<String>>,
-        hooks_body: Option<&str>,
-    ) -> PyResult<String> {
-        let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
         let hooks_owned = hooks_body.unwrap_or("").to_string();
-        let buf = ir_bytes.as_bytes().to_vec();
+
+        // PyO3-bound phase: freeze the component tree AND harvest the
+        // per-page imports dict in the same walk. The accumulator
+        // dict is stashed on `PyRefs::bun_imports` before freeze
+        // runs; `accumulate_bun_imports` merges each Component's
+        // `_get_imports()` into it inline, deduped by `id(component)`.
+        // No separate `collect_all_imports` tree walk — eliminates
+        // the second `_get_imports * N` PyO3 boundary cost (planx.md
+        // PR7 follow-through).
+        // PR-Freeze-Speedup B/C: clone session-scoped caches into
+        // PyRefs so freeze can read+write per-class metadata that
+        // survives across calls. Counters reset per arena entry so
+        // tests see a clean number for this compile.
+        self.freeze_crossings.set(0);
+        let refs = PyRefs::new(py)?.with_session_caches(
+            std::rc::Rc::clone(&self.class_metadata),
+            std::rc::Rc::clone(&self.freeze_crossings),
+            std::rc::Rc::clone(&self.freeze_trivial_skips),
+            std::rc::Rc::clone(&self.direct_get_props_calls),
+            std::rc::Rc::clone(&self.direct_rename_props_reads),
+        );
+        let imports_dict = PyDict::new_bound(py);
+        *refs.bun_imports.borrow_mut() = Some(imports_dict.clone().unbind());
+        let snapshot = freeze_component_with_class_cache(py, component, &refs)?;
+        *refs.bun_imports.borrow_mut() = None;
+
+        // Release the GIL for the in-arena memoize + emit. None of the
+        // following calls touch Python state — they read Snapshot,
+        // write to `CodeBuffer`s, and return owned `String`s.
         let route_ident_owned = route_ident.to_string();
-        py.allow_threads(move || -> PyResult<String> {
-            let arena = Arena::new();
-            let page = parse_page(&arena, &buf).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("ir parse failed: {e}"))
-            })?;
+        let route_owned = route.to_string();
+        let title_owned = title.map(|s| s.to_owned());
+        let (page_js, memo_bodies) = py.allow_threads(move || {
+            let mut snap = snapshot;
+            memoize_arena_pass(&mut snap);
+
+            // Emit the page module.
+            let mut page_buf = CodeBuffer::with_capacity(4096);
             let custom_code_refs: Vec<&str> =
                 custom_code_owned.iter().map(String::as_str).collect();
-            let mut out = CodeBuffer::with_capacity(1024);
-            emit_page_with_extras(&mut out, &page, &route_ident_owned, &custom_code_refs, &hooks_owned);
-            String::from_utf8(out.into_bytes()).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!(
-                    "rust emit produced non-utf8: {e}"
-                ))
-            })
-        })
-    }
+            emit_page_module_from_snapshot(
+                &mut page_buf,
+                &snap,
+                &route_ident_owned,
+                &route_owned,
+                title_owned.as_deref(),
+                &meta_pairs,
+                &custom_code_refs,
+                &hooks_owned,
+            );
+            let page_js = String::from_utf8(page_buf.into_bytes()).unwrap_or_default();
 
-    /// Phase-2 memo entry: compile a memo wrapper module from IR bytes.
-    ///
-    /// Mirrors :meth:`compile_page_from_bytes` but emits the
-    /// ``export const <name> = memo(<signature> => { ... })`` shell
-    /// instead of a page module. The body Component is walked once on
-    /// the Python side (with the ``{children}`` hole already
-    /// substituted at the call site for passthrough wrappers), and the
-    /// IR bytes carry every JSX value the emitter needs. **No PyO3
-    /// callbacks during emit**; GIL is released.
-    #[pyo3(signature = (name, signature, ir_bytes, pre_hooks=""))]
-    fn compile_memo_from_bytes(
-        &self,
-        py: Python<'_>,
-        name: &str,
-        signature: &str,
-        ir_bytes: &Bound<'_, PyBytes>,
-        pre_hooks: &str,
-    ) -> PyResult<String> {
-        let buf = ir_bytes.as_bytes().to_vec();
-        let name_owned = name.to_string();
-        let signature_owned = signature.to_string();
-        let pre_hooks_owned = pre_hooks.to_string();
-        py.allow_threads(move || -> PyResult<String> {
-            let arena = Arena::new();
-            let page = parse_page(&arena, &buf).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("ir parse failed: {e}"))
-            })?;
-            let mut out = CodeBuffer::with_capacity(1024);
-            emit_memo_module(&mut out, &page, &name_owned, &signature_owned, &pre_hooks_owned);
-            String::from_utf8(out.into_bytes()).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!(
-                    "rust emit produced non-utf8: {e}"
-                ))
-            })
-        })
-    }
-}
-
-fn map_err(e: CompileError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(e.to_string())
-}
-
-#[derive(Debug, thiserror::Error)]
-enum CompileError {
-    #[error("page compile failed for {route_ident}: {source}")]
-    Page {
-        route_ident: String,
-        #[source]
-        source: reflex_db::DbError,
-    },
-    #[error("theme parse failed: {0}")]
-    Theme(reflex_ir::ParseError),
-    #[error("global-state parse failed: {0}")]
-    GlobalState(reflex_ir::ParseError),
-    #[error("plugin manifest parse failed: {0}")]
-    PluginManifest(reflex_ir::ParseError),
-}
-
-fn compile_page_with_sourcemap_inner(
-    route_ident: &str,
-    page_bytes: &[u8],
-) -> PyResult<(String, Vec<(u32, u32, u32, u32)>)> {
-    let arena = Arena::with_capacity(page_bytes.len() * 4);
-    let page = parse_page(&arena, page_bytes)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("page parse: {e}")))?;
-    let mut buf = CodeBuffer::with_capacity(page_bytes.len() * 2);
-    let mut map = SourceMap::new();
-    emit_page_with_map(&mut buf, &page, route_ident, &mut map);
-    let js = String::from_utf8(buf.into_bytes()).map_err(|e| {
-        pyo3::exceptions::PyValueError::new_err(format!("emit produced non-utf8: {e}"))
-    })?;
-    let mappings: Vec<(u32, u32, u32, u32)> = map
-        .entries()
-        .iter()
-        .map(|(offset, loc)| (*offset, loc.file.0, loc.line, loc.col))
-        .collect();
-    Ok((js, mappings))
-}
-
-fn compile_app_inner(
-    db: &CompilerDb,
-    pages: Vec<(String, String, Vec<u8>)>,
-    theme: Option<Vec<u8>>,
-    global_state: Option<Vec<u8>>,
-    plugin_manifest: Option<Vec<u8>>,
-) -> Result<CompiledOutput, CompileError> {
-    let arena = Arena::new();
-    let mut files: HashMap<String, Vec<u8>> = HashMap::with_capacity(pages.len() + 4);
-
-    // D11: parallel page emit via rayon. Cache hits still avoid work.
-    let parallel_inputs: Vec<(String, Vec<u8>)> = pages
-        .iter()
-        .map(|(ident, _, bytes)| (ident.clone(), bytes.clone()))
-        .collect();
-    let results = db.emit_pages_parallel(&parallel_inputs);
-    for ((ident, route, _), result) in pages.iter().zip(results.into_iter()) {
-        let rendered = result.map_err(|source| CompileError::Page {
-            route_ident: ident.clone(),
-            source,
-        })?;
-        let out_path = page_output_path(route);
-        files.insert(out_path, rendered.as_bytes().to_vec());
-    }
-
-    if let Some(bytes) = theme {
-        let theme = parse_theme(&arena, &bytes).map_err(CompileError::Theme)?;
-        let mut buf = CodeBuffer::with_capacity(1024);
-        emit_theme(&mut buf, &theme);
-        files.insert("src/styles/theme.css".to_owned(), buf.into_bytes());
-    }
-    if let Some(bytes) = global_state {
-        let state = parse_global_state(&arena, &bytes).map_err(CompileError::GlobalState)?;
-        let mut buf = CodeBuffer::with_capacity(2048);
-        emit_context(&mut buf, &state);
-        files.insert("src/context.js".to_owned(), buf.into_bytes());
-    }
-    if let Some(bytes) = plugin_manifest {
-        let manifest = parse_plugin_manifest(&arena, &bytes).map_err(CompileError::PluginManifest)?;
-        let mut buf = CodeBuffer::with_capacity(2048);
-        emit_app_root(&mut buf, &manifest);
-        files.insert("src/AppWrap.jsx".to_owned(), buf.into_bytes());
-
-        // Plugin static assets pass-through (artifact #7 in §4.5 — Python
-        // ships path+bytes, Rust copies into the output map verbatim).
-        for plugin in manifest.plugins {
-            for (path, body) in plugin.static_assets {
-                files.insert(
-                    reflex_intern::resolve_unchecked(*path).to_owned(),
-                    body.to_vec(),
+            // Emit each unique memo body.
+            let mut bodies: Vec<(String, String)> = Vec::with_capacity(snap.memo_bodies.len());
+            // Clone the (name, root) pairs out so we can release the
+            // borrow on `snap.memo_bodies` before re-borrowing for the
+            // emit walk (which reads `snap.wrap_redirects` etc.).
+            let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> = snap
+                .memo_bodies
+                .iter()
+                .map(|b| (b.name, b.root))
+                .collect();
+            for (name_sym, root_idx) in body_specs {
+                let mut body_buf = CodeBuffer::with_capacity(2048);
+                let name_str = reflex_intern::resolve_unchecked(name_sym).to_owned();
+                // Passthrough signature is the default. Snapshot
+                // bodies would use `"()"` — for now we always use
+                // `"{ children }"` since the freeze path always
+                // produces passthrough wrappers. The snapshot-body
+                // variant is a follow-on once the freeze pass
+                // captures `is_snapshot_boundary` per memo candidate.
+                // Passthrough signature is wrapped in `()` so the
+                // emitted shell is `memo(({ children }) => …)` —
+                // matches the Python `_signature_for(definition)`
+                // output for `passthrough_hole_child is not None`.
+                // Snapshot bodies (definition.passthrough_hole_child
+                // is None in Python) want `"()"`; the arena freeze
+                // currently produces passthrough wrappers only, so
+                // this default is correct. Snapshot-body detection is
+                // a follow-on PR (carry `is_snapshot_boundary` per
+                // memo candidate from freeze).
+                emit_memo_module_from_snapshot(
+                    &mut body_buf,
+                    &snap,
+                    root_idx,
+                    &name_str,
+                    "({ children })",
+                    "",
                 );
+                let body_js = String::from_utf8(body_buf.into_bytes()).unwrap_or_default();
+                bodies.push((name_str, body_js));
             }
-        }
-    }
+            (page_js, bodies)
+        });
 
-    // Always emit a Vite config — Python doesn't need to opt in.
-    let mut vite_buf = CodeBuffer::with_capacity(512);
-    emit_vite_config(&mut vite_buf, "");
-    files.insert("vite.config.js".to_owned(), vite_buf.into_bytes());
-
-    Ok(CompiledOutput {
-        files,
-        orphans: Vec::new(),
-        diagnostics: Vec::new(),
-    })
-}
-
-/// Convert a route path to the emitted JS module path. `/` → `pages/index.jsx`,
-/// `/about` → `pages/about.jsx`, `/foo/bar` → `pages/foo/bar.jsx`. The Python
-/// side will respect this layout when writing files.
-fn page_output_path(route: &str) -> String {
-    let trimmed = route.trim_start_matches('/');
-    if trimmed.is_empty() {
-        return "pages/index.jsx".to_owned();
-    }
-    let mut out = String::with_capacity(8 + trimmed.len());
-    out.push_str("pages/");
-    out.push_str(trimmed);
-    out.push_str(".jsx");
-    out
-}
-
-#[pyclass]
-pub struct CompiledOutput {
-    files: HashMap<String, Vec<u8>>,
-    orphans: Vec<String>,
-    diagnostics: Vec<String>,
-}
-
-#[pymethods]
-impl CompiledOutput {
-    /// Return the rendered files as a `dict[str, bytes]`.
-    fn files<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let dict = PyDict::new_bound(py);
-        for (path, contents) in &self.files {
-            dict.set_item(path, PyBytes::new_bound(py, contents))?;
-        }
-        Ok(dict)
-    }
-
-    /// Paths the Python side should delete (no longer emitted by Rust).
-    fn orphans(&self) -> Vec<String> {
-        self.orphans.clone()
-    }
-
-    /// Compiler diagnostics. List of pre-formatted strings for now; D11 will
-    /// convert to structured `miette`-style records.
-    fn diagnostics(&self) -> Vec<String> {
-        self.diagnostics.clone()
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "CompiledOutput(files={}, orphans={}, diagnostics={})",
-            self.files.len(),
-            self.orphans.len(),
-            self.diagnostics.len()
-        )
+        Ok((page_js, memo_bodies, imports_dict))
     }
 }
 
 /// Open `out_path` for buffered write and run `f` on the writer, mapping
 /// any `io::Error` into a Python `OSError`.
 ///
+/// PR0: writes go through an in-memory `Vec<u8>` first; the result is
+/// only flushed to disk when its bytes differ from the existing file
+/// (fstat-fast-path + memcmp). On no-op recompiles the file's mtime is
+/// unchanged and downstream watchers (Vite HMR, file-change hooks)
+/// don't fire.
+///
 /// Used by every "build content + write to disk" PyO3 method on
 /// `CompilerSession` so the buffering, error mapping, and flush
 /// behaviour stay consistent across the whole static-artifact surface.
 fn write_to_file<F>(out_path: &str, f: F) -> PyResult<()>
 where
-    F: FnOnce(&mut std::io::BufWriter<std::fs::File>) -> std::io::Result<()>,
+    F: FnOnce(&mut Vec<u8>) -> std::io::Result<()>,
 {
-    let file = std::fs::File::create(out_path)
-        .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("{out_path}: {e}")))?;
-    let mut w = std::io::BufWriter::new(file);
-    f(&mut w).map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))?;
-    std::io::Write::flush(&mut w)
-        .map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    f(&mut buf).map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))?;
+    write_bytes_if_changed(out_path, &buf)
+}
+
+/// Write `content` to `out_path` only when the existing file's bytes
+/// differ. PR0 helper exposed to PyO3 callers via
+/// `CompilerSession::write_if_changed` so the Python pipeline can route
+/// its own renders (page JSX, custom-component JSX) through the same
+/// gate.
+pub(crate) fn write_bytes_if_changed(out_path: &str, content: &[u8]) -> PyResult<()> {
+    if file_matches(out_path, content) {
+        return Ok(());
+    }
+    std::fs::write(out_path, content)
+        .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("{out_path}: {e}")))
+}
+
+fn file_matches(path: &str, content: &[u8]) -> bool {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    if meta.len() as usize != content.len() {
+        return false;
+    }
+    matches!(std::fs::read(path), Ok(bytes) if bytes == content)
 }

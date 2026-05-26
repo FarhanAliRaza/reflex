@@ -31,7 +31,6 @@ from pathlib import Path
 from typing import Any
 
 from reflex.compiler import utils as compiler_utils
-from reflex.compiler.rust_memo import emit_memo_modules, walk_and_memoize
 from reflex.compiler.session import CompilerSession
 
 
@@ -106,12 +105,11 @@ def compile_pages(
     :meth:`App._get_frontend_packages` and trigger ``bun install`` without
     running the legacy plugin chain.
 
-    Memoize: per plan §0b lever (b3),
-    :func:`reflex.compiler.rust_memo.walk_and_memoize` substitutes memo
-    wrappers into each page tree before pyread + emit; unique memo
-    bodies are written to ``.web/utils/components/<name>.jsx``. This is
-    an MVP — see :mod:`reflex.compiler.rust_memo` for the known gaps vs
-    the legacy :class:`MemoizeStatefulPlugin`.
+    Memoize: the arena pass inside
+    :meth:`CompilerSession.compile_page_from_component_arena` handles
+    auto-memoization in Rust — no Python wrapper allocation, no
+    msgpack hop. Unique memo bodies are returned alongside the page
+    JSX and written to ``.web/utils/components/<name>.jsx``.
 
     Args:
         app: a loaded ``rx.App`` whose ``_unevaluated_pages`` is populated.
@@ -177,10 +175,10 @@ def compile_pages(
 
         # ``compile_unevaluated_page`` evaluates the page callable, applies
         # recursive theme styles, and wraps the root in ``Fragment`` with
-        # ``<title>``/``<meta>`` already attached. The bridge sees the wrapped
-        # tree and emits the metadata via the IR's component nodes, so we
-        # pass ``title=None``/``meta_tags=None`` to ``page_to_ir`` to avoid
-        # double-emitting.
+        # ``<title>``/``<meta>`` already attached. The arena entry point
+        # sees the wrapped tree and emits the metadata via the IR's
+        # component nodes, so we pass ``title=None``/``meta_tags=None``
+        # below to avoid double-emitting.
         from reflex.state import all_base_state_classes
 
         n_states_before = len(all_base_state_classes)
@@ -228,53 +226,40 @@ def compile_pages(
             and "useContext(EventLoopContext)" not in hook
         })
 
-        # Pre-memoize `_get_all_imports()` captures every npm package the
-        # lifted subtrees use (markdown's ColorModeContext, etc.). After
-        # walk_and_memoize replaces candidates with wrappers, the
-        # wrapped tree's imports don't surface those — so union both.
-        pre_memo_imports = component._get_all_imports()
+        out_path = Path(compiler_utils.get_page_path(route))
+        out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Phase 1a — Python: substitute memo wrappers into the tree.
-        component = walk_and_memoize(component, sess, memo_bodies)
-
-        # Wrapper components carry `library="$/utils/components/<name>"`
-        # imports — combine with pre-memo so the page module imports
-        # both lifted-subtree symbols and wrapper-module symbols.
-        page_extra_imports = _union_imports(
-            pre_memo_imports, component._get_all_imports()
-        )
-
-        # Phase 1b — Python: walk the Component tree once and pack the
-        # full IR (tags, props, events, children, page-level imports,
-        # state bindings, needs_ref flag) to msgpack bytes. After this
-        # the page is just bytes; the Rust emit does not touch any
-        # Component / Var PyObjects.
-        from reflex.compiler.ir.bridge import page_to_ir
-
-        ir_bytes = page_to_ir(
-            route=route, component=component, extra_imports=page_extra_imports
-        )
-
-        # Phase 2 — pure Rust: parse + emit JSX. No PyO3 callbacks
-        # during emit; the GIL is released for the parse + emit span.
-        rust_js = sess.compile_page_from_bytes(
+        # Memoize + emit lives entirely in Rust. One PyO3 round-trip:
+        #   freeze → memoize_arena_pass → emit_page module +
+        #   emit_memo_body modules → harvest imports.
+        # GIL released for the in-arena transform + emit; freeze is
+        # the only PyO3 surface and runs once per page.
+        (
+            rust_js,
+            arena_memo_bodies,
+            page_imports,
+        ) = sess.compile_page_from_component_arena(
+            component,
             ident,
-            ir_bytes,
+            route,
+            title=None,
+            meta_tags=None,
             custom_code=page_custom_code,
             hooks_body=page_hooks_body,
         )
+        sess.merge_imports_into(all_imports, page_imports)
+        for name, jsx in arena_memo_bodies:
+            memo_bodies.setdefault(name, jsx)
 
-        out_path = Path(compiler_utils.get_page_path(route))
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(rust_js)
+        sess.write_if_changed(str(out_path), rust_js)
         written[route] = out_path
 
-    # Emit each unique memo body as its own module file. Also harvest
-    # each body's imports for the ``bun install`` step.
+    # Flush each unique memo body to disk. Bodies hashed identically
+    # across pages collide on the same name and dedupe here.
     components_dir = Path(compiler_utils.get_memo_components_dir())
-    for _name, (body, _definition) in memo_bodies.items():
-        sess.collect_all_imports_into(all_imports, body)
-    emit_memo_modules(memo_bodies, sess, components_dir)
+    components_dir.mkdir(parents=True, exist_ok=True)
+    for name, jsx in memo_bodies.items():
+        sess.write_if_changed(str(components_dir / f"{name}.jsx"), jsx)
 
     # Emit `app/root.jsx` — the React Router root module. Python
     # composes the app-wrap chain + renders all the dynamic strings the
@@ -594,30 +579,22 @@ def _emit_static_artifacts(
 
 
 def _write(path: str, code: str) -> None:
-    """Write a compile-output ``(path, code)`` tuple to disk."""
+    """Write a compile-output ``(path, code)`` tuple to disk, skipping
+    the actual write when the existing file already matches.
+
+    PR0 skip-if-unchanged: a single ``fstat`` + ``read_bytes`` compare
+    avoids touching mtime when the contents are identical, so Vite HMR
+    and other file-watcher hooks stay quiet on idempotent rebuilds.
+    """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(code)
+    encoded = code.encode("utf-8")
+    try:
+        existing = p.stat()
+        if existing.st_size == len(encoded) and p.read_bytes() == encoded:
+            return
+    except OSError:
+        pass
+    p.write_bytes(encoded)
 
 
-def _union_imports(a: Mapping[str, list], b: Mapping[str, list]) -> dict[str, list]:
-    """Merge two ``ParsedImportDict`` shapes, preserving first-seen order.
-
-    The bridge needs the union of pre-memoize + post-memoize imports so
-    the page module imports both the wrapped subtree's symbols and the
-    memo wrapper module identifiers themselves.
-
-    Args:
-        a: first import dict (e.g. pre-memoize ``_get_all_imports()``).
-        b: second import dict (e.g. post-memoize).
-
-    Returns:
-        New ``dict[str, list]`` carrying the unioned entries.
-    """
-    out: dict[str, list] = {lib: list(items) for lib, items in a.items()}
-    for lib, items in b.items():
-        if lib in out:
-            out[lib].extend(items)
-        else:
-            out[lib] = list(items)
-    return out

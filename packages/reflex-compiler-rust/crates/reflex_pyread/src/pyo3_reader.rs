@@ -11,8 +11,8 @@
 //! Var values produce `Value::JsExpr { expr, var_data }` — the same shape
 //! the msgpack parser builds — so downstream codegen needs no changes.
 
-use std::cell::RefCell;
-use std::collections::HashSet;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 
 use pyo3::prelude::*;
 use pyo3::types::{
@@ -83,6 +83,328 @@ pub struct PyRefs<'py> {
     /// every borrow is scoped to a single registration to avoid
     /// runtime aliasing panics.
     pub harvest: RefCell<HarvestState>,
+    /// Per-class memoization metadata cache keyed by `type(component) as *const _`.
+    /// Avoids repeated `_memoization_mode.disposition` / `recursive` getattr
+    /// chains for nodes of the same class. First lookup populates; later
+    /// nodes hit a HashMap with the cached `(disposition_byte, recursive)`
+    /// pair.
+    ///
+    /// **Note (B)**: this cache is per-call (lives on PyRefs). For
+    /// the cross-call class-metadata cache, see ``class_cache`` —
+    /// when set, lookups go through there instead, and this field
+    /// stays a per-call fallback.
+    pub memo_mode_cache: RefCell<HashMap<usize, MemoModeCached>>,
+    /// B/C: session-scoped class cache. ``None`` for callers that
+    /// don't supply one (legacy `read_page` path); freezes from
+    /// `compile_page_from_component_arena` clone the session's Rc
+    /// so per-class metadata survives across compiles.
+    pub class_cache: Option<std::rc::Rc<RefCell<ClassMetadataCache>>>,
+    /// Out-counters incremented by the freeze pass:
+    /// * boundary-crossing count → `freeze_pyo3_call_count` (A)
+    /// * trivial-skip count → `freeze_trivial_skip_count` (C)
+    /// * direct-from-Rust call counts for `get_props` and
+    ///   `_rename_props` → `direct_get_props_calls` /
+    ///   `direct_rename_props_reads` (B). These exclude calls
+    ///   triggered by Python's own internal chains (e.g.
+    ///   `_get_imports` → `_get_vars` → `get_props`) which our
+    ///   per-class cache can't suppress.
+    pub freeze_crossings_counter: Option<std::rc::Rc<Cell<u64>>>,
+    pub freeze_trivial_skips_counter: Option<std::rc::Rc<Cell<u64>>>,
+    pub direct_get_props_calls: Option<std::rc::Rc<Cell<u64>>>,
+    pub direct_rename_props_reads: Option<std::rc::Rc<Cell<u64>>>,
+    /// A: cached reference to the ``reflex_compiler_rust._native``
+    /// module object. The batched ``_arena_freeze_extract`` function
+    /// is looked up off this each visit so
+    /// ``patch.object(_native, "_arena_freeze_extract", wrapper)``
+    /// in tests intercepts our calls. Holding the module (not the
+    /// function) lets the test patches take effect — but for
+    /// performance we cache the resolved function reference per call
+    /// in `arena_freeze_extract_fn` below and only re-resolve when
+    /// the module attribute changes (which happens during patching).
+    pub native_module: Option<Py<PyAny>>,
+    /// PR7 var-data dedup table. Maps ``id(var)`` → index into
+    /// ``Snapshot.var_data``. First time a Var is observed during the
+    /// freeze walk, a ``VarDataEntry`` is built and pushed; subsequent
+    /// observations reuse the same index. Scoped per ``freeze_component``
+    /// call so cross-page caching doesn't leak.
+    pub var_data_dedup: RefCell<HashMap<usize, u32>>,
+    /// PR7 follow-through: bun-install imports accumulator harvested
+    /// inline during freeze. Each Component visited contributes its
+    /// ``_get_imports()`` entries to this ``dict[str, list[ImportVar]]``
+    /// (alias-prefix transform applied), and ``_get_components_in_props``
+    /// recursion catches Components embedded in Var values that the
+    /// snapshot tree walk doesn't visit. Visited components are
+    /// tracked in ``imports_seen`` so `_get_imports` runs at most
+    /// once per Component per ``freeze_component`` call — eliminates
+    /// the separate ``collect_all_imports`` tree walk.
+    pub bun_imports: RefCell<Option<Py<PyDict>>>,
+    pub imports_seen: RefCell<HashSet<usize>>,
+    /// Pre-interned attribute / method names. Each PyO3 ``getattr``
+    /// or ``call_method0`` that took ``&str`` previously allocated a
+    /// fresh ``PyString`` per call; passing the pre-interned
+    /// ``Bound<PyString>`` here lets the Python attribute lookup hit
+    /// its fast path. ~50-100 ns saved per access on the hot path.
+    pub attrs: InternedAttrs,
+    /// Per-class method handle cache for the heavy
+    /// ``call_method0``-style methods (``_get_imports``,
+    /// ``_get_components_in_props``, ``_get_hooks_internal``,
+    /// ``_get_hooks_user``, ``_get_app_wrap_components``,
+    /// ``_get_all_dynamic_imports``, ``_get_all_custom_code``,
+    /// ``get_props``, ``_render``). Keyed by
+    /// ``type(component) as *const _``; values are pre-resolved
+    /// unbound functions ready for ``call1((obj,))``. Skips the
+    /// MRO walk that ``call_method0`` runs on every invocation.
+    pub method_cache: RefCell<HashMap<usize, ClassMethodHandles>>,
+}
+
+/// Pre-interned attribute / method-name `PyString`s. Built once at
+/// `PyRefs::new` and reused on every Component visited in freeze.
+/// Mirrors Pydantic v2's `intern!` discipline: any string used as a
+/// `getattr` key is held as a stable `Py<PyString>` so Python's
+/// attribute lookup skips the `&str → PyString` allocation.
+pub struct InternedAttrs {
+    // Component structural attrs
+    pub tag: Py<PyString>,
+    pub alias: Py<PyString>,
+    pub library: Py<PyString>,
+    pub is_tag_in_global_scope: Py<PyString>,
+    pub children: Py<PyString>,
+    pub iterable: Py<PyString>,
+    pub contents: Py<PyString>,
+    pub event_triggers: Py<PyString>,
+    pub custom_attrs: Py<PyString>,
+    pub key: Py<PyString>,
+    pub id: Py<PyString>,
+    pub class_name: Py<PyString>,
+    pub qualname: Py<PyString>,
+    pub rename_props: Py<PyString>,
+    pub memoization_mode: Py<PyString>,
+    pub disposition: Py<PyString>,
+    pub value: Py<PyString>,
+    pub recursive: Py<PyString>,
+    pub cond: Py<PyString>,
+    pub js_expr: Py<PyString>,
+    // Var-data attrs
+    pub state: Py<PyString>,
+    pub hooks: Py<PyString>,
+    pub components: Py<PyString>,
+    pub deps: Py<PyString>,
+    pub imports: Py<PyString>,
+    pub position: Py<PyString>,
+    pub render: Py<PyString>,
+    pub tag_attr: Py<PyString>,
+    // Method names
+    pub m_get_imports: Py<PyString>,
+    pub m_get_components_in_props: Py<PyString>,
+    pub m_get_hooks_internal: Py<PyString>,
+    pub m_get_hooks_user: Py<PyString>,
+    pub m_get_app_wrap_components: Py<PyString>,
+    pub m_get_all_dynamic_imports: Py<PyString>,
+    pub m_get_all_custom_code: Py<PyString>,
+    pub m_get_props: Py<PyString>,
+    pub m_get_all_var_data: Py<PyString>,
+    pub m_get_style: Py<PyString>,
+    pub m_render: Py<PyString>,
+    pub m_render_component: Py<PyString>,
+    pub m_get_vars: Py<PyString>,
+    pub m_get_custom_code: Py<PyString>,
+    pub m_get_dynamic_imports: Py<PyString>,
+    pub m_get_hooks: Py<PyString>,
+    pub m_get_added_hooks: Py<PyString>,
+}
+
+impl InternedAttrs {
+    fn new(py: Python<'_>) -> Self {
+        let s = |name: &str| -> Py<PyString> { PyString::new_bound(py, name).unbind() };
+        Self {
+            tag: s("tag"),
+            alias: s("alias"),
+            library: s("library"),
+            is_tag_in_global_scope: s("_is_tag_in_global_scope"),
+            children: s("children"),
+            iterable: s("iterable"),
+            contents: s("contents"),
+            event_triggers: s("event_triggers"),
+            custom_attrs: s("custom_attrs"),
+            key: s("key"),
+            id: s("id"),
+            class_name: s("class_name"),
+            qualname: s("__qualname__"),
+            rename_props: s("_rename_props"),
+            memoization_mode: s("_memoization_mode"),
+            disposition: s("disposition"),
+            value: s("value"),
+            recursive: s("recursive"),
+            cond: s("cond"),
+            js_expr: s("_js_expr"),
+            state: s("state"),
+            hooks: s("hooks"),
+            components: s("components"),
+            deps: s("deps"),
+            imports: s("imports"),
+            position: s("position"),
+            render: s("render"),
+            tag_attr: s("tag"),
+            m_get_imports: s("_get_imports"),
+            m_get_components_in_props: s("_get_components_in_props"),
+            m_get_hooks_internal: s("_get_hooks_internal"),
+            m_get_hooks_user: s("_get_hooks_user"),
+            m_get_app_wrap_components: s("_get_app_wrap_components"),
+            m_get_all_dynamic_imports: s("_get_all_dynamic_imports"),
+            m_get_all_custom_code: s("_get_all_custom_code"),
+            m_get_props: s("get_props"),
+            m_get_all_var_data: s("_get_all_var_data"),
+            m_get_style: s("_get_style"),
+            m_render: s("_render"),
+            m_render_component: s("render_component"),
+            m_get_vars: s("_get_vars"),
+            m_get_custom_code: s("_get_custom_code"),
+            m_get_dynamic_imports: s("_get_dynamic_imports"),
+            m_get_hooks: s("_get_hooks"),
+            m_get_added_hooks: s("_get_added_hooks"),
+        }
+    }
+}
+
+/// Per-class cached method handles. Each `Option<Py<PyAny>>` is the
+/// unbound method object resolved from the class once on first
+/// encounter; subsequent invocations call it via `call1((obj,))`,
+/// skipping the per-call MRO walk and bound-method allocation that
+/// `obj.call_method0("name")` performs.
+#[derive(Default)]
+pub struct ClassMethodHandles {
+    pub get_imports: Option<Py<PyAny>>,
+    pub get_components_in_props: Option<Py<PyAny>>,
+    pub get_hooks_internal: Option<Py<PyAny>>,
+    pub get_hooks_user: Option<Py<PyAny>>,
+    pub get_app_wrap_components: Option<Py<PyAny>>,
+    pub get_all_dynamic_imports: Option<Py<PyAny>>,
+    pub get_all_custom_code: Option<Py<PyAny>>,
+    pub get_props: Option<Py<PyAny>>,
+    pub render: Option<Py<PyAny>>,
+    pub get_custom_code: Option<Py<PyAny>>,
+    pub get_dynamic_imports: Option<Py<PyAny>>,
+    pub get_hooks: Option<Py<PyAny>>,
+    pub get_added_hooks: Option<Py<PyAny>>,
+    pub get_style: Option<Py<PyAny>>,
+    pub get_all_var_data: Option<Py<PyAny>>,
+}
+
+// ---- B/C: long-lived per-class metadata cache ----------------------------
+
+/// Optional `_get_*` methods that often return trivial values (empty
+/// dict / None / empty string) for a given Component class. The
+/// skip-list cache (planx.md option C) marks a class+method pair
+/// "skip" after a warmup window and elides the call on future
+/// instances of that class.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkippableMethod {
+    GetAddedHooks = 0,
+    GetDynamicImports = 1,
+    GetHooks = 2,
+    GetCustomCode = 3,
+    GetComponentsInProps = 4,
+    GetAppWrapComponents = 5,
+}
+
+impl SkippableMethod {
+    pub const COUNT: usize = 6;
+    #[inline]
+    pub const fn bit(self) -> u8 {
+        1 << (self as u8)
+    }
+}
+
+/// Long-lived per-Component-class metadata. Owned by ``CompilerSession``
+/// (not ``PyRefs``) so the cache survives across compiles — that's what
+/// makes the warm-vs-cold session timings diverge after B lands.
+///
+/// Entries are populated lazily on first encounter with a class. After
+/// population, every subsequent same-class node skips:
+///
+/// * ``get_props()`` invocation — ``prop_names`` is the cached result.
+/// * ``_rename_props`` getattr — ``rename_props`` holds the resolved
+///   `(old, new)` pairs.
+/// * ``_memoization_mode.{disposition,recursive}`` getattr chain —
+///   ``memo_mode`` carries the resolved triple.
+/// * Bound-method MRO walks for the heavy `_get_*` callbacks —
+///   ``method_handles`` caches each unbound method.
+/// * Probes of optional methods this class is known to return trivial
+///   values for — ``skip_flags`` bits set after warmup.
+pub struct ClassMetadata {
+    /// `get_props()` result as a fully-resolved list of
+    /// `(attr_name, interned_pystring)`. The interned name is reused
+    /// by the per-instance prop reader without re-walking
+    /// `get_props`. ``None`` until first observation.
+    pub prop_names: Option<Vec<(String, Py<PyString>)>>,
+    /// `_rename_props` resolved once per class.
+    pub rename_props: smallvec::SmallVec<[(Symbol, Symbol); 1]>,
+    /// `_rename_props` cache populated bit (covers the empty-result
+    /// case which ``rename_props`` alone can't distinguish from
+    /// "not yet populated").
+    pub rename_props_resolved: bool,
+    /// `_memoization_mode` triple (disposition, recursive, is_foreach).
+    pub memo_mode: Option<MemoModeCached>,
+    /// Method-handle cache for heavy callbacks. Survives across
+    /// compiles in the same session.
+    pub method_handles: ClassMethodHandles,
+    /// Bitmask of methods that have been marked "always trivial" for
+    /// this class. One bit per `SkippableMethod` variant.
+    pub skip_flags: u8,
+    /// Count of consecutive trivial returns observed per
+    /// ``SkippableMethod``. Once a counter reaches the warmup
+    /// threshold, the corresponding ``skip_flags`` bit gets set.
+    pub trivial_counts: [u8; SkippableMethod::COUNT],
+    /// Total instance visits since cache entry was created (or last
+    /// revalidation). When this hits `REVALIDATE_EVERY_N`, all
+    /// ``skip_flags`` and ``trivial_counts`` reset so a class that
+    /// changed behavior gets re-probed.
+    pub total_visits: u32,
+}
+
+impl Default for ClassMetadata {
+    fn default() -> Self {
+        Self {
+            prop_names: None,
+            rename_props: smallvec::SmallVec::new(),
+            rename_props_resolved: false,
+            memo_mode: None,
+            method_handles: ClassMethodHandles::default(),
+            skip_flags: 0,
+            trivial_counts: [0; SkippableMethod::COUNT],
+            total_visits: 0,
+        }
+    }
+}
+
+/// Warmup threshold: after this many consecutive trivial returns for
+/// a `(class, method)` pair, the method is added to the skip-list.
+/// Three matches the heuristic in planx.md: small enough to engage on
+/// realistic pages, large enough to avoid false-positives on a single
+/// unusual instance.
+pub const TRIVIAL_WARMUP_THRESHOLD: u8 = 3;
+
+/// Revalidation interval. After every N visits to a class, reset its
+/// skip-list state so a class that flipped trivial → non-trivial
+/// (e.g. user-mutated metaprogramming) gets re-probed.
+pub const REVALIDATE_EVERY_N: u32 = 100;
+
+/// `HashMap<*const PyType as usize, ClassMetadata>`. Wrapped on the
+/// session in a `RefCell` so freeze can mutate it under interior
+/// mutability while the snapshot builder holds other references.
+pub type ClassMetadataCache = std::collections::HashMap<usize, ClassMetadata>;
+
+/// Cached per-class memoization metadata; one entry per `type(component)`.
+///
+/// `disposition_byte` is `0` (Auto/STATEFUL), `1` (Never), or `2` (Always);
+/// it maps 1:1 onto `reflex_ir::MemoizationDisposition`. `recursive=false`
+/// makes the class a snapshot boundary.
+#[derive(Clone, Copy, Debug)]
+pub struct MemoModeCached {
+    pub disposition_byte: u8,
+    pub recursive: bool,
+    pub is_foreach: bool,
 }
 
 /// Page-level data the bridge collects during `read_page`. Equivalent to
@@ -149,7 +471,139 @@ impl<'py> PyRefs<'py> {
             literal_var_cls,
             format_library_name,
             harvest: RefCell::new(HarvestState::default()),
+            memo_mode_cache: RefCell::new(HashMap::with_capacity(32)),
+            var_data_dedup: RefCell::new(HashMap::with_capacity(32)),
+            bun_imports: RefCell::new(None),
+            imports_seen: RefCell::new(HashSet::with_capacity(64)),
+            attrs: InternedAttrs::new(py),
+            method_cache: RefCell::new(HashMap::with_capacity(32)),
+            class_cache: None,
+            freeze_crossings_counter: None,
+            freeze_trivial_skips_counter: None,
+            direct_get_props_calls: None,
+            direct_rename_props_reads: None,
+            // A: lazy-init the module ref on first session caches
+            // attach, so legacy `read_page` callers (no session)
+            // skip this entirely.
+            native_module: py
+                .import_bound("reflex_compiler_rust._native")
+                .ok()
+                .map(|m| m.unbind().into()),
         })
+    }
+
+    /// Attach session-scoped caches to this PyRefs. Called by
+    /// `compile_page_from_component_arena` so freeze can use the
+    /// cross-call class metadata table.
+    pub fn with_session_caches(
+        mut self,
+        class_cache: std::rc::Rc<RefCell<ClassMetadataCache>>,
+        freeze_crossings: std::rc::Rc<Cell<u64>>,
+        freeze_trivial_skips: std::rc::Rc<Cell<u64>>,
+        direct_get_props_calls: std::rc::Rc<Cell<u64>>,
+        direct_rename_props_reads: std::rc::Rc<Cell<u64>>,
+    ) -> Self {
+        self.class_cache = Some(class_cache);
+        self.freeze_crossings_counter = Some(freeze_crossings);
+        self.freeze_trivial_skips_counter = Some(freeze_trivial_skips);
+        self.direct_get_props_calls = Some(direct_get_props_calls);
+        self.direct_rename_props_reads = Some(direct_rename_props_reads);
+        self
+    }
+
+    /// Bump the per-feature direct-from-Rust counter for B.
+    #[inline]
+    pub fn bump_direct_get_props(&self) {
+        if let Some(c) = &self.direct_get_props_calls {
+            c.set(c.get() + 1);
+        }
+    }
+    #[inline]
+    pub fn bump_direct_rename_props(&self) {
+        if let Some(c) = &self.direct_rename_props_reads {
+            c.set(c.get() + 1);
+        }
+    }
+
+    /// Bump the boundary-crossings counter (A perf invariant).
+    #[inline]
+    pub fn bump_crossings(&self, n: u64) {
+        if let Some(c) = &self.freeze_crossings_counter {
+            c.set(c.get() + n);
+        }
+    }
+
+    /// Bump the trivial-skip count (C invariant).
+    #[inline]
+    pub fn bump_trivial_skip(&self) {
+        if let Some(c) = &self.freeze_trivial_skips_counter {
+            c.set(c.get() + 1);
+        }
+    }
+}
+
+impl<'py> PyRefs<'py> {
+    /// Look up `method_name` on `type(obj)` once per class. Returns
+    /// the cached unbound method object. Caller uses ``call1((obj,))``
+    /// to invoke. ~100-300 ns saved per call after first-class warm.
+    ///
+    /// `accessor` selects which slot of `ClassMethodHandles` to fill
+    /// and read; the caller picks the slot at compile time.
+    pub fn cached_method<F>(
+        &self,
+        obj: &Bound<'py, PyAny>,
+        method_name: &Bound<'py, PyString>,
+        accessor: F,
+    ) -> Option<Py<PyAny>>
+    where
+        F: Fn(&mut ClassMethodHandles) -> &mut Option<Py<PyAny>>,
+    {
+        let py = obj.py();
+        let ty = obj.get_type();
+        let key = ty.as_ptr() as usize;
+        // B: prefer the session-scoped class cache so method handles
+        // survive across compiles. Falls back to per-call
+        // ``method_cache`` when no session cache is attached (legacy
+        // ``read_page`` path).
+        if let Some(class_cache_rc) = &self.class_cache {
+            let mut cache = class_cache_rc.borrow_mut();
+            let meta = cache.entry(key).or_default();
+            let slot = accessor(&mut meta.method_handles);
+            if let Some(cached) = slot.as_ref() {
+                return Some(cached.clone_ref(py));
+            }
+            let resolved = ty.getattr(method_name).ok()?.unbind();
+            *slot = Some(resolved.clone_ref(py));
+            return Some(resolved);
+        }
+        let mut cache = self.method_cache.borrow_mut();
+        let entry = cache.entry(key).or_default();
+        let slot = accessor(entry);
+        if let Some(cached) = slot.as_ref() {
+            return Some(cached.clone_ref(py));
+        }
+        let resolved = ty.getattr(method_name).ok()?.unbind();
+        *slot = Some(resolved.clone_ref(py));
+        Some(resolved)
+    }
+
+    /// `obj.method_name()` with per-class method-handle caching.
+    /// Falls back to the slow `call_method0` path on cache miss.
+    /// `accessor` picks which slot of `ClassMethodHandles` to use.
+    pub fn call_cached0<F>(
+        &self,
+        obj: &Bound<'py, PyAny>,
+        method_name: &Bound<'py, PyString>,
+        accessor: F,
+    ) -> PyResult<Bound<'py, PyAny>>
+    where
+        F: Fn(&mut ClassMethodHandles) -> &mut Option<Py<PyAny>>,
+    {
+        let py = obj.py();
+        if let Some(unbound) = self.cached_method(obj, method_name, accessor) {
+            return unbound.bind(py).call1((obj,));
+        }
+        obj.call_method0(method_name)
     }
 }
 

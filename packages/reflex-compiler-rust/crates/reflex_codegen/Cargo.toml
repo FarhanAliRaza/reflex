@@ -13,3 +13,5 @@ reflex_arena    = { workspace = true }
 reflex_semantic = { workspace = true }
 itoa            = "1"
 ryu             = "1"
+smallvec        = "1.13"
+xxhash-rust     = { workspace = true }
