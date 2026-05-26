@@ -21,15 +21,39 @@ use reflex_db::CompilerDb;
 use reflex_pyread::{
     collect_all_imports as pyread_collect_all_imports,
     collect_all_imports_into as pyread_collect_all_imports_into,
-    freeze_component, merge_imports_into as pyread_merge_imports_into,
-    should_memoize as memoize_should_memoize, MemoRefs, PyRefs,
+    freeze_component, freeze_component_with_class_cache,
+    merge_imports_into as pyread_merge_imports_into,
+    should_memoize as memoize_should_memoize, ClassMetadataCache, MemoRefs, PyRefs,
 };
 
 /// One per Python `reflex.compiler.session.CompilerSession`. Holds the
 /// content-hash-keyed compile cache (D5) so hot-reload is incremental.
-#[pyclass]
+///
+/// `unsendable` because the session owns ``Rc<RefCell<...>>`` caches —
+/// safe under the GIL (single-threaded access) but not `Send`. PyO3
+/// blocks sharing across Python threads at runtime.
+#[pyclass(unsendable)]
 pub struct CompilerSession {
     db: CompilerDb,
+    /// Long-lived per-Component-class metadata cache. Lives across
+    /// `compile_page_from_component_arena` calls so warm sessions skip
+    /// per-class introspection (planx.md options B + C). Wrapped in
+    /// `Rc<RefCell>` for interior mutability + sharing with the
+    /// per-call `PyRefs`.
+    class_metadata: std::rc::Rc<std::cell::RefCell<ClassMetadataCache>>,
+    /// PyO3 boundary-crossing counter incremented by the freeze pass.
+    /// Exposed via `freeze_pyo3_call_count()` for the perf-regression
+    /// tests; sees ~15-20 crossings per Component pre-A, ≤4 post-A.
+    freeze_crossings: std::rc::Rc<std::cell::Cell<u64>>,
+    /// Count of `(class, method)` pairs the skip-list cache has
+    /// elided. Exposed for the C test.
+    freeze_trivial_skips: std::rc::Rc<std::cell::Cell<u64>>,
+    /// B: direct-from-Rust `get_props` / `_rename_props` call counts.
+    /// Distinct from Python-internal calls (e.g. `_get_imports` →
+    /// `_get_vars` → `get_props`) which our class cache can't
+    /// suppress.
+    direct_get_props_calls: std::rc::Rc<std::cell::Cell<u64>>,
+    direct_rename_props_reads: std::rc::Rc<std::cell::Cell<u64>>,
 }
 
 #[pymethods]
@@ -38,7 +62,58 @@ impl CompilerSession {
     fn new() -> Self {
         Self {
             db: CompilerDb::new(),
+            class_metadata: std::rc::Rc::new(std::cell::RefCell::new(
+                ClassMetadataCache::with_capacity(32),
+            )),
+            freeze_crossings: std::rc::Rc::new(std::cell::Cell::new(0)),
+            freeze_trivial_skips: std::rc::Rc::new(std::cell::Cell::new(0)),
+            direct_get_props_calls: std::rc::Rc::new(std::cell::Cell::new(0)),
+            direct_rename_props_reads: std::rc::Rc::new(std::cell::Cell::new(0)),
         }
+    }
+
+    /// B: direct-from-Rust `get_props` invocations this session. Lets
+    /// tests distinguish Rust-controlled calls from Python-internal
+    /// ones (e.g. `_get_imports` → `_get_vars` → `get_props`) that
+    /// our class cache cannot suppress.
+    fn direct_get_props_calls(&self) -> u64 {
+        self.direct_get_props_calls.get()
+    }
+
+    fn reset_direct_get_props_calls(&self) {
+        self.direct_get_props_calls.set(0);
+    }
+
+    /// B: direct-from-Rust `_rename_props` reads this session.
+    fn direct_rename_props_reads(&self) -> u64 {
+        self.direct_rename_props_reads.get()
+    }
+
+    fn reset_direct_rename_props_reads(&self) {
+        self.direct_rename_props_reads.set(0);
+    }
+
+    /// Diagnostic: count of cached classes currently in the
+    /// per-session metadata cache. Used by tests to verify B has
+    /// landed (presence of attr also serves as the contract pin).
+    fn class_metadata_cache_size(&self) -> usize {
+        self.class_metadata.borrow().len()
+    }
+
+    /// PyO3 boundary crossings during freeze since the last reset.
+    /// Used by the A perf-regression test.
+    fn freeze_pyo3_call_count(&self) -> u64 {
+        self.freeze_crossings.get()
+    }
+
+    fn reset_freeze_pyo3_call_count(&self) {
+        self.freeze_crossings.set(0);
+    }
+
+    /// Count of `(class, method)` pairs the skip-list cache has
+    /// elided in this session. C contract pin.
+    fn freeze_trivial_skip_count(&self) -> u64 {
+        self.freeze_trivial_skips.get()
     }
 
     /// Cap the page cache. Pass `None` for unbounded.
@@ -457,10 +532,21 @@ impl CompilerSession {
         // No separate `collect_all_imports` tree walk — eliminates
         // the second `_get_imports * N` PyO3 boundary cost (planx.md
         // PR7 follow-through).
-        let refs = PyRefs::new(py)?;
+        // PR-Freeze-Speedup B/C: clone session-scoped caches into
+        // PyRefs so freeze can read+write per-class metadata that
+        // survives across calls. Counters reset per arena entry so
+        // tests see a clean number for this compile.
+        self.freeze_crossings.set(0);
+        let refs = PyRefs::new(py)?.with_session_caches(
+            std::rc::Rc::clone(&self.class_metadata),
+            std::rc::Rc::clone(&self.freeze_crossings),
+            std::rc::Rc::clone(&self.freeze_trivial_skips),
+            std::rc::Rc::clone(&self.direct_get_props_calls),
+            std::rc::Rc::clone(&self.direct_rename_props_reads),
+        );
         let imports_dict = PyDict::new_bound(py);
         *refs.bun_imports.borrow_mut() = Some(imports_dict.clone().unbind());
-        let snapshot = freeze_component(py, component, &refs)?;
+        let snapshot = freeze_component_with_class_cache(py, component, &refs)?;
         *refs.bun_imports.borrow_mut() = None;
 
         // Release the GIL for the in-arena memoize + emit. None of the

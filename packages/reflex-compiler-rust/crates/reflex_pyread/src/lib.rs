@@ -35,10 +35,13 @@ pub mod imports;
 pub mod timing;
 
 #[cfg(feature = "pyo3")]
-pub use freeze::freeze_component;
+pub use freeze::{freeze_component, freeze_component_with_class_cache};
 
 #[cfg(feature = "pyo3")]
-pub use pyo3_reader::{read_page, MemoModeCached, PyReadError, PyRefs};
+pub use pyo3_reader::{
+    read_page, ClassMetadata, ClassMetadataCache, MemoModeCached, PyReadError, PyRefs,
+    SkippableMethod, REVALIDATE_EVERY_N, TRIVIAL_WARMUP_THRESHOLD,
+};
 
 #[cfg(feature = "pyo3")]
 pub use memoize::{should_memoize, MemoRefs};
