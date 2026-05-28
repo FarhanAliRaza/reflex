@@ -291,14 +291,7 @@ def _gather_rendered_props(
     Returns:
         ``(pairs, vars_used)`` -- the ``(camelCase_name, js_expr)`` props
         and the var_data indices registered for reactive prop values.
-
-    Raises:
-        GatherUnsupportedError: if the component sets ``custom_attrs``.
     """
-    if getattr(component, "custom_attrs", None):
-        msg = "custom_attrs not yet gathered"
-        raise GatherUnsupportedError(msg)
-
     pairs: list[tuple[str, str]] = []
     vars_used: list[int] = []
 
@@ -321,6 +314,12 @@ def _gather_rendered_props(
         if value is None:
             continue
         _emit(name, value)
+    # custom_attrs come last; their keys (e.g. ``data-foo``) pass through
+    # camelize unchanged since they carry no underscores.
+    custom = getattr(component, "custom_attrs", None)
+    if custom:
+        for key, value in custom.items():
+            _emit(str(key), value)
     return pairs, vars_used
 
 

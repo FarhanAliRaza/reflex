@@ -123,6 +123,9 @@ _SUPPORTED = {
     ),
     "reactive_prop": lambda: rx.el.input(value=_GatherState.items[0]),
     "reactive_box_text": lambda: rx.box(rx.text(_GatherState.n)),
+    "custom_attrs": lambda: rx.box(
+        "content", custom_attrs={"data-testid": "my-box", "aria-label": "main"}
+    ),
 }
 
 
