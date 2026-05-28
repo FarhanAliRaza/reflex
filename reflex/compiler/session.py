@@ -59,6 +59,22 @@ class CompilerSession:
         """
         self._inner.set_emit_cache_enabled(bool(enabled))
 
+    def render_event_chain_js(self, component: object, trigger: str) -> str:
+        """Render ``component``'s ``trigger`` event chain to JS in Rust.
+
+        Byte-identical to ``LiteralVar.create(chain)._js_expr`` but built in
+        Rust from cheaply-extracted raw data, so the gather path avoids the
+        ~109µs/chain Python render. Stub until the Rust renderer lands.
+
+        Args:
+            component: a Component with the trigger in ``event_triggers``.
+            trigger: the snake-case event trigger name (e.g. ``on_click``).
+
+        Returns:
+            The rendered event-chain JS.
+        """
+        return str(self._inner.render_event_chain_js(component, trigger))
+
     def cache_len(self) -> int:
         return int(self._inner.cache_len())
 
