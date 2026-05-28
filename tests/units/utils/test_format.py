@@ -316,6 +316,19 @@ def test_to_camel_case(input: str, output: str):
     assert format.to_camel_case(input) == output
 
 
+def test_to_camel_case_is_cached():
+    """Repeated calls hit the lru_cache and stay correct (PR B)."""
+    format.to_camel_case.cache_clear()
+    first = format.to_camel_case("snake_case_value")
+    second = format.to_camel_case("snake_case_value")
+    assert first == second == "snakeCaseValue"
+    info = format.to_camel_case.cache_info()
+    assert info.hits >= 1
+    # The non-default flag keys separately and stays correct.
+    assert format.to_camel_case("a-b", treat_hyphens_as_underscores=False) == "a-b"
+    assert format.to_camel_case("a-b", treat_hyphens_as_underscores=True) == "aB"
+
+
 @pytest.mark.parametrize(
     ("input", "output"),
     [
