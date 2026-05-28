@@ -33,6 +33,7 @@ from reflex_base.vars.base import LiteralVar, Var
 # NodeKind discriminants (mirror reflex_ir::snapshot::kinds::NodeKind).
 _KIND_ELEMENT = 0
 _KIND_TEXT = 1
+_KIND_FOREACH = 2
 _KIND_COND = 3
 _KIND_FRAGMENT = 6
 _KIND_EXPR = 7
@@ -42,6 +43,7 @@ _FLAG_HAS_STATE_OR_HOOKS = 1 << 0
 _FLAG_HAS_EVENT_TRIGGERS = 1 << 1
 _FLAG_IS_BARE = 1 << 2
 _FLAG_IS_SNAPSHOT_BOUNDARY = 1 << 3
+_FLAG_IS_STRUCTURAL_MEMO_CHILD = 1 << 7
 _FLAG_TAG_IS_NONE = 1 << 8
 _MEMO_DISP_SHIFT = 5
 
@@ -73,13 +75,16 @@ def _is_cond(component: object) -> bool:
     return _qualname(component) == "Cond"
 
 
-def _is_custom_layout_control_flow(component: object) -> bool:
-    """Return whether ``component`` is Foreach/Match.
+def _is_foreach(component: object) -> bool:
+    """Return whether ``component`` is a ``Foreach``."""
+    return _qualname(component) == "Foreach"
 
-    These use a custom arena layout (materialized bodies / arm-index side
-    tables) the current cut doesn't reproduce; Cond recurses normally.
+
+def _is_match(component: object) -> bool:
+    """Return whether ``component`` is a ``Match`` (custom arm-index layout
+    the current cut doesn't reproduce).
     """
-    return _qualname(component) in ("Foreach", "Match")
+    return _qualname(component) == "Match"
 
 
 def _position_byte(vd: Any) -> int:
@@ -463,6 +468,8 @@ def _memo_flags(component: Component) -> int:
     if mode is None:
         return 0
     flags = 0
+    if _is_foreach(component):
+        flags |= _FLAG_IS_STRUCTURAL_MEMO_CHILD
     if not getattr(mode, "recursive", True):
         flags |= _FLAG_IS_SNAPSHOT_BOUNDARY
     disp = getattr(getattr(mode, "disposition", None), "value", None)
@@ -492,30 +499,31 @@ def _reject_unsupported(component: Component) -> None:
         raise GatherUnsupportedError(msg)
 
 
-def _bare_text_value(component: Component) -> str:
-    """Return the literal text content of a Bare node.
+def _is_js_string_literal(expr: str) -> bool:
+    """Return whether ``expr`` is a single JS double-quoted string literal.
 
-    JS-string-escaped with no surrounding quotes, mirroring freeze's
-    ``text_value`` side-table entry.
+    Mirrors freeze's ``decode_js_string_literal`` check: opens and closes
+    with ``"`` and has no unescaped interior quote (so ``"a"+"b"`` is not a
+    single literal). A Bare whose ``_js_expr`` is such a literal becomes a
+    Text node; anything else becomes an Expr node.
 
     Args:
-        component: the Bare component.
+        expr: the candidate ``_js_expr`` string.
 
     Returns:
-        The escaped text content.
-
-    Raises:
-        GatherUnsupportedError: if the Bare contents are not a literal string.
+        ``True`` if ``expr`` is one double-quoted string literal.
     """
-    contents = getattr(component, "contents", None)
-    if contents is not None and _is_reactive(contents):
-        msg = "reactive Bare contents (needs var_data / expr_value)"
-        raise GatherUnsupportedError(msg)
-    expr = str(getattr(contents, "_js_expr", ""))
-    if len(expr) >= 2 and expr[0] == '"' and expr[-1] == '"':
-        return expr[1:-1]
-    msg = f"non-literal Bare contents {contents!r}"
-    raise GatherUnsupportedError(msg)
+    if len(expr) < 2 or expr[0] != '"' or expr[-1] != '"':
+        return False
+    i = 1
+    while i < len(expr) - 1:
+        if expr[i] == "\\":
+            i += 2
+            continue
+        if expr[i] == '"':
+            return False
+        i += 1
+    return True
 
 
 def _empty_node() -> dict:
@@ -561,9 +569,14 @@ class Gatherer:
         return idx
 
     def _child_components(self, component: Component) -> list[Component]:
-        if _is_custom_layout_control_flow(component):
-            msg = f"control flow {_qualname(component)}"
+        if _is_match(component):
+            msg = "control flow Match"
             raise GatherUnsupportedError(msg)
+        if _is_foreach(component):
+            # The Foreach body is materialized once (with a synthetic loop
+            # arg var) and frozen as the single child, mirroring
+            # freeze_foreach_body.
+            return [component._render().render_component()]
         return [c for c in component.children if isinstance(c, Component)]
 
     def _fill(self, component: Component, idx: int) -> None:
@@ -590,9 +603,10 @@ class Gatherer:
         node = _empty_node()
         is_fragment = _is_fragment(component)
         is_cond = _is_cond(component)
+        is_foreach = _is_foreach(component)
         # Only true Element nodes carry a tag + rendered props / events /
-        # style / ref / rename; Fragment and Cond are tagless wrappers.
-        is_element = not (is_fragment or is_cond)
+        # style / ref / rename; Fragment / Cond / Foreach are tagless.
+        is_element = not (is_fragment or is_cond or is_foreach)
 
         node["style_key"] = _qualname(component)
         node["imports"] = _gather_imports(component)
@@ -613,10 +627,15 @@ class Gatherer:
             node["ref_name"] = _gather_ref_name(component)
             node["_rename"] = _gather_rename_props(component)
         else:
-            node["kind"] = _KIND_COND if is_cond else _KIND_FRAGMENT
             node["tag"] = ""
             if is_cond:
+                node["kind"] = _KIND_COND
                 node["_cond_test"] = _js_expr_of(component.cond)
+            elif is_foreach:
+                node["kind"] = _KIND_FOREACH
+                node["_foreach_iter"] = _js_expr_of(component.iterable)
+            else:
+                node["kind"] = _KIND_FRAGMENT
 
         flags = _memo_flags(component)
         if not node["tag"]:
@@ -638,21 +657,26 @@ class Gatherer:
         node["hooks_user"] = hooks_user
         flags = _FLAG_IS_BARE | _FLAG_TAG_IS_NONE | _memo_flags(component)
 
+        # Mirror freeze's `classify_bare`: a Var whose `_js_expr` is a
+        # quoted string literal decodes to a Text node; any other Var is an
+        # inline Expr node carrying the var's JS + (if reactive) its
+        # deduped var_data.
         contents = getattr(component, "contents", None)
-        reactive = contents is not None and _is_reactive(contents)
-        if reactive:
-            # Reactive Bare contents render as an inline Expr node carrying
-            # the var's JS expr + its deduped var_data (mirrors freeze's
-            # `bare_has_reactive_contents` + Expr promotion).
-            node["kind"] = _KIND_EXPR
-            node["_expr_value"] = _js_expr_of(contents)
-            idx = self.vdt.register(contents)
-            if idx is not None:
-                node["vars_used"] = [idx]
-            flags |= _FLAG_HAS_STATE_OR_HOOKS
-        else:
+        if not isinstance(contents, Var):
+            msg = f"non-Var Bare contents {contents!r}"
+            raise GatherUnsupportedError(msg)
+        expr = str(contents._js_expr)
+        if _is_js_string_literal(expr):
             node["kind"] = _KIND_TEXT
-            node["_text_value"] = _bare_text_value(component)
+            node["_text_value"] = expr[1:-1]
+        else:
+            node["kind"] = _KIND_EXPR
+            node["_expr_value"] = expr
+            if _is_reactive(contents):
+                idx = self.vdt.register(contents)
+                if idx is not None:
+                    node["vars_used"] = [idx]
+                flags |= _FLAG_HAS_STATE_OR_HOOKS
         if hooks_internal or hooks_user:
             flags |= _FLAG_HAS_STATE_OR_HOOKS
         node["flags"] = flags
@@ -684,6 +708,7 @@ def gather_arena(root: Component) -> dict:
     control_flow_text: dict[int, str] = {}
     control_flow_cond: dict[int, str] = {}
     control_flow_expr: dict[int, str] = {}
+    control_flow_foreach: dict[int, str] = {}
     rename_props: dict[int, list[tuple[str, str]]] = {}
     for i, node in enumerate(g.nodes):
         assert node is not None
@@ -696,6 +721,9 @@ def gather_arena(root: Component) -> dict:
         expr_value = node.pop("_expr_value", None)
         if expr_value is not None:
             control_flow_expr[i] = expr_value
+        foreach_iter = node.pop("_foreach_iter", None)
+        if foreach_iter is not None:
+            control_flow_foreach[i] = foreach_iter
         rename = node.pop("_rename", None)
         if rename:
             rename_props[i] = rename
@@ -712,7 +740,7 @@ def gather_arena(root: Component) -> dict:
         "control_flow": {
             "text_value": control_flow_text,
             "cond_test": control_flow_cond,
-            "foreach_iter": {},
+            "foreach_iter": control_flow_foreach,
             "match_value": {},
             "expr_value": control_flow_expr,
             "memo_key": {},

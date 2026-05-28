@@ -126,6 +126,15 @@ _SUPPORTED = {
     "custom_attrs": lambda: rx.box(
         "content", custom_attrs={"data-testid": "my-box", "aria-label": "main"}
     ),
+    # Foreach materializes its body (with a synthetic loop var) as the
+    # single child.
+    "foreach": lambda: rx.foreach(_GatherState.items, lambda x: rx.text(x)),
+    "foreach_index": lambda: rx.foreach(
+        _GatherState.items, lambda x, i: rx.text(f"{i}:{x}")
+    ),
+    "foreach_in_box": lambda: rx.box(
+        rx.foreach(_GatherState.items, lambda x: rx.text(x))
+    ),
 }
 
 
@@ -151,7 +160,6 @@ def test_gather_emit_matches_freeze(sess: CompilerSession, name: str) -> None:
 # Features outside the current cut must raise (caller falls back to freeze),
 # never silently emit wrong output.
 _UNSUPPORTED = {
-    "foreach": lambda: rx.foreach(_GatherState.items, lambda i: rx.text(i)),
     "match": lambda: rx.match(_GatherState.n, (1, rx.text("one")), rx.text("d")),
 }
 
