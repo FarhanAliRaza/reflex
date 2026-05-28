@@ -279,6 +279,7 @@ dependencies = [
  "rmp",
  "rmp-serde",
  "serde",
+ "smallvec",
  "thiserror",
 ]
 

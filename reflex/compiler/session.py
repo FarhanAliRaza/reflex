@@ -403,6 +403,56 @@ class CompilerSession:
         )
         return str(page_js), [(str(n), str(j)) for n, j in bodies], imports_dict
 
+    def compile_page_from_arena(
+        self,
+        bundle: dict,
+        route_ident: str,
+        route: str,
+        *,
+        title: str | None = None,
+        meta_tags: list[tuple[str, str]] | None = None,
+        custom_code: list[str] | None = None,
+        hooks_body: str | None = None,
+    ) -> tuple[str, list[tuple[str, str]]]:
+        """Compile a page from a pre-gathered snapshot wire bundle (PR A).
+
+        The Rust side rebuilds the ``Snapshot`` from ``bundle`` (the
+        inverse of :meth:`dump_snapshot`), then runs the same memoize +
+        emit tail as :meth:`compile_page_from_component_arena`. For a
+        bundle equal to ``dump_snapshot(component)`` the returned page JSX
+        and memo bodies are byte-identical to the freeze path.
+
+        Unlike the freeze entrypoint this returns no page-level imports
+        dict — the bundle carries per-node imports inside the snapshot;
+        the ``bun install`` dict is gathered separately on the Python side
+        alongside the bundle.
+
+        Args:
+            bundle: a snapshot wire dict as produced by
+                :meth:`dump_snapshot` (or the future Python gatherer).
+            route_ident: JS identifier exported as ``__reflex_route_ident``.
+            route: URL path emitted as ``__reflex_route``.
+            title: optional document title.
+            meta_tags: optional ``[(name_or_property, content), …]``.
+            custom_code: caller-supplied custom-code blocks.
+            hooks_body: caller-supplied hooks string.
+
+        Returns:
+            ``(page_js, memo_bodies)`` where ``memo_bodies`` is a list of
+            ``(name, jsx_source)`` for each unique memo body.
+        """
+        meta = list(meta_tags) if meta_tags else None
+        page_js, bodies = self._inner.compile_page_from_arena(
+            bundle,
+            route_ident,
+            route,
+            title,
+            meta,
+            list(custom_code) if custom_code else None,
+            hooks_body,
+        )
+        return str(page_js), [(str(n), str(j)) for n, j in bodies]
+
     def write_if_changed(self, out_path: str, content: str) -> bool:
         """PR0 skip-if-unchanged write.
 

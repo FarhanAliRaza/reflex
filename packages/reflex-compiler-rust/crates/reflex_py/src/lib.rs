@@ -11,6 +11,7 @@
 //!    blob, runs the parse → JSX-emit pipeline, returns a JS source string.
 //!    Salsa caching lands in D5 — for now every call rebuilds.
 
+mod from_wire;
 mod session;
 mod snapshot_dump;
 

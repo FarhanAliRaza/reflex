@@ -524,24 +524,7 @@ impl CompilerSession {
         custom_code: Option<Vec<String>>,
         hooks_body: Option<&str>,
     ) -> PyResult<(String, Vec<(String, String)>, Bound<'py, PyDict>)> {
-        let meta_pairs: Vec<(String, String)> = match meta_tags {
-            Some(list) => {
-                let mut out = Vec::with_capacity(list.len());
-                for item in list.iter() {
-                    let tup: Bound<PyTuple> = item.downcast_into()?;
-                    if tup.len() != 2 {
-                        return Err(pyo3::exceptions::PyValueError::new_err(
-                            "meta_tags entries must be (name, content) tuples",
-                        ));
-                    }
-                    let n: String = tup.get_item(0)?.extract()?;
-                    let c: String = tup.get_item(1)?.extract()?;
-                    out.push((n, c));
-                }
-                out
-            }
-            None => Vec::new(),
-        };
+        let meta_pairs = parse_meta_tags(meta_tags)?;
 
         let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
         let hooks_owned = hooks_body.unwrap_or("").to_string();
@@ -574,74 +557,150 @@ impl CompilerSession {
         // Release the GIL for the in-arena memoize + emit. None of the
         // following calls touch Python state — they read Snapshot,
         // write to `CodeBuffer`s, and return owned `String`s.
-        let route_ident_owned = route_ident.to_string();
-        let route_owned = route.to_string();
-        let title_owned = title.map(|s| s.to_owned());
-        let (page_js, memo_bodies) = py.allow_threads(move || {
-            let mut snap = snapshot;
-            memoize_arena_pass(&mut snap);
-
-            // Emit the page module.
-            let mut page_buf = CodeBuffer::with_capacity(4096);
-            let custom_code_refs: Vec<&str> =
-                custom_code_owned.iter().map(String::as_str).collect();
-            emit_page_module_from_snapshot(
-                &mut page_buf,
-                &snap,
-                &route_ident_owned,
-                &route_owned,
-                title_owned.as_deref(),
-                &meta_pairs,
-                &custom_code_refs,
-                &hooks_owned,
-            );
-            let page_js = String::from_utf8(page_buf.into_bytes()).unwrap_or_default();
-
-            // Emit each unique memo body.
-            let mut bodies: Vec<(String, String)> = Vec::with_capacity(snap.memo_bodies.len());
-            // Clone the (name, root) pairs out so we can release the
-            // borrow on `snap.memo_bodies` before re-borrowing for the
-            // emit walk (which reads `snap.wrap_redirects` etc.).
-            let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> = snap
-                .memo_bodies
-                .iter()
-                .map(|b| (b.name, b.root))
-                .collect();
-            for (name_sym, root_idx) in body_specs {
-                let mut body_buf = CodeBuffer::with_capacity(2048);
-                let name_str = reflex_intern::resolve_unchecked(name_sym).to_owned();
-                // Passthrough signature is the default. Snapshot
-                // bodies would use `"()"` — for now we always use
-                // `"{ children }"` since the freeze path always
-                // produces passthrough wrappers. The snapshot-body
-                // variant is a follow-on once the freeze pass
-                // captures `is_snapshot_boundary` per memo candidate.
-                // Passthrough signature is wrapped in `()` so the
-                // emitted shell is `memo(({ children }) => …)` —
-                // matches the Python `_signature_for(definition)`
-                // output for `passthrough_hole_child is not None`.
-                // Snapshot bodies (definition.passthrough_hole_child
-                // is None in Python) want `"()"`; the arena freeze
-                // currently produces passthrough wrappers only, so
-                // this default is correct. Snapshot-body detection is
-                // a follow-on PR (carry `is_snapshot_boundary` per
-                // memo candidate from freeze).
-                emit_memo_module_from_snapshot(
-                    &mut body_buf,
-                    &snap,
-                    root_idx,
-                    &name_str,
-                    "({ children })",
-                    "",
-                );
-                let body_js = String::from_utf8(body_buf.into_bytes()).unwrap_or_default();
-                bodies.push((name_str, body_js));
-            }
-            (page_js, bodies)
-        });
+        let (page_js, memo_bodies) = emit_page_and_memo_bodies(
+            py,
+            snapshot,
+            route_ident,
+            route,
+            title,
+            meta_pairs,
+            custom_code_owned,
+            hooks_owned,
+        );
 
         Ok((page_js, memo_bodies, imports_dict))
     }
+
+    /// Arena page compile from a pre-gathered wire bundle (refine-local
+    /// plan, PR A). Identical to [`Self::compile_page_from_component_arena`]
+    /// from the snapshot onward — it just sources the `Snapshot` by
+    /// rebuilding it from the `bundle` dict (the inverse of
+    /// `dump_snapshot`) instead of freezing a live Component tree. The
+    /// emit tail is shared (`emit_page_and_memo_bodies`), so the page JSX +
+    /// memo bodies are byte-identical to the freeze path for an equivalent
+    /// snapshot.
+    ///
+    /// Unlike the freeze entrypoint this does not return a page-level
+    /// imports dict: the bundle carries per-node imports inside the
+    /// snapshot, but the page-level `bun install` dict is harvested
+    /// separately by the caller (it is gathered alongside the bundle on
+    /// the Python side, mirroring the freeze path's `bun_imports`).
+    #[pyo3(signature = (bundle, route_ident, route, title=None, meta_tags=None, custom_code=None, hooks_body=None))]
+    fn compile_page_from_arena(
+        &self,
+        py: Python<'_>,
+        bundle: &Bound<'_, PyDict>,
+        route_ident: &str,
+        route: &str,
+        title: Option<&str>,
+        meta_tags: Option<&Bound<'_, PyList>>,
+        custom_code: Option<Vec<String>>,
+        hooks_body: Option<&str>,
+    ) -> PyResult<(String, Vec<(String, String)>)> {
+        let meta_pairs = parse_meta_tags(meta_tags)?;
+        let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
+        let hooks_owned = hooks_body.unwrap_or("").to_string();
+        let snapshot = crate::from_wire::build_snapshot_from_wire(bundle)?;
+        Ok(emit_page_and_memo_bodies(
+            py,
+            snapshot,
+            route_ident,
+            route,
+            title,
+            meta_pairs,
+            custom_code_owned,
+            hooks_owned,
+        ))
+    }
+}
+
+/// Parse the optional `meta_tags` list of `(name, content)` tuples into
+/// owned `(String, String)` pairs. Shared by both arena entrypoints.
+fn parse_meta_tags(meta_tags: Option<&Bound<'_, PyList>>) -> PyResult<Vec<(String, String)>> {
+    match meta_tags {
+        Some(list) => {
+            let mut out = Vec::with_capacity(list.len());
+            for item in list.iter() {
+                let tup: Bound<PyTuple> = item.downcast_into()?;
+                if tup.len() != 2 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "meta_tags entries must be (name, content) tuples",
+                    ));
+                }
+                let n: String = tup.get_item(0)?.extract()?;
+                let c: String = tup.get_item(1)?.extract()?;
+                out.push((n, c));
+            }
+            Ok(out)
+        }
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Memoize + emit a frozen snapshot into `(page_js, memo_bodies)`.
+///
+/// Shared, GIL-released tail of both arena entrypoints
+/// (`compile_page_from_component_arena` and `compile_page_from_arena`) so
+/// the page module + memo body emit is byte-identical regardless of how
+/// the `Snapshot` was sourced (live freeze vs wire rebuild). None of the
+/// work here touches Python state.
+fn emit_page_and_memo_bodies(
+    py: Python<'_>,
+    snapshot: reflex_ir::Snapshot,
+    route_ident: &str,
+    route: &str,
+    title: Option<&str>,
+    meta_pairs: Vec<(String, String)>,
+    custom_code: Vec<String>,
+    hooks_body: String,
+) -> (String, Vec<(String, String)>) {
+    let route_ident_owned = route_ident.to_string();
+    let route_owned = route.to_string();
+    let title_owned = title.map(|s| s.to_owned());
+    py.allow_threads(move || {
+        let mut snap = snapshot;
+        memoize_arena_pass(&mut snap);
+
+        // Emit the page module.
+        let mut page_buf = CodeBuffer::with_capacity(4096);
+        let custom_code_refs: Vec<&str> = custom_code.iter().map(String::as_str).collect();
+        emit_page_module_from_snapshot(
+            &mut page_buf,
+            &snap,
+            &route_ident_owned,
+            &route_owned,
+            title_owned.as_deref(),
+            &meta_pairs,
+            &custom_code_refs,
+            &hooks_body,
+        );
+        let page_js = String::from_utf8(page_buf.into_bytes()).unwrap_or_default();
+
+        // Emit each unique memo body. Passthrough signature `"({ children })"`
+        // is the default — the arena freeze produces passthrough wrappers
+        // only (snapshot-body detection is a follow-on).
+        let mut bodies: Vec<(String, String)> = Vec::with_capacity(snap.memo_bodies.len());
+        let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> = snap
+            .memo_bodies
+            .iter()
+            .map(|b| (b.name, b.root))
+            .collect();
+        for (name_sym, root_idx) in body_specs {
+            let mut body_buf = CodeBuffer::with_capacity(2048);
+            let name_str = reflex_intern::resolve_unchecked(name_sym).to_owned();
+            emit_memo_module_from_snapshot(
+                &mut body_buf,
+                &snap,
+                root_idx,
+                &name_str,
+                "({ children })",
+                "",
+            );
+            let body_js = String::from_utf8(body_buf.into_bytes()).unwrap_or_default();
+            bodies.push((name_str, body_js));
+        }
+        (page_js, bodies)
+    })
 }
 
 /// Open `out_path` for buffered write and run `f` on the writer, mapping
