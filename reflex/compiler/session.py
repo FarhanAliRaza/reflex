@@ -64,7 +64,7 @@ class CompilerSession:
 
         Byte-identical to ``LiteralVar.create(chain)._js_expr`` but built in
         Rust from cheaply-extracted raw data, so the gather path avoids the
-        ~109µs/chain Python render. Stub until the Rust renderer lands.
+        ~109us/chain Python render. Stub until the Rust renderer lands.
 
         Args:
             component: a Component with the trigger in ``event_triggers``.

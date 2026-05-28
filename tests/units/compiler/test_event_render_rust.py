@@ -21,10 +21,10 @@ call_script / noop).
 from __future__ import annotations
 
 import pytest
+from reflex_base.vars.base import LiteralVar
 
 import reflex as rx
 from reflex.compiler.session import CompilerSession
-from reflex_base.vars.base import LiteralVar
 
 
 class _EvState(rx.State):
