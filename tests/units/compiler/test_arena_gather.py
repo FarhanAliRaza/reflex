@@ -98,6 +98,12 @@ _SUPPORTED = {
     "nested_event": lambda: rx.box(
         rx.button("x", on_click=_GatherState.tick), rx.text("y")
     ),
+    # Cond recurses its branches normally (no custom arena layout).
+    "cond": lambda: rx.cond(_GatherState.n > 0, rx.text("yes"), rx.text("no")),
+    "cond_static": lambda: rx.cond(True, rx.text("a"), rx.text("b")),
+    "cond_nested": lambda: rx.box(
+        rx.cond(_GatherState.n > 0, rx.text("x"), rx.box())
+    ),
 }
 
 
@@ -126,7 +132,6 @@ _UNSUPPORTED = {
     "reactive_rendered_prop": lambda: rx.el.input(value=_GatherState.items[0]),
     "reactive_text": lambda: rx.text(_GatherState.n),
     "foreach": lambda: rx.foreach(_GatherState.items, lambda i: rx.text(i)),
-    "cond": lambda: rx.cond(_GatherState.n > 0, rx.text("y"), rx.text("n")),
     "match": lambda: rx.match(_GatherState.n, (1, rx.text("one")), rx.text("d")),
 }
 

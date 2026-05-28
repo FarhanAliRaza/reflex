@@ -33,6 +33,7 @@ from reflex_base.vars.base import LiteralVar, Var
 # NodeKind discriminants (mirror reflex_ir::snapshot::kinds::NodeKind).
 _KIND_ELEMENT = 0
 _KIND_TEXT = 1
+_KIND_COND = 3
 _KIND_FRAGMENT = 6
 
 # NodeFlags bits (mirror reflex_ir::snapshot::flags::NodeFlags).
@@ -66,9 +67,18 @@ def _is_fragment(component: object) -> bool:
     return _qualname(component) == "Fragment"
 
 
-def _is_control_flow(component: object) -> bool:
-    """Return whether ``component`` is a Foreach/Cond/Match node."""
-    return _qualname(component) in ("Foreach", "Cond", "Match")
+def _is_cond(component: object) -> bool:
+    """Return whether ``component`` is a ``Cond``."""
+    return _qualname(component) == "Cond"
+
+
+def _is_custom_layout_control_flow(component: object) -> bool:
+    """Return whether ``component`` is Foreach/Match.
+
+    These use a custom arena layout (materialized bodies / arm-index side
+    tables) the current cut doesn't reproduce; Cond recurses normally.
+    """
+    return _qualname(component) in ("Foreach", "Match")
 
 
 def _is_reactive(value: Any) -> bool:
@@ -445,7 +455,7 @@ class Gatherer:
         return idx
 
     def _child_components(self, component: Component) -> list[Component]:
-        if _is_control_flow(component):
+        if _is_custom_layout_control_flow(component):
             msg = f"control flow {_qualname(component)}"
             raise GatherUnsupportedError(msg)
         return [c for c in component.children if isinstance(c, Component)]
@@ -473,27 +483,33 @@ class Gatherer:
         _reject_unsupported(component)
         node = _empty_node()
         is_fragment = _is_fragment(component)
-        tag = (
-            None
-            if is_fragment
-            else (getattr(component, "alias", None) or getattr(component, "tag", None))
-        )
-        node["tag"] = str(tag) if tag else ""
-        node["kind"] = _KIND_FRAGMENT if is_fragment else _KIND_ELEMENT
+        is_cond = _is_cond(component)
+        # Only true Element nodes carry a tag + rendered props / events /
+        # style / ref / rename; Fragment and Cond are tagless wrappers.
+        is_element = not (is_fragment or is_cond)
+
         node["style_key"] = _qualname(component)
-        node["style"] = "" if is_fragment else _gather_style(component)
-        node["rendered_props"] = (
-            [] if is_fragment else _gather_rendered_props(component)
-        )
-        node["event_callbacks"] = (
-            [] if is_fragment else _gather_event_callbacks(component)
-        )
         node["imports"] = _gather_imports(component)
-        node["ref_name"] = "" if is_fragment else _gather_ref_name(component)
         hooks_internal = _gather_hooks_internal(component)
         hooks_user = _gather_hooks_user(component)
         node["hooks_internal"] = hooks_internal
         node["hooks_user"] = hooks_user
+
+        if is_element:
+            tag = getattr(component, "alias", None) or getattr(component, "tag", None)
+            node["kind"] = _KIND_ELEMENT
+            node["tag"] = str(tag) if tag else ""
+            node["style"] = _gather_style(component)
+            node["rendered_props"] = _gather_rendered_props(component)
+            node["event_callbacks"] = _gather_event_callbacks(component)
+            node["ref_name"] = _gather_ref_name(component)
+            node["_rename"] = _gather_rename_props(component)
+        else:
+            node["kind"] = _KIND_COND if is_cond else _KIND_FRAGMENT
+            node["tag"] = ""
+            if is_cond:
+                node["_cond_test"] = _js_expr_of(component.cond)
+
         flags = _memo_flags(component)
         if not node["tag"]:
             flags |= _FLAG_TAG_IS_NONE
@@ -502,7 +518,6 @@ class Gatherer:
         if hooks_internal or hooks_user:
             flags |= _FLAG_HAS_STATE_OR_HOOKS
         node["flags"] = flags
-        node["_rename"] = _gather_rename_props(component)
         return node
 
     def _gather_leaf_bare(self, component: Component) -> dict:
@@ -545,12 +560,16 @@ def gather_arena(root: Component) -> dict:
 
     nodes: list[dict] = []
     control_flow_text: dict[int, str] = {}
+    control_flow_cond: dict[int, str] = {}
     rename_props: dict[int, list[tuple[str, str]]] = {}
     for i, node in enumerate(g.nodes):
         assert node is not None
         text_value = node.pop("_text_value", None)
         if text_value is not None:
             control_flow_text[i] = text_value
+        cond_test = node.pop("_cond_test", None)
+        if cond_test is not None:
+            control_flow_cond[i] = cond_test
         rename = node.pop("_rename", None)
         if rename:
             rename_props[i] = rename
@@ -566,7 +585,7 @@ def gather_arena(root: Component) -> dict:
         "var_components": [],
         "control_flow": {
             "text_value": control_flow_text,
-            "cond_test": {},
+            "cond_test": control_flow_cond,
             "foreach_iter": {},
             "match_value": {},
             "expr_value": {},
