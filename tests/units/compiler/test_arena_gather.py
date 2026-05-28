@@ -72,8 +72,19 @@ def _normalize(bundle: dict) -> dict:
         ):
             n[k] = [tuple(x) for x in n.get(k, [])]
         n["children"] = tuple(n["children"])
+        n["vars_used"] = list(n.get("vars_used", []))
         nodes.append(n)
     out["nodes"] = nodes
+    # var_data range fields + var_imports come back as tuples from the dump;
+    # normalize both sides to tuples for comparison.
+    out["var_data"] = [
+        {
+            k: (tuple(v) if isinstance(v, (list, tuple)) else v)
+            for k, v in entry.items()
+        }
+        for entry in out.get("var_data", [])
+    ]
+    out["var_imports"] = [tuple(x) for x in out.get("var_imports", [])]
     return out
 
 
@@ -104,6 +115,14 @@ _SUPPORTED = {
     "cond_nested": lambda: rx.box(
         rx.cond(_GatherState.n > 0, rx.text("x"), rx.box())
     ),
+    # Reactive content via the var_data table (reactive Bare -> Expr,
+    # reactive rendered prop, and var_data dedup across nodes).
+    "reactive_text": lambda: rx.text(_GatherState.n),
+    "reactive_text_dedup": lambda: rx.vstack(
+        rx.text(f"a={_GatherState.n}"), rx.text(f"b={_GatherState.n}")
+    ),
+    "reactive_prop": lambda: rx.el.input(value=_GatherState.items[0]),
+    "reactive_box_text": lambda: rx.box(rx.text(_GatherState.n)),
 }
 
 
@@ -129,8 +148,6 @@ def test_gather_emit_matches_freeze(sess: CompilerSession, name: str) -> None:
 # Features outside the current cut must raise (caller falls back to freeze),
 # never silently emit wrong output.
 _UNSUPPORTED = {
-    "reactive_rendered_prop": lambda: rx.el.input(value=_GatherState.items[0]),
-    "reactive_text": lambda: rx.text(_GatherState.n),
     "foreach": lambda: rx.foreach(_GatherState.items, lambda i: rx.text(i)),
     "match": lambda: rx.match(_GatherState.n, (1, rx.text("one")), rx.text("d")),
 }

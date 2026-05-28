@@ -35,6 +35,7 @@ _KIND_ELEMENT = 0
 _KIND_TEXT = 1
 _KIND_COND = 3
 _KIND_FRAGMENT = 6
+_KIND_EXPR = 7
 
 # NodeFlags bits (mirror reflex_ir::snapshot::flags::NodeFlags).
 _FLAG_HAS_STATE_OR_HOOKS = 1 << 0
@@ -81,6 +82,95 @@ def _is_custom_layout_control_flow(component: object) -> bool:
     return _qualname(component) in ("Foreach", "Match")
 
 
+def _position_byte(vd: Any) -> int:
+    """Mirror freeze's ``pull_u8(var_data, "position")``.
+
+    The position byte is the ``position`` field if it is an int, else its
+    ``.value`` if that is an int, else 255 -- the string-enum
+    ``HookPosition`` extracts to neither, so it lands at 255.
+
+    Args:
+        vd: the merged ``VarData``.
+
+    Returns:
+        The position byte (255 when unset / not an int).
+    """
+    pos = getattr(vd, "position", None)
+    for candidate in (pos, getattr(pos, "value", None)):
+        if isinstance(candidate, int) and not isinstance(candidate, bool):
+            return candidate
+    return 255
+
+
+class _VarDataTable:
+    """Accumulates deduped ``VarData`` entries + their dense backings,
+    mirroring freeze's ``register_var_data`` (dedup keyed on Python
+    ``id(var)``; an entry is committed only when some bucket is
+    non-trivial).
+    """
+
+    def __init__(self) -> None:
+        self.entries: list[dict] = []
+        self.hooks: list[str] = []
+        self.imports: list[tuple[str, str]] = []
+        self.deps: list[str] = []
+        self.components: list[str] = []
+        self._dedup: dict[int, int] = {}
+
+    def register(self, var: Any) -> int | None:
+        """Register ``var``'s var-data into the table (deduped by id).
+
+        Args:
+            var: the candidate Var.
+
+        Returns:
+            The var_data index, or ``None`` for a non-Var / trivial var-data.
+        """
+        if not isinstance(var, Var):
+            return None
+        key = id(var)
+        if key in self._dedup:
+            return self._dedup[key]
+        vd = var._get_all_var_data()
+        if vd is None:
+            return None
+
+        hooks = [str(h) for h in (getattr(vd, "hooks", ()) or ())]
+        # VarData.imports is a tuple of (module, (ImportVar, ...)) pairs --
+        # freeze calls `.items()` on it, which fails on a tuple, so the
+        # imports bucket is always empty for VarData. Mirror that.
+        imports: list[tuple[str, str]] = []
+        deps = [str(d) for d in (getattr(vd, "deps", ()) or ()) if str(d)]
+        components = [
+            str(c) for c in (getattr(vd, "components", ()) or ()) if str(c)
+        ]
+        state = str(vd.state) if getattr(vd, "state", "") else ""
+
+        if not (hooks or imports or deps or components or state):
+            return None
+
+        hooks_start = len(self.hooks)
+        self.hooks.extend(hooks)
+        imports_start = len(self.imports)
+        self.imports.extend(imports)
+        deps_start = len(self.deps)
+        self.deps.extend(deps)
+        comps_start = len(self.components)
+        self.components.extend(components)
+
+        idx = len(self.entries)
+        self.entries.append({
+            "hooks": (hooks_start, len(self.hooks)),
+            "imports": (imports_start, len(self.imports)),
+            "deps": (deps_start, len(self.deps)),
+            "components": (comps_start, len(self.components)),
+            "state": state,
+            "position": _position_byte(vd),
+        })
+        self._dedup[key] = idx
+        return idx
+
+
 def _is_reactive(value: Any) -> bool:
     """Return whether a value resolves to a reactive Var.
 
@@ -118,25 +208,6 @@ def _js_expr_of(value: Any) -> str:
     if isinstance(value, Var):
         return str(value._js_expr)
     return str(LiteralVar.create(value)._js_expr)
-
-
-def _render_prop_value(value: Any) -> str:
-    """Render a rendered-prop value, refusing reactive vars.
-
-    Args:
-        value: the prop value.
-
-    Returns:
-        The JS expression string (empty if ``value`` is ``None``).
-
-    Raises:
-        GatherUnsupportedError: if the value is a reactive Var (it would
-            need a ``var_data`` entry, which this cut doesn't gather).
-    """
-    if value is not None and _is_reactive(value):
-        msg = "reactive rendered-prop var (needs var_data)"
-        raise GatherUnsupportedError(msg)
-    return _js_expr_of(value)
 
 
 def _gather_imports(component: Component) -> list[tuple[str, str]]:
@@ -204,7 +275,9 @@ def _camelize_prop_name(name: str) -> str:
     return to_camel_case(name, treat_hyphens_as_underscores=False)
 
 
-def _gather_rendered_props(component: Component) -> list[tuple[str, str]]:
+def _gather_rendered_props(
+    component: Component, vdt: _VarDataTable
+) -> tuple[list[tuple[str, str]], list[int]]:
     """Gather rendered props, mirroring ``read_rendered_props``.
 
     Dataclass props (trailing ``_`` stripped, ``None`` skipped, name
@@ -213,9 +286,11 @@ def _gather_rendered_props(component: Component) -> list[tuple[str, str]]:
 
     Args:
         component: the component to read props from.
+        vdt: the var-data table reactive prop values are registered into.
 
     Returns:
-        A list of ``(camelCase_name, js_expr)`` pairs.
+        ``(pairs, vars_used)`` -- the ``(camelCase_name, js_expr)`` props
+        and the var_data indices registered for reactive prop values.
 
     Raises:
         GatherUnsupportedError: if the component sets ``custom_attrs``.
@@ -225,23 +300,28 @@ def _gather_rendered_props(component: Component) -> list[tuple[str, str]]:
         raise GatherUnsupportedError(msg)
 
     pairs: list[tuple[str, str]] = []
+    vars_used: list[int] = []
+
+    def _emit(name: str, value: Any) -> None:
+        if _is_reactive(value):
+            idx = vdt.register(value)
+            if idx is not None and idx not in vars_used:
+                vars_used.append(idx)
+        expr = _js_expr_of(value)
+        if expr:
+            pairs.append((_camelize_prop_name(name), expr))
+
     for raw in component.get_props():
-        attr = raw.removesuffix("_")
         value = getattr(component, raw, None)
         if value is None:
             continue
-        expr = _render_prop_value(value)
-        if not expr:
-            continue
-        pairs.append((_camelize_prop_name(attr), expr))
+        _emit(raw.removesuffix("_"), value)
     for name in ("key", "id", "class_name"):
         value = getattr(component, name, None)
         if value is None:
             continue
-        expr = _render_prop_value(value)
-        if expr:
-            pairs.append((_camelize_prop_name(name), expr))
-    return pairs
+        _emit(name, value)
+    return pairs, vars_used
 
 
 def _gather_event_callbacks(component: Component) -> list[tuple[str, str]]:
@@ -472,8 +552,9 @@ class Gatherer:
     """
 
     def __init__(self) -> None:
-        """Initialize an empty node arena."""
+        """Initialize an empty node arena + var-data table."""
         self.nodes: list[dict | None] = []
+        self.vdt = _VarDataTable()
 
     def _reserve(self) -> int:
         idx = len(self.nodes)
@@ -521,11 +602,14 @@ class Gatherer:
         node["hooks_internal"] = hooks_internal
         node["hooks_user"] = hooks_user
 
+        vars_used: list[int] = []
         if is_element:
             node["kind"] = _KIND_ELEMENT
             node["tag"] = _gather_tag(component)
             node["style"] = _gather_style(component)
-            node["rendered_props"] = _gather_rendered_props(component)
+            pairs, vars_used = _gather_rendered_props(component, self.vdt)
+            node["rendered_props"] = pairs
+            node["vars_used"] = vars_used
             node["event_callbacks"] = _gather_event_callbacks(component)
             node["ref_name"] = _gather_ref_name(component)
             node["_rename"] = _gather_rename_props(component)
@@ -540,25 +624,39 @@ class Gatherer:
             flags |= _FLAG_TAG_IS_NONE
         if node["event_callbacks"]:
             flags |= _FLAG_HAS_EVENT_TRIGGERS
-        if hooks_internal or hooks_user:
+        if hooks_internal or hooks_user or vars_used:
             flags |= _FLAG_HAS_STATE_OR_HOOKS
         node["flags"] = flags
         return node
 
     def _gather_leaf_bare(self, component: Component) -> dict:
         node = _empty_node()
-        node["kind"] = _KIND_TEXT
         node["style_key"] = "Bare"
         hooks_internal = _gather_hooks_internal(component)
         hooks_user = _gather_hooks_user(component)
         node["hooks_internal"] = hooks_internal
+        node["imports"] = _gather_imports(component)
         node["hooks_user"] = hooks_user
         flags = _FLAG_IS_BARE | _FLAG_TAG_IS_NONE | _memo_flags(component)
+
+        contents = getattr(component, "contents", None)
+        reactive = contents is not None and _is_reactive(contents)
+        if reactive:
+            # Reactive Bare contents render as an inline Expr node carrying
+            # the var's JS expr + its deduped var_data (mirrors freeze's
+            # `bare_has_reactive_contents` + Expr promotion).
+            node["kind"] = _KIND_EXPR
+            node["_expr_value"] = _js_expr_of(contents)
+            idx = self.vdt.register(contents)
+            if idx is not None:
+                node["vars_used"] = [idx]
+            flags |= _FLAG_HAS_STATE_OR_HOOKS
+        else:
+            node["kind"] = _KIND_TEXT
+            node["_text_value"] = _bare_text_value(component)
         if hooks_internal or hooks_user:
             flags |= _FLAG_HAS_STATE_OR_HOOKS
         node["flags"] = flags
-        node["imports"] = _gather_imports(component)
-        node["_text_value"] = _bare_text_value(component)
         return node
 
 
@@ -586,6 +684,7 @@ def gather_arena(root: Component) -> dict:
     nodes: list[dict] = []
     control_flow_text: dict[int, str] = {}
     control_flow_cond: dict[int, str] = {}
+    control_flow_expr: dict[int, str] = {}
     rename_props: dict[int, list[tuple[str, str]]] = {}
     for i, node in enumerate(g.nodes):
         assert node is not None
@@ -595,6 +694,9 @@ def gather_arena(root: Component) -> dict:
         cond_test = node.pop("_cond_test", None)
         if cond_test is not None:
             control_flow_cond[i] = cond_test
+        expr_value = node.pop("_expr_value", None)
+        if expr_value is not None:
+            control_flow_expr[i] = expr_value
         rename = node.pop("_rename", None)
         if rename:
             rename_props[i] = rename
@@ -603,17 +705,17 @@ def gather_arena(root: Component) -> dict:
     return {
         "root": root_idx,
         "nodes": nodes,
-        "var_data": [],
-        "var_hooks": [],
-        "var_imports": [],
-        "var_deps": [],
-        "var_components": [],
+        "var_data": list(g.vdt.entries),
+        "var_hooks": list(g.vdt.hooks),
+        "var_imports": list(g.vdt.imports),
+        "var_deps": list(g.vdt.deps),
+        "var_components": list(g.vdt.components),
         "control_flow": {
             "text_value": control_flow_text,
             "cond_test": control_flow_cond,
             "foreach_iter": {},
             "match_value": {},
-            "expr_value": {},
+            "expr_value": control_flow_expr,
             "memo_key": {},
             "match_arms": {},
             "match_default": {},
