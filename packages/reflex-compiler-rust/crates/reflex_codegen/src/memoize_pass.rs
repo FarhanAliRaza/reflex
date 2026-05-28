@@ -91,11 +91,7 @@ pub fn memoize_arena_pass(snapshot: &mut Snapshot) -> usize {
     // Running trigger count for the event_callback_overrides map —
     // reserved in one allocation rather than growing on each
     // `insert`.
-    let trigger_total: usize = snapshot
-        .nodes
-        .iter()
-        .map(|n| n.event_callbacks.len())
-        .sum();
+    let trigger_total: usize = snapshot.nodes.iter().map(|n| n.event_callbacks.len()).sum();
     snapshot.event_callback_overrides.reserve(trigger_total);
 
     for idx in 0..n_initial as NodeIdx {
@@ -202,9 +198,8 @@ fn rewrite_one_node_event_triggers(snapshot: &mut Snapshot, idx: NodeIdx) -> usi
         let expr = resolve_unchecked(*expr_sym);
         let hash = xxhash_rust::xxh3::xxh3_64(expr.as_bytes());
         let memo_name = format!("{trigger}_{hash:016x}");
-        let hook_code = format!(
-            "const {memo_name} = useCallback({expr}, [addEvents, ReflexEvent])"
-        );
+        let hook_code =
+            format!("const {memo_name} = useCallback({expr}, [addEvents, ReflexEvent])");
         new_hooks.push(HookEntry::new(intern(&hook_code), 1));
         new_callbacks.push((*trigger_sym, intern(&memo_name)));
         rewritten += 1;
@@ -238,8 +233,7 @@ fn insert_memo_wrappers(snapshot: &mut Snapshot) {
     // Walk candidates in the same order `collect_memo_candidates`
     // does, lifting `(idx, hash, children_range)` into a plan vec so
     // we can mutate `snapshot.nodes` in the followup loop.
-    let plan: Vec<(NodeIdx, u64, std::ops::Range<NodeIdx>)> = (0..snapshot.nodes.len()
-        as NodeIdx)
+    let plan: Vec<(NodeIdx, u64, std::ops::Range<NodeIdx>)> = (0..snapshot.nodes.len() as NodeIdx)
         .filter(|&idx| should_memoize_arena(snapshot, idx))
         .map(|idx| {
             let n = snapshot.node(idx);
@@ -413,9 +407,8 @@ mod tests {
             .node(0)
             .hooks_user
             .iter()
-            .any(|h| resolve_unchecked(h.code).contains(&format!(
-                "const {memo_name} = useCallback("
-            ))));
+            .any(|h| resolve_unchecked(h.code)
+                .contains(&format!("const {memo_name} = useCallback("))));
     }
 
     #[test]
@@ -462,8 +455,10 @@ mod tests {
     fn pr8_memoize_arena_pass_single_walk() {
         // Fused single-pass must visit each candidate exactly once
         // and produce the same (bodies, wrap_redirects, hooks_user
-        // useCallback rewrite) as the legacy 3-walk shape. Distinct
-        // tags drive distinct subtree_hash buckets.
+        // useCallback rewrite) as the legacy 3-walk shape. With the sound
+        // `subtree_hash` (PR F), `a` (a div with an onClick) and `second`
+        // (a bare div) hash differently — they render different JSX — so
+        // each candidate gets its own memo body.
         let mut b = SnapshotBuilder::new();
         let mut a = stateful_node("Box");
         a.tag = intern("div");
@@ -477,7 +472,7 @@ mod tests {
         b.push(third);
         let mut snap = b.finish();
         let n = memoize_arena_pass(&mut snap);
-        assert_eq!(n, 2, "two distinct subtree hashes → two memo bodies");
+        assert_eq!(n, 3, "three distinct subtree hashes → three memo bodies");
         assert_eq!(snap.wrap_redirects.len(), 3, "one wrapper per candidate");
         // useCallback rewrite happened in the same pass.
         let cb_count: usize = snap
@@ -486,9 +481,7 @@ mod tests {
             .map(|n| {
                 n.hooks_user
                     .iter()
-                    .filter(|h| {
-                        resolve_unchecked(h.code).contains("useCallback")
-                    })
+                    .filter(|h| resolve_unchecked(h.code).contains("useCallback"))
                     .count()
             })
             .sum();

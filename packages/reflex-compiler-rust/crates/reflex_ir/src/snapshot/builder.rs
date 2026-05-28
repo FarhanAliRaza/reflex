@@ -136,18 +136,45 @@ pub fn close_snapshot(snap: &mut Snapshot) {
         return;
     }
     for i in (0..n).rev() {
-        let (kind, tag, child_range, propagates_from_self) = {
+        // Fold every emit-relevant field into the hash so `subtree_hash`
+        // is a valid emit-cache key (PR F): two subtrees that render to
+        // different JSX must hash differently. kind + tag + child hashes
+        // alone collide on prop / style / event / control-flow differences.
+        // Symbol IDs are stable within a process (enough for the in-process
+        // hot-reload cache); an on-disk cache would hash resolved strings.
+        let mut hasher = Xxh3::new();
+        let (child_range, propagates_from_self) = {
             let node = &snap.nodes[i];
+            hasher.update(&[node.kind as u8]);
+            hasher.update(&node.tag.as_u32().to_le_bytes());
+            hasher.update(&node.style.as_u32().to_le_bytes());
+            hasher.update(&node.custom_code.as_u32().to_le_bytes());
+            hasher.update(&node.ref_name.as_u32().to_le_bytes());
+            for (k, v) in &node.rendered_props {
+                hasher.update(&k.as_u32().to_le_bytes());
+                hasher.update(&v.as_u32().to_le_bytes());
+            }
+            for (k, v) in &node.event_callbacks {
+                hasher.update(&k.as_u32().to_le_bytes());
+                hasher.update(&v.as_u32().to_le_bytes());
+            }
+            for e in &node.imports {
+                hasher.update(&e.module.as_u32().to_le_bytes());
+                hasher.update(&e.name.as_u32().to_le_bytes());
+            }
+            for s in &node.dynamic_imports {
+                hasher.update(&s.as_u32().to_le_bytes());
+            }
+            for h in node.hooks_internal.iter().chain(node.hooks_user.iter()) {
+                hasher.update(&h.code.as_u32().to_le_bytes());
+                hasher.update(&[h.position]);
+            }
             (
-                node.kind,
-                node.tag,
                 node.children.clone(),
                 !node.hooks_internal.is_empty() || !node.hooks_user.is_empty(),
             )
         };
-        let mut hasher = Xxh3::new();
-        hasher.update(&[kind as u8]);
-        hasher.update(&tag.as_u32().to_le_bytes());
+        hash_control_flow(snap, i as NodeIdx, &mut hasher);
         let mut propagates_children = false;
         for child_idx in child_range {
             let child = &snap.nodes[child_idx as usize];
@@ -166,6 +193,37 @@ pub fn close_snapshot(snap: &mut Snapshot) {
             super::flags::NodeFlags::PROPAGATES_HOOKS,
             propagates_from_self || propagates_children,
         );
+    }
+}
+
+/// Fold the control-flow side-table entries for `idx` into `hasher`. Each
+/// table gets a domain-separator byte so a symbol appearing in two tables
+/// can't produce a colliding contribution.
+fn hash_control_flow(snap: &Snapshot, idx: NodeIdx, hasher: &mut Xxh3) {
+    let cf = &snap.control_flow;
+    for (tag, table) in [
+        (b't', &cf.text_value),
+        (b'c', &cf.cond_test),
+        (b'f', &cf.foreach_iter),
+        (b'm', &cf.match_value),
+        (b'e', &cf.expr_value),
+        (b'k', &cf.memo_key),
+    ] {
+        if let Some(s) = table.get(&idx) {
+            hasher.update(&[tag]);
+            hasher.update(&s.as_u32().to_le_bytes());
+        }
+    }
+    if let Some(arms) = cf.match_arms.get(&idx) {
+        hasher.update(b"a");
+        for (expr, body) in arms {
+            hasher.update(&expr.as_u32().to_le_bytes());
+            hasher.update(&body.to_le_bytes());
+        }
+    }
+    if let Some(d) = cf.match_default.get(&idx) {
+        hasher.update(b"d");
+        hasher.update(&d.to_le_bytes());
     }
 }
 
@@ -243,6 +301,72 @@ mod tests {
         let b = build();
         assert_eq!(a.node(0).subtree_hash, b.node(0).subtree_hash);
         assert_eq!(a.node(1).subtree_hash, b.node(1).subtree_hash);
+    }
+
+    #[test]
+    fn finish_subtree_hash_reflects_emit_fields() {
+        // Same kind+tag+children but a different rendered prop / style /
+        // event MUST change the hash — otherwise it is not a valid
+        // emit-cache key (PR F soundness).
+        let base = || {
+            let mut b = SnapshotBuilder::new();
+            b.push(NodeSnapshot {
+                kind: NodeKind::Element,
+                tag: intern("div"),
+                ..Default::default()
+            });
+            b.finish()
+        };
+        let with_prop = || {
+            let mut b = SnapshotBuilder::new();
+            b.push(NodeSnapshot {
+                kind: NodeKind::Element,
+                tag: intern("div"),
+                rendered_props: smallvec::smallvec![(intern("id"), intern("\"x\""))],
+                ..Default::default()
+            });
+            b.finish()
+        };
+        let with_event = || {
+            let mut b = SnapshotBuilder::new();
+            b.push(NodeSnapshot {
+                kind: NodeKind::Element,
+                tag: intern("div"),
+                event_callbacks: smallvec::smallvec![(intern("onClick"), intern("f"))],
+                ..Default::default()
+            });
+            b.finish()
+        };
+        let h_base = base().node(0).subtree_hash;
+        assert_ne!(h_base, with_prop().node(0).subtree_hash);
+        assert_ne!(h_base, with_event().node(0).subtree_hash);
+        // Identical nodes still collide (dedup must still work).
+        assert_eq!(
+            with_prop().node(0).subtree_hash,
+            with_prop().node(0).subtree_hash
+        );
+    }
+
+    #[test]
+    fn finish_subtree_hash_reflects_control_flow() {
+        // Two Cond nodes differing only in their test expression (a side
+        // table) must hash differently.
+        let build = |test: &str| {
+            let mut b = SnapshotBuilder::new();
+            let root = b.push(NodeSnapshot {
+                kind: NodeKind::Cond,
+                ..Default::default()
+            });
+            b.snapshot_mut()
+                .control_flow
+                .cond_test
+                .insert(root, intern(test));
+            b.finish()
+        };
+        assert_ne!(
+            build("state.a").node(0).subtree_hash,
+            build("state.b").node(0).subtree_hash
+        );
     }
 
     #[test]
