@@ -115,43 +115,56 @@ impl SnapshotBuilder {
     /// child's index is strictly greater than its parent's — and the
     /// reverse-iteration order visits every child before its parent.
     pub fn finish(mut self) -> Snapshot {
-        let n = self.snap.nodes.len();
-        if n == 0 {
-            return self.snap;
-        }
-        // Walk backward so children are hashed before their parent.
-        // Borrow-checker dance: snapshot the children's `subtree_hash`
-        // before mutably touching the parent.
-        for i in (0..n).rev() {
-            let (kind, tag, child_range, propagates_from_self) = {
-                let node = &self.snap.nodes[i];
-                (
-                    node.kind,
-                    node.tag,
-                    node.children.clone(),
-                    !node.hooks_internal.is_empty() || !node.hooks_user.is_empty(),
-                )
-            };
-            let mut hasher = Xxh3::new();
-            hasher.update(&[kind as u8]);
-            hasher.update(&tag.as_u32().to_le_bytes());
-            let mut propagates_children = false;
-            for child_idx in child_range {
-                let child = &self.snap.nodes[child_idx as usize];
-                hasher.update(&child.subtree_hash.to_le_bytes());
-                if child.flags.contains(super::flags::NodeFlags::PROPAGATES_HOOKS) {
-                    propagates_children = true;
-                }
-            }
-            let hash = hasher.digest();
-            let node = &mut self.snap.nodes[i];
-            node.subtree_hash = hash;
-            node.flags.assign(
-                super::flags::NodeFlags::PROPAGATES_HOOKS,
-                propagates_from_self || propagates_children,
-            );
-        }
+        close_snapshot(&mut self.snap);
         self.snap
+    }
+}
+
+/// Run the freeze-close pass on an already-populated `Snapshot`: bottom-up
+/// fill `subtree_hash` (kind + tag + children's hashes) and bubble up
+/// `PROPAGATES_HOOKS`. Shared by `SnapshotBuilder::finish` and by callers
+/// that materialize a `Snapshot` without the builder (e.g. the wire-rebuild
+/// path, where the Python gatherer cannot compute these Rust-side fields).
+///
+/// Bottom-up via a single linear backward pass works because nodes are
+/// pushed in parent-before-children order, so any child's index is strictly
+/// greater than its parent's.
+pub fn close_snapshot(snap: &mut Snapshot) {
+    let n = snap.nodes.len();
+    if n == 0 {
+        return;
+    }
+    for i in (0..n).rev() {
+        let (kind, tag, child_range, propagates_from_self) = {
+            let node = &snap.nodes[i];
+            (
+                node.kind,
+                node.tag,
+                node.children.clone(),
+                !node.hooks_internal.is_empty() || !node.hooks_user.is_empty(),
+            )
+        };
+        let mut hasher = Xxh3::new();
+        hasher.update(&[kind as u8]);
+        hasher.update(&tag.as_u32().to_le_bytes());
+        let mut propagates_children = false;
+        for child_idx in child_range {
+            let child = &snap.nodes[child_idx as usize];
+            hasher.update(&child.subtree_hash.to_le_bytes());
+            if child
+                .flags
+                .contains(super::flags::NodeFlags::PROPAGATES_HOOKS)
+            {
+                propagates_children = true;
+            }
+        }
+        let hash = hasher.digest();
+        let node = &mut snap.nodes[i];
+        node.subtree_hash = hash;
+        node.flags.assign(
+            super::flags::NodeFlags::PROPAGATES_HOOKS,
+            propagates_from_self || propagates_children,
+        );
     }
 }
 
@@ -247,15 +260,11 @@ mod tests {
         b.fill(root, elem(intern("div"), child..child + 1));
         let snap = b.finish();
         assert!(
-            snap.node(child)
-                .flags
-                .contains(NodeFlags::PROPAGATES_HOOKS),
+            snap.node(child).flags.contains(NodeFlags::PROPAGATES_HOOKS),
             "child with user hook should be marked"
         );
         assert!(
-            snap.node(root)
-                .flags
-                .contains(NodeFlags::PROPAGATES_HOOKS),
+            snap.node(root).flags.contains(NodeFlags::PROPAGATES_HOOKS),
             "parent of a propagating child should inherit the flag"
         );
     }

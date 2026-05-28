@@ -18,34 +18,12 @@ Coverage:
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
 import pytest
 
 import reflex as rx
 from reflex.compiler.session import CompilerSession
 
-_CORPUS_ROOT = Path(__file__).resolve().parents[2] / "codegen_corpus"
-
-
-def _load_corpus_runner():
-    spec = importlib.util.spec_from_file_location(
-        "_wire_corpus_runner", _CORPUS_ROOT / "_runner.py"
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    # Register before exec so `@dataclass` can resolve the module's globals
-    # (Python 3.14 looks up `sys.modules[cls.__module__]`).
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_RUNNER = _load_corpus_runner()
-_FIXTURES = _RUNNER.discover()
+from ._corpus import FIXTURES as _FIXTURES
 
 
 class _WireState(rx.State):

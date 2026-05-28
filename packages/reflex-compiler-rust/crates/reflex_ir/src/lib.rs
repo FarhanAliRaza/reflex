@@ -19,9 +19,9 @@ pub mod visitor;
 
 pub use parse::{parse_global_state, parse_page, parse_plugin_manifest, parse_theme, ParseError};
 pub use snapshot::{
-    AppWrap, ControlFlowExtras, HookEntry, ImportEntry, MemoizationDisposition, MemoizeBody,
-    NodeFlags, NodeIdx, NodeKind, NodeSnapshot, PageMeta, Snapshot, SnapshotBuilder, VarDataEntry,
-    VarDataRef,
+    close_snapshot, AppWrap, ControlFlowExtras, HookEntry, ImportEntry, MemoizationDisposition,
+    MemoizeBody, NodeFlags, NodeIdx, NodeKind, NodeSnapshot, PageMeta, Snapshot, SnapshotBuilder,
+    VarDataEntry, VarDataRef,
 };
 pub use visitor::{walk_component, walk_event_handler, walk_match_arm, walk_page, walk_value, IrVisitor};
 

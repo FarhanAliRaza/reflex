@@ -413,6 +413,7 @@ class CompilerSession:
         meta_tags: list[tuple[str, str]] | None = None,
         custom_code: list[str] | None = None,
         hooks_body: str | None = None,
+        compute_close: bool = False,
     ) -> tuple[str, list[tuple[str, str]]]:
         """Compile a page from a pre-gathered snapshot wire bundle (PR A).
 
@@ -436,6 +437,10 @@ class CompilerSession:
             meta_tags: optional ``[(name_or_property, content), …]``.
             custom_code: caller-supplied custom-code blocks.
             hooks_body: caller-supplied hooks string.
+            compute_close: recompute ``subtree_hash`` / ``PROPAGATES_HOOKS``
+                Rust-side. Pass ``False`` for a :meth:`dump_snapshot` bundle
+                (those fields are present); ``True`` for a native gatherer
+                bundle that omits them.
 
         Returns:
             ``(page_js, memo_bodies)`` where ``memo_bodies`` is a list of
@@ -450,6 +455,7 @@ class CompilerSession:
             meta,
             list(custom_code) if custom_code else None,
             hooks_body,
+            compute_close,
         )
         return str(page_js), [(str(n), str(j)) for n, j in bodies]
 

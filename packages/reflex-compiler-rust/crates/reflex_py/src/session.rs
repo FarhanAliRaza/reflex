@@ -585,7 +585,13 @@ impl CompilerSession {
     /// snapshot, but the page-level `bun install` dict is harvested
     /// separately by the caller (it is gathered alongside the bundle on
     /// the Python side, mirroring the freeze path's `bun_imports`).
-    #[pyo3(signature = (bundle, route_ident, route, title=None, meta_tags=None, custom_code=None, hooks_body=None))]
+    ///
+    /// `compute_close` controls the `subtree_hash` / `PROPAGATES_HOOKS`
+    /// close pass: pass `False` for a `dump_snapshot` bundle (those fields
+    /// are already present and restored verbatim), `True` for a native
+    /// gatherer bundle that omits them so Rust recomputes them.
+    #[pyo3(signature = (bundle, route_ident, route, title=None, meta_tags=None, custom_code=None, hooks_body=None, compute_close=false))]
+    #[allow(clippy::too_many_arguments)]
     fn compile_page_from_arena(
         &self,
         py: Python<'_>,
@@ -596,11 +602,12 @@ impl CompilerSession {
         meta_tags: Option<&Bound<'_, PyList>>,
         custom_code: Option<Vec<String>>,
         hooks_body: Option<&str>,
+        compute_close: bool,
     ) -> PyResult<(String, Vec<(String, String)>)> {
         let meta_pairs = parse_meta_tags(meta_tags)?;
         let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
         let hooks_owned = hooks_body.unwrap_or("").to_string();
-        let snapshot = crate::from_wire::build_snapshot_from_wire(bundle)?;
+        let snapshot = crate::from_wire::build_snapshot_from_wire(bundle, compute_close)?;
         Ok(emit_page_and_memo_bodies(
             py,
             snapshot,

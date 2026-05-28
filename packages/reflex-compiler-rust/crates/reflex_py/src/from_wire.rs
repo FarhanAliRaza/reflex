@@ -26,8 +26,8 @@ use smallvec::SmallVec;
 
 use reflex_intern::{intern, Symbol};
 use reflex_ir::{
-    AppWrap, ControlFlowExtras, HookEntry, ImportEntry, NodeFlags, NodeKind, NodeSnapshot,
-    Snapshot, VarDataEntry, VarDataRef,
+    close_snapshot, AppWrap, ControlFlowExtras, HookEntry, ImportEntry, NodeFlags, NodeKind,
+    NodeSnapshot, Snapshot, VarDataEntry, VarDataRef,
 };
 
 /// Fetch a required dict key, erroring with its name if absent.
@@ -113,7 +113,13 @@ fn node_from_pydict(d: &Bound<'_, PyDict>) -> PyResult<NodeSnapshot> {
 
     let (cstart, cend) = get::<(u32, u32)>(d, "children")?;
     let flags = NodeFlags::from_bits(get::<u16>(d, "flags")?);
-    let subtree_hash = get::<u64>(d, "subtree_hash")?;
+    // Optional: a native gatherer cannot compute the Rust-side hash, so it
+    // omits this and relies on the `compute_close` recompute pass.
+    let subtree_hash = d
+        .get_item("subtree_hash")?
+        .map(|v| v.extract::<u64>())
+        .transpose()?
+        .unwrap_or(0);
 
     Ok(NodeSnapshot {
         kind,
@@ -176,7 +182,10 @@ fn var_data_entry_from_pydict(d: &Bound<'_, PyDict>) -> PyResult<VarDataEntry> {
 }
 
 /// Build a [`Snapshot`] from the wire dict produced by `snapshot_to_pydict`.
-pub fn build_snapshot_from_wire(dump: &Bound<'_, PyDict>) -> PyResult<Snapshot> {
+pub fn build_snapshot_from_wire(
+    dump: &Bound<'_, PyDict>,
+    compute_close: bool,
+) -> PyResult<Snapshot> {
     let mut snap = Snapshot::default();
     snap.root = get::<u32>(dump, "root")?;
 
@@ -282,6 +291,13 @@ pub fn build_snapshot_from_wire(dump: &Bound<'_, PyDict>) -> PyResult<Snapshot> 
         .iter()
         .map(|(k, v)| (intern(k), intern(v)))
         .collect();
+
+    // A native gatherer omits the Rust-computed close fields
+    // (`subtree_hash`, `PROPAGATES_HOOKS`); recompute them here so emit +
+    // memoize see the same values the freeze path produces.
+    if compute_close {
+        close_snapshot(&mut snap);
+    }
 
     Ok(snap)
 }
