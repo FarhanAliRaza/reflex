@@ -36,6 +36,8 @@ _KIND_TEXT = 1
 _KIND_FRAGMENT = 6
 
 # NodeFlags bits (mirror reflex_ir::snapshot::flags::NodeFlags).
+_FLAG_HAS_STATE_OR_HOOKS = 1 << 0
+_FLAG_HAS_EVENT_TRIGGERS = 1 << 1
 _FLAG_IS_BARE = 1 << 2
 _FLAG_IS_SNAPSHOT_BOUNDARY = 1 << 3
 _FLAG_TAG_IS_NONE = 1 << 8
@@ -69,30 +71,34 @@ def _is_control_flow(component: object) -> bool:
     return _qualname(component) in ("Foreach", "Cond", "Match")
 
 
-def _ensure_no_reactive(value: Any) -> None:
-    """Raise if a Var carries reactive var-data.
+def _is_reactive(value: Any) -> bool:
+    """Return whether a value resolves to a reactive Var.
 
-    Reactive vars (state/hooks/imports) need the var_data side table, which
-    this cut doesn't gather yet.
-
-    Raises:
-        GatherUnsupportedError: if ``value`` carries ``_var_data``.
+    Reactive vars (those whose merged var-data binds state, hooks, imports,
+    deps, or components) need the ``var_data`` side table, which this cut
+    doesn't populate. Used to gate prop / Bare-content gathering.
     """
-    if getattr(value, "_var_data", None) is not None:
-        msg = f"reactive var-data on {value!r}"
-        raise GatherUnsupportedError(msg)
+    getter = getattr(value, "_get_all_var_data", None)
+    if getter is None:
+        return False
+    vd = getter()
+    return vd is not None and bool(
+        vd.state or vd.hooks or vd.imports or vd.deps or vd.components
+    )
 
 
-def _render_value(value: Any) -> str:
-    """Render a prop value to JS, mirroring freeze's ``render_value_as_js``.
+def _js_expr_of(value: Any) -> str:
+    """Render a value to its JS expression, mirroring freeze's
+    ``render_value_as_js``.
 
     ``None`` renders to empty; a ``Var`` renders to its ``_js_expr``; any
     other literal is wrapped via ``LiteralVar.create`` (freeze's
     documented-equivalent fallback for the bool/int/float/str/mapping fast
-    paths). Reactive var-data is out of scope for this cut.
+    paths). Does not gate on reactivity -- callers that need the
+    ``var_data`` side table check :func:`_is_reactive` first.
 
     Args:
-        value: the prop value (a Var or a plain literal).
+        value: the value to render.
 
     Returns:
         The JS expression string.
@@ -100,11 +106,27 @@ def _render_value(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, Var):
-        _ensure_no_reactive(value)
         return str(value._js_expr)
-    wrapped = LiteralVar.create(value)
-    _ensure_no_reactive(wrapped)
-    return str(wrapped._js_expr)
+    return str(LiteralVar.create(value)._js_expr)
+
+
+def _render_prop_value(value: Any) -> str:
+    """Render a rendered-prop value, refusing reactive vars.
+
+    Args:
+        value: the prop value.
+
+    Returns:
+        The JS expression string (empty if ``value`` is ``None``).
+
+    Raises:
+        GatherUnsupportedError: if the value is a reactive Var (it would
+            need a ``var_data`` entry, which this cut doesn't gather).
+    """
+    if value is not None and _is_reactive(value):
+        msg = "reactive rendered-prop var (needs var_data)"
+        raise GatherUnsupportedError(msg)
+    return _js_expr_of(value)
 
 
 def _gather_imports(component: Component) -> list[tuple[str, str]]:
@@ -148,8 +170,10 @@ def _gather_style(component: Component) -> str:
     css = component._get_style().get("css")
     if css is None:
         return ""
-    _ensure_no_reactive(css)
-    expr = str(getattr(css, "_js_expr", ""))
+    # A reactive style expr is fine: its useContext hook flows through
+    # `_get_hooks_internal()` (gathered separately) and freeze does not
+    # register a `var_data` entry for style vars.
+    expr = _js_expr_of(css)
     if expr in ("", "({  })", "({})"):
         return ""
     return expr
@@ -196,7 +220,7 @@ def _gather_rendered_props(component: Component) -> list[tuple[str, str]]:
         value = getattr(component, raw, None)
         if value is None:
             continue
-        expr = _render_value(value)
+        expr = _render_prop_value(value)
         if not expr:
             continue
         pairs.append((_camelize_prop_name(attr), expr))
@@ -204,10 +228,79 @@ def _gather_rendered_props(component: Component) -> list[tuple[str, str]]:
         value = getattr(component, name, None)
         if value is None:
             continue
-        expr = _render_value(value)
+        expr = _render_prop_value(value)
         if expr:
             pairs.append((_camelize_prop_name(name), expr))
     return pairs
+
+
+def _gather_event_callbacks(component: Component) -> list[tuple[str, str]]:
+    """Gather event-trigger callbacks, mirroring ``read_event_callbacks``.
+
+    Trigger names stay snake-cased (emit camelizes them); on_mount /
+    on_unmount become hooks, not JSX props, so are skipped. Values render
+    via ``LiteralVar.create(chain)._js_expr``. Event handlers do not
+    register ``var_data`` entries in freeze.
+
+    Args:
+        component: the component to read event triggers from.
+
+    Returns:
+        A list of ``(snake_trigger, js_expr)`` pairs.
+    """
+    triggers = getattr(component, "event_triggers", None)
+    if not triggers:
+        return []
+    out: list[tuple[str, str]] = []
+    for trigger, handler in triggers.items():
+        if trigger in ("on_mount", "on_unmount"):
+            continue
+        expr = _js_expr_of(handler)
+        if expr:
+            out.append((str(trigger), expr))
+    return out
+
+
+def _gather_hooks_internal(component: Component) -> list[tuple[str, int]]:
+    """Gather internal hooks, mirroring ``read_hooks_internal``.
+
+    ``HookPosition`` is a string enum freeze can't extract to a byte, so
+    internal hooks always carry position ``0`` (``unwrap_or(0)``).
+
+    Args:
+        component: the component to read hooks from.
+
+    Returns:
+        A list of ``(hook_code, 0)`` pairs in declaration order.
+    """
+    hooks = component._get_hooks_internal()
+    if not hooks:
+        return []
+    return [(str(code), 0) for code in hooks if code]
+
+
+def _gather_hooks_user(component: Component) -> list[tuple[str, int]]:
+    """Gather user hooks, mirroring ``read_hooks_user``.
+
+    ``_get_hooks()`` (str|Var|None) then ``_get_added_hooks()`` (dict).
+    Both carry position ``1`` (``unwrap_or(1)`` for the string enum).
+
+    Args:
+        component: the component to read hooks from.
+
+    Returns:
+        A list of ``(hook_code, 1)`` pairs.
+    """
+    out: list[tuple[str, int]] = []
+    single = component._get_hooks()
+    if single is not None:
+        s = str(single)
+        if s:
+            out.append((s, 1))
+    added = component._get_added_hooks()
+    if added:
+        out.extend((str(code), 1) for code in added if code)
+    return out
 
 
 def _gather_rename_props(component: Component) -> list[tuple[str, str]]:
@@ -223,6 +316,19 @@ def _gather_rename_props(component: Component) -> list[tuple[str, str]]:
     if not rename:
         return []
     return [(str(k), str(v)) for k, v in rename.items()]
+
+
+def _gather_ref_name(component: Component) -> str:
+    """Return the node's ref identifier, mirroring ``read_ref_name``.
+
+    Args:
+        component: the component to read ``get_ref()`` from.
+
+    Returns:
+        The ref name, or empty string when the component has no ref.
+    """
+    ref = component.get_ref()
+    return str(ref) if ref else ""
 
 
 def _memo_flags(component: Component) -> int:
@@ -256,15 +362,10 @@ def _reject_unsupported(component: Component) -> None:
     """Refuse the per-node surface this cut doesn't reproduce yet.
 
     Raises:
-        GatherUnsupportedError: for event triggers, hooks, custom code,
-            dynamic imports, or prop-embedded components.
+        GatherUnsupportedError: for custom code, dynamic imports, or
+            prop-embedded components (events / hooks / reactive style are
+            handled; reactive rendered-props are gated in their gatherers).
     """
-    if getattr(component, "event_triggers", None):
-        msg = "event triggers not yet gathered"
-        raise GatherUnsupportedError(msg)
-    if component._get_hooks_internal() or component._get_hooks():
-        msg = "hooks not yet gathered"
-        raise GatherUnsupportedError(msg)
     if component._get_custom_code():
         msg = "custom code not yet gathered"
         raise GatherUnsupportedError(msg)
@@ -292,7 +393,9 @@ def _bare_text_value(component: Component) -> str:
         GatherUnsupportedError: if the Bare contents are not a literal string.
     """
     contents = getattr(component, "contents", None)
-    _ensure_no_reactive(contents)
+    if contents is not None and _is_reactive(contents):
+        msg = "reactive Bare contents (needs var_data / expr_value)"
+        raise GatherUnsupportedError(msg)
     expr = str(getattr(contents, "_js_expr", ""))
     if len(expr) >= 2 and expr[0] == '"' and expr[-1] == '"':
         return expr[1:-1]
@@ -382,10 +485,22 @@ class Gatherer:
         node["rendered_props"] = (
             [] if is_fragment else _gather_rendered_props(component)
         )
+        node["event_callbacks"] = (
+            [] if is_fragment else _gather_event_callbacks(component)
+        )
         node["imports"] = _gather_imports(component)
+        node["ref_name"] = "" if is_fragment else _gather_ref_name(component)
+        hooks_internal = _gather_hooks_internal(component)
+        hooks_user = _gather_hooks_user(component)
+        node["hooks_internal"] = hooks_internal
+        node["hooks_user"] = hooks_user
         flags = _memo_flags(component)
         if not node["tag"]:
             flags |= _FLAG_TAG_IS_NONE
+        if node["event_callbacks"]:
+            flags |= _FLAG_HAS_EVENT_TRIGGERS
+        if hooks_internal or hooks_user:
+            flags |= _FLAG_HAS_STATE_OR_HOOKS
         node["flags"] = flags
         node["_rename"] = _gather_rename_props(component)
         return node
@@ -394,7 +509,14 @@ class Gatherer:
         node = _empty_node()
         node["kind"] = _KIND_TEXT
         node["style_key"] = "Bare"
-        node["flags"] = _FLAG_IS_BARE | _FLAG_TAG_IS_NONE | _memo_flags(component)
+        hooks_internal = _gather_hooks_internal(component)
+        hooks_user = _gather_hooks_user(component)
+        node["hooks_internal"] = hooks_internal
+        node["hooks_user"] = hooks_user
+        flags = _FLAG_IS_BARE | _FLAG_TAG_IS_NONE | _memo_flags(component)
+        if hooks_internal or hooks_user:
+            flags |= _FLAG_HAS_STATE_OR_HOOKS
+        node["flags"] = flags
         node["imports"] = _gather_imports(component)
         node["_text_value"] = _bare_text_value(component)
         return node

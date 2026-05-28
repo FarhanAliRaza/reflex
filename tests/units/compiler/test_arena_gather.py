@@ -92,6 +92,12 @@ _SUPPORTED = {
     "heading": lambda: rx.heading("Title", size="4"),
     "link": lambda: rx.link("go", href="/x"),
     "grid": lambda: rx.grid(rx.text("a")),
+    # Events + hooks + reactive style (no var_data registered for these).
+    "event_handler": lambda: rx.button("go", on_click=_GatherState.tick),
+    "reactive_style": lambda: rx.box(width=f"{_GatherState.n}px"),
+    "nested_event": lambda: rx.box(
+        rx.button("x", on_click=_GatherState.tick), rx.text("y")
+    ),
 }
 
 
@@ -117,9 +123,8 @@ def test_gather_emit_matches_freeze(sess: CompilerSession, name: str) -> None:
 # Features outside the current cut must raise (caller falls back to freeze),
 # never silently emit wrong output.
 _UNSUPPORTED = {
-    "state_prop": lambda: rx.box(width=f"{_GatherState.n}px"),
+    "reactive_rendered_prop": lambda: rx.el.input(value=_GatherState.items[0]),
     "reactive_text": lambda: rx.text(_GatherState.n),
-    "event_handler": lambda: rx.button("go", on_click=_GatherState.tick),
     "foreach": lambda: rx.foreach(_GatherState.items, lambda i: rx.text(i)),
     "cond": lambda: rx.cond(_GatherState.n > 0, rx.text("y"), rx.text("n")),
     "match": lambda: rx.match(_GatherState.n, (1, rx.text("one")), rx.text("d")),
