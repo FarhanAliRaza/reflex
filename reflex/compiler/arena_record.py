@@ -12,14 +12,15 @@ The gatherer reads native attributes and reuses small existing Python
 formatters (``ImportVar.name``, ``format_library_name``) rather than
 re-rendering -- it mirrors the *input* side of ``freeze.rs``'s ``read_*``.
 
-**Scope.** This first cut covers the structural / leaf surface:
-``Element`` / ``Fragment`` / ``Bare`` with literal props, style, and
-imports. Anything it cannot yet reproduce byte-identically -- reactive /
-state vars, event handlers, hooks, control flow (Foreach/Cond/Match),
-prop-embedded components, custom code, dynamic imports, refs, custom_attrs
--- raises :class:`GatherUnsupportedError` so the caller falls back to the
-freeze path rather than emitting wrong output. Parity with the freeze walk
-is asserted by ``test_arena_gather.py`` via the ``dump_snapshot`` oracle.
+**Scope.** Covers the whole ``tests/codegen_corpus`` surface: Element /
+Fragment / Bare (Text + Expr) with literal & reactive props, style, the
+``var_data`` table, events, hooks, refs, custom_attrs, and control flow
+(Cond / Foreach / Match). Anything it cannot yet reproduce byte-identically
+-- custom code, dynamic imports, prop-embedded components, non-Var Bare
+contents -- raises :class:`GatherUnsupportedError` so the caller falls back
+to the freeze path rather than emitting wrong output. Parity with the
+freeze walk is asserted by ``test_arena_gather.py`` via the
+``dump_snapshot`` oracle.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ _KIND_ELEMENT = 0
 _KIND_TEXT = 1
 _KIND_FOREACH = 2
 _KIND_COND = 3
+_KIND_MATCH = 4
 _KIND_FRAGMENT = 6
 _KIND_EXPR = 7
 
@@ -586,6 +588,10 @@ class Gatherer:
             self.nodes[idx] = node
             return
 
+        if _is_match(component):
+            self._fill_match(component, idx)
+            return
+
         children = self._child_components(component)
         start = len(self.nodes)
         child_idxs = [self._reserve() for _ in children]
@@ -598,15 +604,42 @@ class Gatherer:
         for child, cidx in zip(children, child_idxs, strict=True):
             self._fill(child, cidx)
 
+    def _fill_match(self, component: Component, idx: int) -> None:
+        """Lay out a Match: the node itself has an empty children range;
+        each case body + the default are frozen as standalone subtrees and
+        referenced by index in the match_arms / match_default side tables
+        (mirrors freeze_match_children).
+        """
+        node = self._gather_element(component)  # kind=Match, _match_value, flags
+        self.nodes[idx] = node
+
+        arms: list[tuple[str, int]] = []
+        for conds, body in component.match_cases:
+            body_idx = self._reserve()
+            self._fill(body, body_idx)
+            arms.append((_js_expr_of(conds), body_idx))
+
+        default = getattr(component, "default", None)
+        if isinstance(default, Component):
+            default_idx = self._reserve()
+            self._fill(default, default_idx)
+            node["_match_default"] = default_idx
+
+        # Match has no structural children — arm bodies live in the side
+        # tables; its own range stays empty (and points past the bodies).
+        node["children"] = (len(self.nodes), len(self.nodes))
+        node["_match_arms"] = arms
+
     def _gather_element(self, component: Component) -> dict:
         _reject_unsupported(component)
         node = _empty_node()
         is_fragment = _is_fragment(component)
         is_cond = _is_cond(component)
         is_foreach = _is_foreach(component)
+        is_match = _is_match(component)
         # Only true Element nodes carry a tag + rendered props / events /
-        # style / ref / rename; Fragment / Cond / Foreach are tagless.
-        is_element = not (is_fragment or is_cond or is_foreach)
+        # style / ref / rename; the control-flow kinds are tagless.
+        is_element = not (is_fragment or is_cond or is_foreach or is_match)
 
         node["style_key"] = _qualname(component)
         node["imports"] = _gather_imports(component)
@@ -634,6 +667,9 @@ class Gatherer:
             elif is_foreach:
                 node["kind"] = _KIND_FOREACH
                 node["_foreach_iter"] = _js_expr_of(component.iterable)
+            elif is_match:
+                node["kind"] = _KIND_MATCH
+                node["_match_value"] = _js_expr_of(component.cond)
             else:
                 node["kind"] = _KIND_FRAGMENT
 
@@ -709,6 +745,9 @@ def gather_arena(root: Component) -> dict:
     control_flow_cond: dict[int, str] = {}
     control_flow_expr: dict[int, str] = {}
     control_flow_foreach: dict[int, str] = {}
+    control_flow_match_value: dict[int, str] = {}
+    control_flow_match_arms: dict[int, list[tuple[str, int]]] = {}
+    control_flow_match_default: dict[int, int] = {}
     rename_props: dict[int, list[tuple[str, str]]] = {}
     for i, node in enumerate(g.nodes):
         assert node is not None
@@ -724,6 +763,15 @@ def gather_arena(root: Component) -> dict:
         foreach_iter = node.pop("_foreach_iter", None)
         if foreach_iter is not None:
             control_flow_foreach[i] = foreach_iter
+        match_value = node.pop("_match_value", None)
+        if match_value is not None:
+            control_flow_match_value[i] = match_value
+        match_arms = node.pop("_match_arms", None)
+        if match_arms:
+            control_flow_match_arms[i] = match_arms
+        match_default = node.pop("_match_default", None)
+        if match_default is not None:
+            control_flow_match_default[i] = match_default
         rename = node.pop("_rename", None)
         if rename:
             rename_props[i] = rename
@@ -741,11 +789,11 @@ def gather_arena(root: Component) -> dict:
             "text_value": control_flow_text,
             "cond_test": control_flow_cond,
             "foreach_iter": control_flow_foreach,
-            "match_value": {},
+            "match_value": control_flow_match_value,
             "expr_value": control_flow_expr,
             "memo_key": {},
-            "match_arms": {},
-            "match_default": {},
+            "match_arms": control_flow_match_arms,
+            "match_default": control_flow_match_default,
         },
         "wrap_redirects": {},
         "app_wraps": [],

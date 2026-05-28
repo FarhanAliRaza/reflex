@@ -135,6 +135,14 @@ _SUPPORTED = {
     "foreach_in_box": lambda: rx.box(
         rx.foreach(_GatherState.items, lambda x: rx.text(x))
     ),
+    # Match lays out its case + default bodies after the (childless) Match
+    # node, referenced by the match_arms / match_default side tables.
+    "match": lambda: rx.match(
+        _GatherState.n, (1, rx.text("one")), (2, rx.text("two")), rx.text("def")
+    ),
+    "match_in_box": lambda: rx.box(
+        rx.match(_GatherState.n, (1, rx.text("a")), rx.text("d"))
+    ),
 }
 
 
@@ -160,7 +168,9 @@ def test_gather_emit_matches_freeze(sess: CompilerSession, name: str) -> None:
 # Features outside the current cut must raise (caller falls back to freeze),
 # never silently emit wrong output.
 _UNSUPPORTED = {
-    "match": lambda: rx.match(_GatherState.n, (1, rx.text("one")), rx.text("d")),
+    # rx.markdown injects custom code, which the gatherer doesn't yet
+    # reproduce -> falls back to the freeze path.
+    "markdown_custom_code": lambda: rx.markdown("# hi"),
 }
 
 
