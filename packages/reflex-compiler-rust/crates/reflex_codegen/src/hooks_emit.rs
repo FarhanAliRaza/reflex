@@ -20,7 +20,27 @@ use reflex_ir::{HookEntry, NodeIdx, Snapshot};
 /// Per-bucket dedupe runs on the hook code symbol so the same hook
 /// declared on multiple Components doesn't get repeated.
 pub fn render_hooks(snapshot: &Snapshot, memo_lines: &[&str]) -> String {
-    let (internal, pre_trigger, post_trigger) = bucket_hooks(snapshot);
+    render_hooks_with_filter(snapshot, memo_lines, true)
+}
+
+/// Variant of [`render_hooks`] that DOES emit the page-shell hooks
+/// (`useContext(StateContexts.…)` / `useContext(EventLoopContext)`)
+/// AND walks the snapshot in true DFS order (parent → first child →
+/// first grandchild → …) so the bucket-internal order matches the
+/// Python `_get_all_hooks` recursion.
+///
+/// The page emit pipeline auto-injects the shell hooks in the function
+/// shell so [`render_hooks`] strips them. The app-root template at
+/// `.web/app/root.jsx` has no such shell — it splices the entire
+/// hooks block verbatim — so callers there need every hook the freeze
+/// pass captured AND in the same order legacy `_render_hooks`
+/// produced (matched by the existing diff-against-legacy harness).
+pub fn render_hooks_unfiltered(snapshot: &Snapshot, memo_lines: &[&str]) -> String {
+    if snapshot.is_empty() {
+        return String::new();
+    }
+    let (internal, pre_trigger, post_trigger) =
+        bucket_subtree_hooks_dfs(snapshot, snapshot.root, false);
     let mut out = String::with_capacity(estimate_size(&internal, &pre_trigger, &post_trigger));
     write_bucket(&mut out, &internal);
     out.push('\n');
@@ -39,14 +59,78 @@ pub fn render_hooks(snapshot: &Snapshot, memo_lines: &[&str]) -> String {
     out
 }
 
-fn bucket_hooks(snapshot: &Snapshot) -> (Vec<Symbol>, Vec<Symbol>, Vec<Symbol>) {
+/// DFS variant of [`bucket_subtree_hooks`] — pushes children in
+/// reverse so the LIFO stack pops them left-to-right, matching the
+/// recursive descent the Python `_get_all_hooks` uses.
+fn bucket_subtree_hooks_dfs(
+    snapshot: &Snapshot,
+    root: NodeIdx,
+    strip_shell: bool,
+) -> (Vec<Symbol>, Vec<Symbol>, Vec<Symbol>) {
+    let mut seen: HashSet<Symbol> = HashSet::new();
+    let mut internal: Vec<Symbol> = Vec::new();
+    let mut pre: Vec<Symbol> = Vec::new();
+    let mut post: Vec<Symbol> = Vec::new();
+    let mut stack: Vec<NodeIdx> = vec![root];
+    while let Some(idx) = stack.pop() {
+        if (idx as usize) >= snapshot.nodes.len() {
+            continue;
+        }
+        let node = snapshot.node(idx);
+        for h in node.hooks_internal.iter().chain(node.hooks_user.iter()) {
+            push_bucket(
+                &mut seen,
+                &mut internal,
+                &mut pre,
+                &mut post,
+                *h,
+                strip_shell,
+            );
+        }
+        // Push children in REVERSE so LIFO pops them in declared order.
+        let children: Vec<NodeIdx> = node.children.clone().collect();
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+    }
+    (internal, pre, post)
+}
+
+fn render_hooks_with_filter(snapshot: &Snapshot, memo_lines: &[&str], strip_shell: bool) -> String {
+    let (internal, pre_trigger, post_trigger) = bucket_hooks(snapshot, strip_shell);
+    let mut out = String::with_capacity(estimate_size(&internal, &pre_trigger, &post_trigger));
+    write_bucket(&mut out, &internal);
+    out.push('\n');
+    write_bucket(&mut out, &pre_trigger);
+    out.push('\n');
+    if !memo_lines.is_empty() {
+        for (i, line) in memo_lines.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(line);
+        }
+    }
+    out.push('\n');
+    write_bucket(&mut out, &post_trigger);
+    out
+}
+
+fn bucket_hooks(snapshot: &Snapshot, strip_shell: bool) -> (Vec<Symbol>, Vec<Symbol>, Vec<Symbol>) {
     let mut seen: HashSet<Symbol> = HashSet::new();
     let mut internal: Vec<Symbol> = Vec::new();
     let mut pre: Vec<Symbol> = Vec::new();
     let mut post: Vec<Symbol> = Vec::new();
     for node in &snapshot.nodes {
         for h in node.hooks_internal.iter().chain(node.hooks_user.iter()) {
-            push_bucket(&mut seen, &mut internal, &mut pre, &mut post, *h);
+            push_bucket(
+                &mut seen,
+                &mut internal,
+                &mut pre,
+                &mut post,
+                *h,
+                strip_shell,
+            );
         }
     }
     (internal, pre, post)
@@ -62,7 +146,7 @@ fn bucket_hooks(snapshot: &Snapshot) -> (Vec<Symbol>, Vec<Symbol>, Vec<Symbol>) 
 /// `wrap_redirects` — a body's subtree is the original captured
 /// content, not the synthetic wrapper.
 pub fn render_hooks_for_subtree(snapshot: &Snapshot, root: NodeIdx, memo_lines: &[&str]) -> String {
-    let (internal, pre_trigger, post_trigger) = bucket_subtree_hooks(snapshot, root);
+    let (internal, pre_trigger, post_trigger) = bucket_subtree_hooks(snapshot, root, true);
     let mut out = String::with_capacity(estimate_size(&internal, &pre_trigger, &post_trigger));
     write_bucket(&mut out, &internal);
     out.push('\n');
@@ -84,6 +168,7 @@ pub fn render_hooks_for_subtree(snapshot: &Snapshot, root: NodeIdx, memo_lines: 
 fn bucket_subtree_hooks(
     snapshot: &Snapshot,
     root: NodeIdx,
+    strip_shell: bool,
 ) -> (Vec<Symbol>, Vec<Symbol>, Vec<Symbol>) {
     let mut seen: HashSet<Symbol> = HashSet::new();
     let mut internal: Vec<Symbol> = Vec::new();
@@ -97,7 +182,14 @@ fn bucket_subtree_hooks(
         }
         let node = snapshot.node(idx);
         for h in node.hooks_internal.iter().chain(node.hooks_user.iter()) {
-            push_bucket(&mut seen, &mut internal, &mut pre, &mut post, *h);
+            push_bucket(
+                &mut seen,
+                &mut internal,
+                &mut pre,
+                &mut post,
+                *h,
+                strip_shell,
+            );
         }
         for child in node.children.clone() {
             stack.push(child);
@@ -112,6 +204,7 @@ fn push_bucket(
     pre: &mut Vec<Symbol>,
     post: &mut Vec<Symbol>,
     h: HookEntry,
+    strip_shell: bool,
 ) {
     if h.code == Symbol::EMPTY {
         return;
@@ -126,9 +219,17 @@ fn push_bucket(
     // memo module emitters then would double-declare them. Mirrors the
     // filter in `rust_pipeline.py::compile_pages` that strips the same
     // lines before sending `hooks_body` to the legacy emit path.
-    let code = reflex_intern::resolve_unchecked(h.code);
-    if code.contains("useContext(StateContexts.") || code.contains("useContext(EventLoopContext)") {
-        return;
+    //
+    // The app-root template (`.web/app/root.jsx`) has no auto-injected
+    // shell hooks, so `render_hooks_unfiltered` passes
+    // `strip_shell=false` to keep the lines in the output.
+    if strip_shell {
+        let code = reflex_intern::resolve_unchecked(h.code);
+        if code.contains("useContext(StateContexts.")
+            || code.contains("useContext(EventLoopContext)")
+        {
+            return;
+        }
     }
     match h.position {
         0 => internal.push(h.code),
@@ -172,8 +273,7 @@ mod tests {
         let mut node = NodeSnapshot::default();
         node.kind = NodeKind::Element;
         for (pos, code) in hooks {
-            node.hooks_internal
-                .push(HookEntry::new(intern(code), *pos));
+            node.hooks_internal.push(HookEntry::new(intern(code), *pos));
         }
         b.push(node);
         b.finish()

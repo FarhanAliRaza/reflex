@@ -17,6 +17,22 @@ or ``compile_page_from_bytes`` shim left. Static-artifact writers
 
 from __future__ import annotations
 
+import importlib
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
+
+from reflex_base.utils.imports import ImportVar
+from reflex_base.vars.base import Var, VarData
+from reflex_components_core.base import Scripts
+from reflex_components_core.base.document import Links, ScrollRestoration
+from reflex_components_core.base.document import Meta as ReactMeta
+from reflex_components_core.el.elements.metadata import Head, Link, Meta
+from reflex_components_core.el.elements.other import Html
+from reflex_components_core.el.elements.sectioning import Body
+
+from reflex.utils.misc import preload_color_theme
+
 _WHEEL_MISSING = (
     "reflex_compiler_rust wheel not available — install it via "
     "`maturin develop --release` in packages/reflex-compiler-rust."
@@ -32,11 +48,13 @@ class CompilerSession:
     """
 
     def __init__(self) -> None:
+        """Initialize the Rust compiler session wrapper."""
         try:
-            from reflex_compiler_rust import _native
+            native_module = importlib.import_module("reflex_compiler_rust._native")
         except ImportError as exc:
             raise RuntimeError(_WHEEL_MISSING) from exc
-        self._inner = _native.CompilerSession()
+        self._inner = native_module.CompilerSession()
+        self._static_artifact_keys: dict[str, tuple[Any, ...]] = {}
 
     # ---- Cache controls -----------------------------------------------------
 
@@ -45,9 +63,15 @@ class CompilerSession:
         self._inner.set_cache_capacity(cap)
 
     def clear_cache(self) -> None:
+        """Clear the in-process page-render cache."""
         self._inner.clear_cache()
 
     def cache_len(self) -> int:
+        """Return the number of entries in the page-render cache.
+
+        Returns:
+            Cache entry count.
+        """
         return int(self._inner.cache_len())
 
     # ---- Compile entry points ----------------------------------------------
@@ -84,78 +108,200 @@ class CompilerSession:
         """
         self._inner.compile_styles_root(list(stylesheets), out_path)
 
-    def compile_theme_module(self, theme_js: str, out_path: str) -> None:
-        """Write ``.web/utils/theme.js``.
-
-        Ports :func:`reflex_base.compiler.templates.theme_template`. The
-        ``theme_js`` argument is the JS object literal Python derives
-        from the theme dict via ``LiteralVar.create(theme)``.
-
-        Args:
-            theme_js: the JS expression that becomes the default export.
-            out_path: absolute filesystem path.
-        """
-        self._inner.compile_theme_module(theme_js, out_path)
-
-    def compile_app_root_module(
-        self,
-        imports_str: str,
-        dynamic_imports_str: str,
-        custom_code_str: str,
-        hooks_str: str,
-        render_str: str,
-        import_window_libraries: str,
-        window_imports_str: str,
-        out_path: str,
+    def compile_theme_from_component_arena(
+        self, theme_component: object, out_path: str
     ) -> None:
-        """Write ``.web/app/root.jsx``.
+        """Write ``.web/utils/theme.js`` directly from a theme Component.
 
-        Ports :func:`reflex_base.compiler.templates.app_root_template`.
-        Python pre-renders the dynamic strings (the legacy JSX renderer
-        + hooks renderer); Rust splices them into the static layout.
+        Replaces the
+        ``theme_js = str(LiteralVar.create(theme_component))`` shuttle
+        plus the old string-input ``compile_theme_module`` call: the
+        theme Component now crosses the PyO3 boundary directly and the
+        JS rendering happens on the Rust side.
 
         Args:
-            imports_str: rendered ``import …`` lines joined with ``\\n``.
-            dynamic_imports_str: rendered dynamic-import statements
-                joined with ``\\n``.
-            custom_code_str: user-contributed top-level code.
-            hooks_str: rendered hook body.
-            render_str: rendered JSX expression for the app-wrap chain.
-            import_window_libraries: rendered
-                ``import * as <alias> from "…"`` lines.
-            window_imports_str: rendered ``"<path>": <alias>,`` entries.
-            out_path: absolute filesystem path.
+            theme_component: a Reflex Component instance representing
+                the resolved theme (output of
+                ``reflex.compiler.utils.create_theme(...)``).
+            out_path: absolute filesystem path for the emitted module.
         """
-        self._inner.compile_app_root_module(
-            imports_str,
-            dynamic_imports_str,
-            custom_code_str,
-            hooks_str,
-            render_str,
+        self._inner.compile_theme_from_component_arena(theme_component, out_path)
+
+    def compile_custom_components_arena(
+        self, components: Iterable, components_dir: str
+    ) -> dict[str, list]:
+        """Emit one ``.jsx`` file per ``@rx.memo`` custom component.
+
+        Replaces the legacy ``_compile_memo_components`` +
+        ``compile_custom_component`` chain. For each unique custom
+        component we render the inner Component tree via
+        ``get_component()`` and pipe it through the arena page entry
+        point — the same path real pages use — so no msgpack hop and no
+        plugin walk happens.
+
+        Each component lands in
+        ``<components_dir>/<component.tag>.jsx`` and its per-page
+        imports get merged into the returned dict for the
+        ``bun install`` step.
+
+        Args:
+            components: iterable of ``CustomComponent`` instances (the
+                values of ``CUSTOM_COMPONENTS``).
+            components_dir: target directory for the per-component
+                files; created if missing.
+
+        Returns:
+            Merged ``ParsedImportDict`` aggregating every component's
+            page-level imports.
+        """
+        out_dir = Path(components_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        merged: dict[str, list] = {}
+        for component in dict.fromkeys(components):
+            try:
+                rendered = component.get_component()
+            except Exception:
+                continue
+            name = component.tag
+            ident = name
+            route = f"/__memo__/{name}"
+            page_js, _bodies, imports = self._inner.compile_page_from_component_arena(
+                rendered,
+                ident,
+                route,
+                None,
+                None,
+                None,
+                None,
+            )
+            self._inner.write_if_changed(str(out_dir / f"{name}.jsx"), page_js)
+            self._inner.merge_imports_into(merged, imports)
+        return merged
+
+    def compile_app_root_arena(
+        self,
+        component: Any,
+        import_window_libraries: str,
+        window_imports: str,
+        out_path: str,
+    ) -> dict[str, list]:
+        """Write ``.web/app/root.jsx`` directly from the app-root Component.
+
+        Thin pass-through to the Rust PyO3 entry. The Rust side
+        freezes the Component, harvests imports / custom_code / hooks
+        / dynamic_imports / JSX render from the snapshot, formats the
+        import block, and writes the file in one round-trip. The
+        Python wrapper exists only so callers don't import the native
+        module directly.
+
+        Args:
+            component: the resolved app-root Component (typically the
+                output of ``app._app_root(app_wrappers)``).
+            import_window_libraries: rendered ``import * as <alias>
+                from "..."`` lines for bundled libraries; the caller
+                still owns the bundled-libraries list since it lives
+                in Python.
+            window_imports: rendered ``"<path>": <alias>,`` entries
+                that populate the global ``window["__reflex"]``
+                mapping.
+            out_path: absolute filesystem path for the emitted module.
+
+        Returns:
+            The harvested ``ParsedImportDict`` for the app-root tree
+            (with ``_apply_common_imports`` already applied), so the
+            caller can merge it into the install-time imports dict
+            without re-walking the tree.
+        """
+        return self._inner.compile_app_root_arena(
+            component,
             import_window_libraries,
-            window_imports_str,
+            window_imports,
             out_path,
         )
 
-    def compile_document_root_module(
+    def compile_document_root_arena(
         self,
-        imports_str: str,
-        document_render_str: str,
+        head_components: list,
+        html_lang: str | None,
+        html_custom_attrs: dict,
         out_path: str,
     ) -> None:
-        """Write ``.web/app/_document.js``.
+        """Write ``.web/app/_document.js`` from the user's head config.
 
-        Ports :func:`reflex_base.compiler.templates.document_root_template`.
+        The Python wrapper composes the ``<html><head><body>`` shell
+        because the user-supplied ``head_components`` are user code
+        that can't move into Rust. Once the tree is built it flows
+        through the Rust PyO3 entry in one round-trip: Rust freezes
+        the tree, harvests imports / renders the JSX from the
+        snapshot, and writes ``_document.js`` without any
+        ``_get_all_*`` calls from Python.
 
         Args:
-            imports_str: rendered ``import …`` lines joined with ``\\n``.
-            document_render_str: rendered JSX expression for the
-                document tree.
-            out_path: absolute filesystem path.
+            head_components: user-supplied head components (e.g. the
+                list ``app.head_components``).
+            html_lang: ``lang`` attribute for the top-level ``<html>``;
+                defaults to ``"en"`` when ``None``.
+            html_custom_attrs: extra attributes spliced onto ``<html>``
+                (e.g. ``{"suppressHydrationWarning": True}``).
+            out_path: absolute filesystem path for the emitted module.
         """
-        self._inner.compile_document_root_module(
-            imports_str, document_render_str, out_path
+        existing_meta_types: set[str] = set()
+        for component in head_components or []:
+            if isinstance(component, Meta):
+                if component.char_set is not None:  # pyright: ignore[reportAttributeAccessIssue]
+                    existing_meta_types.add("char_set")
+                if (
+                    (name := component.name) is not None  # pyright: ignore[reportAttributeAccessIssue]
+                    and name.equals(Var.create("viewport"))
+                ):
+                    existing_meta_types.add("viewport")
+
+        always_head = [
+            ReactMeta.create(),
+            Link.create(
+                rel="stylesheet",
+                type="text/css",
+                href=Var(
+                    "reflexGlobalStyles",
+                    _var_data=VarData(
+                        imports={
+                            "$/styles/__reflex_global_styles.css?url": [
+                                ImportVar(tag="reflexGlobalStyles", is_default=True)
+                            ]
+                        }
+                    ),
+                ),
+            ),
+            Links.create(),
+        ]
+        maybe_head = []
+        if "char_set" not in existing_meta_types:
+            maybe_head.append(Meta.create(char_set="utf-8"))
+        if "viewport" not in existing_meta_types:
+            maybe_head.append(
+                Meta.create(
+                    name="viewport", content="width=device-width, initial-scale=1"
+                )
+            )
+
+        combined_head = [
+            preload_color_theme(),
+            *(head_components or []),
+            *maybe_head,
+            *always_head,
+        ]
+        document_root = Html.create(
+            Head.create(*combined_head),
+            Body.create(
+                Var("children"),
+                ScrollRestoration.create(),
+                Scripts.create(),
+            ),
+            lang=html_lang or "en",
+            custom_attrs=html_custom_attrs or {},
         )
+
+        self._inner.compile_document_root_arena(document_root, out_path)
 
     def compile_context_module(
         self,
@@ -217,6 +363,9 @@ class CompilerSession:
 
         Used by ``tests/units/compiler/test_arena_parity.py`` to
         compare against Python ``_should_memoize`` per node.
+
+        Returns:
+            Whether the component should be memoized.
         """
         return bool(self._inner.should_memoize_arena_for_component(component))
 
@@ -226,8 +375,28 @@ class CompilerSession:
         ``vars_used_total``, ``unique_var_ids``) describing the
         snapshot. The dedup tests assert
         ``var_data_len == unique_var_ids`` once PR7 lands.
+
+        Returns:
+            Snapshot stats keyed by stat name.
         """
         return dict(self._inner.snapshot_stats(component))
+
+    def dump_snapshot(self, component: object) -> dict:
+        """Freeze ``component`` and return its IR as primitive Python data.
+
+        Every field downstream code (memoize pass, JSX emitter) reads
+        during compile is present in the returned dict. Tests rely on
+        this to verify the snapshot carries enough information that
+        Rust would not need any further PyO3 callback into Python
+        during emit.
+
+        Returns:
+            A nested dict of primitives (str, int, list, tuple, dict).
+            ``None`` is used in place of ``Symbol::EMPTY`` so callers
+            can tell "field not set" apart from "field is empty
+            string".
+        """
+        return self._inner.dump_snapshot(component)
 
     def should_memoize(self, component: object) -> bool:
         """Run the Rust memoize-decision walk on a Reflex ``Component``.

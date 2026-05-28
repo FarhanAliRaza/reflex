@@ -446,3 +446,86 @@ done
 ```
 
 Per-phase Rust timings are printed at the end of every run.
+
+---
+
+## 13. After the planx.md cutover (commit b7fc5898, 2026-05-26)
+
+`b7fc5898` ("Arena freeze speedups: per-class caching, skip-list, and
+import dedup") lands the planx.md PR0–PR3 work fused with the cutover
+(PR4–PR6) in one commit. Effects observed on the same snakker bench:
+
+### Wall clock (snakker, 4 pages)
+
+| Mode | Before | After | Δ |
+|---|---:|---:|---:|
+| Cold-scaffold first run | 34.1 ms | **17.9 ms** | −48% |
+| Steady-state, raw | 26.0 ms | **16.7 ms** | −36% |
+| Under cProfile (20 iters median) | 60 ms | **38 ms** | −37% |
+
+### cProfile, post-cutover (20 iters, 758 ms cumulative)
+
+| Phase | cum ms | share | side |
+|---|---:|---:|---|
+| `compile_pages` (total) | 776 | 100% | — |
+| `Component.create` (now mostly from user page eval) | 203 | 26% | Python |
+| `collect_all_imports_into` (still a Python tree walker) | 173 | 22% | Rust+PyO3 |
+| `_get_imports` (called per node inside the walker above) | 174 | 22% | Python |
+| `compile_unevaluated_page` (user code) | 139 | 18% | Python |
+| **`compile_page_from_component_arena`** | **118** | **15%** | Rust+PyO3 |
+| `_post_init` | 115 | 15% | Python |
+| `_emit_static_artifacts` | 96 | 12% | mixed |
+| `_resolve_app_wrap_components` | 88 | 11% | Python |
+
+Compared to §9's pre-cutover table:
+
+- `walk_and_memoize`: **335 → 0 ms** (deleted)
+- `page_to_ir` msgpack pack: **117 → 0 ms** (deleted)
+- `emit_memo_modules` pre-walk: **117 → 0 ms** (folded into arena entry)
+- `_wrap_with_memo` + memo Component.create: **313 → 0 ms** (deleted)
+- `_compute_memo_tag` hash chain: **200 → 0 ms** (replaced by `subtree_hash`)
+- new `compile_page_from_component_arena`: **0 → 118 ms** (freeze + memoize + emit, all four pages, 80 calls)
+
+That's a **net −980 ms cumulative** on a 1218 ms baseline. Per-page
+cost of the new arena entry: 118 ms / 80 = **1.48 ms/page** — well
+under the +10 ms/page budget in planx.md.
+
+### py-spy sample-containment, post-cutover (5113 samples, 250 Hz, 16 s)
+
+| Frame | Before % | After % |
+|---|---:|---:|
+| `walk_and_memoize` | 23.1 | **0** |
+| `page_to_ir` | 8.6 | **0** |
+| `emit_memo_modules` | 10.3 | **0** |
+| `_wrap_with_memo`/`create_passthrough_component_memo` | 19.6 | **0** |
+| `_native` (Rust extension anywhere on stack) | 18.2 | **1.6** |
+| `compile_page_from_component_arena` (new) | — | 16.7 |
+| `collect_all_imports_into` | 16.2 | 20.6 |
+| `_get_imports` | 16.3 | 20.6 |
+| `Component.create` (now from user code, not memoize) | — | 35.8 |
+
+The PyO3 boundary tax collapsed from 18% → 1.6% of compile time. The
+Rust pipeline now runs almost entirely with the GIL released; the
+remaining 1.6% is the freeze pass itself.
+
+### What didn't get deleted
+
+The `collect_all_imports_into` Python tree walker (in `imports.rs`) is
+still on the production path — `rust_pipeline.py:201` still calls it
+for the page-level npm-package union. planx.md PR6 listed it for
+deletion; the cutover left it in so the existing import-merge shape
+keeps working. Removing it (let the arena entry return imports in the
+same shape, then merge in pure Rust) would save ~3.5 ms/iter on snakker
+(20.6% of 17 ms). Largest remaining structural win.
+
+### Bottom line
+
+The arena pipeline behaves like the math said it would: pure-Rust JSX
+emit + memoize arena pass cost so little that they don't appear in
+py-spy's top 20 frames. What remains is irreducible Python work
+(user page callables, app-root deepcopy, static-artifact prep) plus
+one Python tree walker that survived the cutover and is the next
+obvious target.
+
+Profile artifacts: `/tmp/runrust_snakker_after.{prof,raw,svg}`.
+Driver: `/tmp/snakker/profile_runrust.py` (same as §4).

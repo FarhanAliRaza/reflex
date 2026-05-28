@@ -12,17 +12,20 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
+use reflex_codegen::harvest::{collect_custom_code, collect_dynamic_imports};
+use reflex_codegen::hooks_emit::render_hooks_unfiltered;
 use reflex_codegen::{
-    emit_app_root_module, emit_context_module, emit_document_root_module, emit_memo_index,
-    emit_memo_module_from_snapshot, emit_page_module_from_snapshot, emit_stateful_pages_json,
-    emit_styles_root, emit_theme_module, memoize_arena_pass, CodeBuffer,
+    emit_app_root_module, emit_context_module, emit_document_root_module,
+    emit_jsx_compact_from_snapshot, emit_memo_index, emit_memo_module_from_snapshot,
+    emit_page_module_from_snapshot, emit_stateful_pages_json, emit_styles_root, emit_theme_module,
+    memoize_arena_pass, CodeBuffer,
 };
 use reflex_db::CompilerDb;
+use reflex_intern::resolve_unchecked;
 use reflex_pyread::{
     collect_all_imports as pyread_collect_all_imports,
-    collect_all_imports_into as pyread_collect_all_imports_into,
-    freeze_component, freeze_component_with_class_cache,
-    merge_imports_into as pyread_merge_imports_into,
+    collect_all_imports_into as pyread_collect_all_imports_into, freeze_component,
+    freeze_component_with_class_cache, merge_imports_into as pyread_merge_imports_into,
     should_memoize as memoize_should_memoize, ClassMetadataCache, MemoRefs, PyRefs,
 };
 
@@ -54,6 +57,135 @@ pub struct CompilerSession {
     /// suppress.
     direct_get_props_calls: std::rc::Rc<std::cell::Cell<u64>>,
     direct_rename_props_reads: std::rc::Rc<std::cell::Cell<u64>>,
+}
+
+impl CompilerSession {
+    fn compile_page_from_component_arena_impl<'py>(
+        &self,
+        py: Python<'py>,
+        component: &Bound<'py, PyAny>,
+        route_ident: &str,
+        route: &str,
+        title: Option<&str>,
+        meta_tags: Option<&Bound<'py, PyList>>,
+        custom_code: Option<Vec<String>>,
+        hooks_body: Option<&str>,
+    ) -> PyResult<(String, Vec<(String, String)>, Bound<'py, PyDict>)> {
+        let meta_pairs: Vec<(String, String)> = match meta_tags {
+            Some(list) => {
+                let mut out = Vec::with_capacity(list.len());
+                for item in list.iter() {
+                    let tup: Bound<PyTuple> = item.downcast_into()?;
+                    if tup.len() != 2 {
+                        return Err(pyo3::exceptions::PyValueError::new_err(
+                            "meta_tags entries must be (name, content) tuples",
+                        ));
+                    }
+                    let n: String = tup.get_item(0)?.extract()?;
+                    let c: String = tup.get_item(1)?.extract()?;
+                    out.push((n, c));
+                }
+                out
+            }
+            None => Vec::new(),
+        };
+
+        let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
+        let hooks_owned = hooks_body.unwrap_or("").to_string();
+
+        // PyO3-bound phase: freeze the component tree AND harvest the
+        // per-page imports dict in the same walk. The accumulator
+        // dict is stashed on `PyRefs::bun_imports` before freeze
+        // runs; `accumulate_bun_imports` merges each Component's
+        // `_get_imports()` into it inline, deduped by `id(component)`.
+        // No separate `collect_all_imports` tree walk — eliminates
+        // the second `_get_imports * N` PyO3 boundary cost (planx.md
+        // PR7 follow-through).
+        // PR-Freeze-Speedup B/C: clone session-scoped caches into
+        // PyRefs so freeze can read+write per-class metadata that
+        // survives across calls. Counters reset per arena entry so
+        // tests see a clean number for this compile.
+        self.freeze_crossings.set(0);
+        let refs = PyRefs::new(py)?.with_session_caches(
+            std::rc::Rc::clone(&self.class_metadata),
+            std::rc::Rc::clone(&self.freeze_crossings),
+            std::rc::Rc::clone(&self.freeze_trivial_skips),
+            std::rc::Rc::clone(&self.direct_get_props_calls),
+            std::rc::Rc::clone(&self.direct_rename_props_reads),
+        );
+        let imports_dict = PyDict::new_bound(py);
+        *refs.bun_imports.borrow_mut() = Some(imports_dict.clone().unbind());
+        let snapshot = freeze_component_with_class_cache(py, component, &refs)?;
+        *refs.bun_imports.borrow_mut() = None;
+
+        // Release the GIL for the in-arena memoize + emit. None of the
+        // following calls touch Python state — they read Snapshot,
+        // write to `CodeBuffer`s, and return owned `String`s.
+        let route_ident_owned = route_ident.to_string();
+        let route_owned = route.to_string();
+        let title_owned = title.map(|s| s.to_owned());
+        let (page_js, memo_bodies) = py.allow_threads(move || {
+            let mut snap = snapshot;
+            memoize_arena_pass(&mut snap);
+
+            // Emit the page module.
+            let mut page_buf = CodeBuffer::with_capacity(4096);
+            let custom_code_refs: Vec<&str> =
+                custom_code_owned.iter().map(String::as_str).collect();
+            emit_page_module_from_snapshot(
+                &mut page_buf,
+                &snap,
+                &route_ident_owned,
+                &route_owned,
+                title_owned.as_deref(),
+                &meta_pairs,
+                &custom_code_refs,
+                &hooks_owned,
+            );
+            let page_js = String::from_utf8(page_buf.into_bytes()).unwrap_or_default();
+
+            // Emit each unique memo body.
+            let mut bodies: Vec<(String, String)> = Vec::with_capacity(snap.memo_bodies.len());
+            // Clone the (name, root) pairs out so we can release the
+            // borrow on `snap.memo_bodies` before re-borrowing for the
+            // emit walk (which reads `snap.wrap_redirects` etc.).
+            let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> =
+                snap.memo_bodies.iter().map(|b| (b.name, b.root)).collect();
+            for (name_sym, root_idx) in body_specs {
+                let mut body_buf = CodeBuffer::with_capacity(2048);
+                let name_str = reflex_intern::resolve_unchecked(name_sym).to_owned();
+                // Passthrough signature is the default. Snapshot
+                // bodies would use `"()"` — for now we always use
+                // `"{ children }"` since the freeze path always
+                // produces passthrough wrappers. The snapshot-body
+                // variant is a follow-on once the freeze pass
+                // captures `is_snapshot_boundary` per memo candidate.
+                // Passthrough signature is wrapped in `()` so the
+                // emitted shell is `memo(({ children }) => …)` —
+                // matches the Python `_signature_for(definition)`
+                // output for `passthrough_hole_child is not None`.
+                // Snapshot bodies (definition.passthrough_hole_child
+                // is None in Python) want `"()"`; the arena freeze
+                // currently produces passthrough wrappers only, so
+                // this default is correct. Snapshot-body detection is
+                // a follow-on PR (carry `is_snapshot_boundary` per
+                // memo candidate from freeze).
+                emit_memo_module_from_snapshot(
+                    &mut body_buf,
+                    &snap,
+                    root_idx,
+                    &name_str,
+                    "({ children })",
+                    "",
+                );
+                let body_js = String::from_utf8(body_buf.into_bytes()).unwrap_or_default();
+                bodies.push((name_str, body_js));
+            }
+            (page_js, bodies)
+        });
+
+        Ok((page_js, memo_bodies, imports_dict))
+    }
 }
 
 #[pymethods]
@@ -161,11 +293,7 @@ impl CompilerSession {
     ///         tuples.
     ///     out_path: absolute filesystem path the index gets written to.
     ///         Parent directory must already exist.
-    fn compile_memo_index(
-        &self,
-        reexports: Vec<(String, String)>,
-        out_path: &str,
-    ) -> PyResult<()> {
+    fn compile_memo_index(&self, reexports: Vec<(String, String)>, out_path: &str) -> PyResult<()> {
         let pairs: Vec<(&str, &str)> = reexports
             .iter()
             .map(|(n, s)| (n.as_str(), s.as_str()))
@@ -178,22 +306,31 @@ impl CompilerSession {
     /// Ports `styles_template` — wraps every stylesheet in an
     /// `@import url('…');` line under a single
     /// `@layer __reflex_base;` header.
-    fn compile_styles_root(
-        &self,
-        stylesheets: Vec<String>,
-        out_path: &str,
-    ) -> PyResult<()> {
+    fn compile_styles_root(&self, stylesheets: Vec<String>, out_path: &str) -> PyResult<()> {
         let refs: Vec<&str> = stylesheets.iter().map(String::as_str).collect();
         write_to_file(out_path, |w| emit_styles_root(&refs, w))
     }
 
-    /// Emit `.web/utils/theme.js`.
+    /// Emit `.web/utils/theme.js` directly from a theme Component.
     ///
-    /// Ports `theme_template` — a single
-    /// `export default <theme_js>` line where `theme_js` is the JS
-    /// object literal Python builds via `LiteralVar.create(theme)`.
-    fn compile_theme_module(&self, theme_js: &str, out_path: &str) -> PyResult<()> {
-        write_to_file(out_path, |w| emit_theme_module(theme_js, w))
+    /// Ports `theme_template` — a single `export default <theme_js>`
+    /// line. The theme Component crosses the PyO3 boundary so
+    /// `rust_pipeline.py` never has to import `LiteralVar` or pre-render
+    /// the JS string itself; the rendering hop still happens here via
+    /// `LiteralVar.create(theme_component)` for byte parity with the
+    /// retired string-input entry.
+    fn compile_theme_from_component_arena<'py>(
+        &self,
+        py: Python<'py>,
+        theme_component: &Bound<'py, PyAny>,
+        out_path: &str,
+    ) -> PyResult<()> {
+        let literal_var = py
+            .import_bound("reflex_base.vars.base")?
+            .getattr("LiteralVar")?;
+        let wrapped = literal_var.call_method1("create", (theme_component,))?;
+        let theme_js: String = wrapped.str()?.extract()?;
+        write_to_file(out_path, |w| emit_theme_module(&theme_js, w))
     }
 
     /// Emit `.web/backend/stateful_pages.json`.
@@ -201,11 +338,7 @@ impl CompilerSession {
     /// Mirrors `App._write_stateful_pages_marker`. Python decides which
     /// routes are stateful (it requires a state walk we haven't ported);
     /// Rust just serializes the list as JSON and writes the file.
-    fn compile_stateful_pages_marker(
-        &self,
-        routes: Vec<String>,
-        out_path: &str,
-    ) -> PyResult<()> {
+    fn compile_stateful_pages_marker(&self, routes: Vec<String>, out_path: &str) -> PyResult<()> {
         let refs: Vec<&str> = routes.iter().map(String::as_str).collect();
         write_to_file(out_path, |w| emit_stateful_pages_json(&refs, w))
     }
@@ -224,50 +357,139 @@ impl CompilerSession {
     ///     state_keys: full dotted names of every state context.
     ///     initial_state_json: pre-serialized initial-state dict.
     ///     client_storage_json: pre-serialized client-storage config.
-    /// Emit `.web/app/root.jsx`.
+    /// Emit `.web/app/root.jsx` from an app-root Component.
     ///
-    /// Ports `app_root_template`. Python pre-renders the dynamic
-    /// strings (imports, hooks, render_str, …) using
-    /// `_RenderUtils.render` + friends — those depend on the legacy
-    /// Python JSX renderer. Rust splices them into the static layout.
-    fn compile_app_root_module(
+    /// Replaces the previous string-input `compile_app_root_module` shim
+    /// that required the Python caller to first run
+    /// `_RenderUtils.render(component.render())`, `_render_hooks`,
+    /// `component._get_all_custom_code()`,
+    /// `component._get_all_dynamic_imports()`, and the import-format
+    /// chain. All of those now live on the Rust side of the freeze +
+    /// harvest + emit pipeline:
+    ///
+    /// 1. Freeze the Component tree once (the bun_imports accumulator
+    ///    on `PyRefs` captures each node's `_get_imports()` inline).
+    /// 2. With the GIL released: emit the JSX via
+    ///    `emit_jsx_compact_from_snapshot` (matches the legacy
+    ///    `_RenderUtils.render` no-space format byte-for-byte),
+    ///    harvest `custom_code` / `dynamic_imports` from the snapshot,
+    ///    render the hooks block via `render_hooks`.
+    /// 3. With the GIL: format the imports lines via the Python
+    ///    helpers `_apply_common_imports` + `compile_imports` +
+    ///    `_RenderUtils.get_import` (these are NOT one of the four
+    ///    aggregating `_get_all_*` methods).
+    /// 4. Splice everything into `emit_app_root_module` and write.
+    ///
+    /// Returns the bun-install imports dict (post-alias-prefix) so the
+    /// caller can merge it into the global install set.
+    fn compile_app_root_arena<'py>(
         &self,
-        imports_str: &str,
-        dynamic_imports_str: &str,
-        custom_code_str: &str,
-        hooks_str: &str,
-        render_str: &str,
+        py: Python<'py>,
+        component: &Bound<'py, PyAny>,
         import_window_libraries: &str,
-        window_imports_str: &str,
+        window_imports: &str,
         out_path: &str,
-    ) -> PyResult<()> {
+    ) -> PyResult<Bound<'py, PyDict>> {
+        self.freeze_crossings.set(0);
+        let refs = PyRefs::new(py)?.with_session_caches(
+            std::rc::Rc::clone(&self.class_metadata),
+            std::rc::Rc::clone(&self.freeze_crossings),
+            std::rc::Rc::clone(&self.freeze_trivial_skips),
+            std::rc::Rc::clone(&self.direct_get_props_calls),
+            std::rc::Rc::clone(&self.direct_rename_props_reads),
+        );
+        let imports_dict = PyDict::new_bound(py);
+        *refs.bun_imports.borrow_mut() = Some(imports_dict.clone().unbind());
+        let snapshot = freeze_component_with_class_cache(py, component, &refs)?;
+        *refs.bun_imports.borrow_mut() = None;
+
+        // GIL released: emit JSX (compact format matching legacy
+        // `_RenderUtils.render`), harvest custom_code +
+        // dynamic_imports as strings, render hooks block.
+        let (render_str, custom_code_str, dynamic_imports_str, hooks_str) =
+            py.allow_threads(|| {
+                let mut buf = CodeBuffer::with_capacity(4096);
+                emit_jsx_compact_from_snapshot(&mut buf, &snapshot);
+                let render = String::from_utf8(buf.into_bytes()).unwrap_or_default();
+
+                let custom_code = collect_custom_code(&snapshot)
+                    .into_iter()
+                    .map(|s| resolve_unchecked(s).to_owned())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let dyn_imports = collect_dynamic_imports(&snapshot)
+                    .into_iter()
+                    .map(|s| resolve_unchecked(s).to_owned())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let hooks = render_hooks_unfiltered(&snapshot, &[]);
+                (render, custom_code, dyn_imports, hooks)
+            });
+
+        // Format imports via Python helpers — these don't touch the
+        // four `_get_all_*` aggregators (the patched set) and reuse
+        // the legacy `_RenderUtils.get_import` formatter so the
+        // resulting lines are byte-identical to the previous Python
+        // chain that fed the string-input `compile_app_root_module`.
+        let imports_str = format_imports_via_python(py, &imports_dict)?;
+
         write_to_file(out_path, |w| {
             emit_app_root_module(
-                imports_str,
-                dynamic_imports_str,
-                custom_code_str,
-                hooks_str,
-                render_str,
+                &imports_str,
+                &dynamic_imports_str,
+                &custom_code_str,
+                &hooks_str,
+                &render_str,
                 import_window_libraries,
-                window_imports_str,
+                window_imports,
                 w,
             )
-        })
+        })?;
+        Ok(imports_dict)
     }
 
-    /// Emit `.web/app/_document.js`.
+    /// Emit `.web/app/_document.js` from a pre-built document-root
+    /// Component tree.
     ///
-    /// Ports `document_root_template`. Python pre-renders the imports
-    /// list and the document JSX expression; Rust splices both into
-    /// the layout function.
-    fn compile_document_root_module(
+    /// The Python wrapper `CompilerSession.compile_document_root_arena`
+    /// composes the `<html><head><body>` shell (user
+    /// `head_components` are user Python and stay there); the assembled
+    /// tree crosses the PyO3 boundary once here. Internally:
+    ///
+    /// 1. Freeze the Component (bun_imports accumulator captures
+    ///    every node's `_get_imports()`).
+    /// 2. With the GIL released: render the JSX via the compact emit
+    ///    so the embedded payload matches the legacy
+    ///    `_RenderUtils.render(document_root.render())` shape.
+    /// 3. With the GIL: format imports via the Python helpers
+    ///    (`_apply_common_imports` + `compile_imports` +
+    ///    `_RenderUtils.get_import`) — the same byte format the prior
+    ///    string-input shim produced.
+    /// 4. Splice into `emit_document_root_module` and write.
+    fn compile_document_root_arena<'py>(
         &self,
-        imports_str: &str,
-        document_render_str: &str,
+        py: Python<'py>,
+        document_root_component: &Bound<'py, PyAny>,
         out_path: &str,
     ) -> PyResult<()> {
+        let refs = PyRefs::new(py)?;
+        let imports_dict = PyDict::new_bound(py);
+        *refs.bun_imports.borrow_mut() = Some(imports_dict.clone().unbind());
+        let snapshot = freeze_component(py, document_root_component, &refs)?;
+        *refs.bun_imports.borrow_mut() = None;
+
+        let render_str = py.allow_threads(|| {
+            let mut buf = CodeBuffer::with_capacity(2048);
+            emit_jsx_compact_from_snapshot(&mut buf, &snapshot);
+            String::from_utf8(buf.into_bytes()).unwrap_or_default()
+        });
+
+        let imports_str = format_imports_via_python(py, &imports_dict)?;
+
         write_to_file(out_path, |w| {
-            emit_document_root_module(imports_str, document_render_str, w)
+            emit_document_root_module(&imports_str, &render_str, w)
         })
     }
 
@@ -312,7 +534,10 @@ impl CompilerSession {
         if snapshot.nodes.is_empty() {
             return Ok(false);
         }
-        Ok(reflex_codegen::should_memoize_arena(&snapshot, snapshot.root))
+        Ok(reflex_codegen::should_memoize_arena(
+            &snapshot,
+            snapshot.root,
+        ))
     }
 
     /// PR7 verification helper. Returns a stats dict from a freshly
@@ -347,6 +572,33 @@ impl CompilerSession {
         d.set_item("vars_used_total", vars_used_total)?;
         d.set_item("unique_var_ids", unique_var_ids)?;
         Ok(d)
+    }
+
+    /// Dump the frozen `Snapshot` as a Python dict tree of primitives.
+    ///
+    /// Every field downstream code (memoize pass, JSX emitter) consults
+    /// during compile is materialized here. Tests use this to assert
+    /// the IR contains every value Rust would otherwise need to fetch
+    /// via PyO3 — if a field appears in the dump, no callback into
+    /// Python is required to produce it later.
+    ///
+    /// String values are resolved through the intern table. Empty
+    /// symbols (`Symbol::EMPTY`) are returned as `None`; consumers that
+    /// want the empty string can substitute it locally.
+    fn dump_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+        component: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let refs = PyRefs::new(py)?.with_session_caches(
+            std::rc::Rc::clone(&self.class_metadata),
+            std::rc::Rc::clone(&self.freeze_crossings),
+            std::rc::Rc::clone(&self.freeze_trivial_skips),
+            std::rc::Rc::clone(&self.direct_get_props_calls),
+            std::rc::Rc::clone(&self.direct_rename_props_reads),
+        );
+        let snapshot = freeze_component_with_class_cache(py, component, &refs)?;
+        snapshot_to_pydict(py, &snapshot)
     }
 
     /// Run the memoize-decision walk on a Component PyObject.
@@ -502,122 +754,16 @@ impl CompilerSession {
         custom_code: Option<Vec<String>>,
         hooks_body: Option<&str>,
     ) -> PyResult<(String, Vec<(String, String)>, Bound<'py, PyDict>)> {
-        let meta_pairs: Vec<(String, String)> = match meta_tags {
-            Some(list) => {
-                let mut out = Vec::with_capacity(list.len());
-                for item in list.iter() {
-                    let tup: Bound<PyTuple> = item.downcast_into()?;
-                    if tup.len() != 2 {
-                        return Err(pyo3::exceptions::PyValueError::new_err(
-                            "meta_tags entries must be (name, content) tuples",
-                        ));
-                    }
-                    let n: String = tup.get_item(0)?.extract()?;
-                    let c: String = tup.get_item(1)?.extract()?;
-                    out.push((n, c));
-                }
-                out
-            }
-            None => Vec::new(),
-        };
-
-        let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
-        let hooks_owned = hooks_body.unwrap_or("").to_string();
-
-        // PyO3-bound phase: freeze the component tree AND harvest the
-        // per-page imports dict in the same walk. The accumulator
-        // dict is stashed on `PyRefs::bun_imports` before freeze
-        // runs; `accumulate_bun_imports` merges each Component's
-        // `_get_imports()` into it inline, deduped by `id(component)`.
-        // No separate `collect_all_imports` tree walk — eliminates
-        // the second `_get_imports * N` PyO3 boundary cost (planx.md
-        // PR7 follow-through).
-        // PR-Freeze-Speedup B/C: clone session-scoped caches into
-        // PyRefs so freeze can read+write per-class metadata that
-        // survives across calls. Counters reset per arena entry so
-        // tests see a clean number for this compile.
-        self.freeze_crossings.set(0);
-        let refs = PyRefs::new(py)?.with_session_caches(
-            std::rc::Rc::clone(&self.class_metadata),
-            std::rc::Rc::clone(&self.freeze_crossings),
-            std::rc::Rc::clone(&self.freeze_trivial_skips),
-            std::rc::Rc::clone(&self.direct_get_props_calls),
-            std::rc::Rc::clone(&self.direct_rename_props_reads),
-        );
-        let imports_dict = PyDict::new_bound(py);
-        *refs.bun_imports.borrow_mut() = Some(imports_dict.clone().unbind());
-        let snapshot = freeze_component_with_class_cache(py, component, &refs)?;
-        *refs.bun_imports.borrow_mut() = None;
-
-        // Release the GIL for the in-arena memoize + emit. None of the
-        // following calls touch Python state — they read Snapshot,
-        // write to `CodeBuffer`s, and return owned `String`s.
-        let route_ident_owned = route_ident.to_string();
-        let route_owned = route.to_string();
-        let title_owned = title.map(|s| s.to_owned());
-        let (page_js, memo_bodies) = py.allow_threads(move || {
-            let mut snap = snapshot;
-            memoize_arena_pass(&mut snap);
-
-            // Emit the page module.
-            let mut page_buf = CodeBuffer::with_capacity(4096);
-            let custom_code_refs: Vec<&str> =
-                custom_code_owned.iter().map(String::as_str).collect();
-            emit_page_module_from_snapshot(
-                &mut page_buf,
-                &snap,
-                &route_ident_owned,
-                &route_owned,
-                title_owned.as_deref(),
-                &meta_pairs,
-                &custom_code_refs,
-                &hooks_owned,
-            );
-            let page_js = String::from_utf8(page_buf.into_bytes()).unwrap_or_default();
-
-            // Emit each unique memo body.
-            let mut bodies: Vec<(String, String)> = Vec::with_capacity(snap.memo_bodies.len());
-            // Clone the (name, root) pairs out so we can release the
-            // borrow on `snap.memo_bodies` before re-borrowing for the
-            // emit walk (which reads `snap.wrap_redirects` etc.).
-            let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> = snap
-                .memo_bodies
-                .iter()
-                .map(|b| (b.name, b.root))
-                .collect();
-            for (name_sym, root_idx) in body_specs {
-                let mut body_buf = CodeBuffer::with_capacity(2048);
-                let name_str = reflex_intern::resolve_unchecked(name_sym).to_owned();
-                // Passthrough signature is the default. Snapshot
-                // bodies would use `"()"` — for now we always use
-                // `"{ children }"` since the freeze path always
-                // produces passthrough wrappers. The snapshot-body
-                // variant is a follow-on once the freeze pass
-                // captures `is_snapshot_boundary` per memo candidate.
-                // Passthrough signature is wrapped in `()` so the
-                // emitted shell is `memo(({ children }) => …)` —
-                // matches the Python `_signature_for(definition)`
-                // output for `passthrough_hole_child is not None`.
-                // Snapshot bodies (definition.passthrough_hole_child
-                // is None in Python) want `"()"`; the arena freeze
-                // currently produces passthrough wrappers only, so
-                // this default is correct. Snapshot-body detection is
-                // a follow-on PR (carry `is_snapshot_boundary` per
-                // memo candidate from freeze).
-                emit_memo_module_from_snapshot(
-                    &mut body_buf,
-                    &snap,
-                    root_idx,
-                    &name_str,
-                    "({ children })",
-                    "",
-                );
-                let body_js = String::from_utf8(body_buf.into_bytes()).unwrap_or_default();
-                bodies.push((name_str, body_js));
-            }
-            (page_js, bodies)
-        });
-
+        let (page_js, memo_bodies, imports_dict) = self.compile_page_from_component_arena_impl(
+            py,
+            component,
+            route_ident,
+            route,
+            title,
+            meta_tags,
+            custom_code,
+            hooks_body,
+        )?;
         Ok((page_js, memo_bodies, imports_dict))
     }
 }
@@ -654,6 +800,266 @@ pub(crate) fn write_bytes_if_changed(out_path: &str, content: &[u8]) -> PyResult
     }
     std::fs::write(out_path, content)
         .map_err(|e| pyo3::exceptions::PyOSError::new_err(format!("{out_path}: {e}")))
+}
+
+/// Format a freeze-collected `bun_imports` dict into the legacy
+/// `import {...} from "..."` line block.
+///
+/// Drives the same chain `_compile_document_root` / `_compile_app`
+/// used in the legacy compile, minus the
+/// `component._get_all_imports()` call (that's covered by the
+/// `PyRefs::bun_imports` accumulator filled inline during freeze).
+/// The three Python helpers it touches —
+/// `reflex.compiler.compiler._apply_common_imports`,
+/// `reflex.compiler.utils.compile_imports`,
+/// `reflex_base.compiler.templates._RenderUtils.get_import` — are NOT
+/// any of the four aggregating `_get_all_*` methods that the arena
+/// pipeline must avoid, so this still satisfies the no-legacy-harvest
+/// contract.
+fn format_imports_via_python<'py>(
+    py: Python<'py>,
+    bun_imports: &Bound<'py, PyDict>,
+) -> PyResult<String> {
+    let compiler_mod = py.import_bound("reflex.compiler.compiler")?;
+    let utils_mod = py.import_bound("reflex.compiler.utils")?;
+    let templates_mod = py.import_bound("reflex_base.compiler.templates")?;
+
+    let apply_common = compiler_mod.getattr("_apply_common_imports")?;
+    let compile_imports = utils_mod.getattr("compile_imports")?;
+    let render_utils = templates_mod.getattr("_RenderUtils")?;
+    let get_import = render_utils.getattr("get_import")?;
+
+    apply_common.call1((bun_imports.clone(),))?;
+    let modules = compile_imports.call1((bun_imports.clone(),))?;
+    let modules_iter = modules.iter()?;
+    let mut out_lines: Vec<String> = Vec::new();
+    for module in modules_iter {
+        let module = module?;
+        let line: String = get_import.call1((module,))?.extract()?;
+        out_lines.push(line);
+    }
+    Ok(out_lines.join("\n"))
+}
+
+/// Serialize a `Snapshot` to a `dict` of primitives for test inspection.
+///
+/// Mirrors every field on `reflex_ir::Snapshot` and `NodeSnapshot`.
+/// `Symbol::EMPTY` becomes `None`; other symbols become `str` via the
+/// intern table.
+fn snapshot_to_pydict<'py>(
+    py: Python<'py>,
+    snap: &reflex_ir::Snapshot,
+) -> PyResult<Bound<'py, PyDict>> {
+    use reflex_intern::Symbol;
+    let out = PyDict::new_bound(py);
+
+    let sym = |s: Symbol| -> Option<&'static str> {
+        if s == Symbol::EMPTY {
+            None
+        } else {
+            Some(resolve_unchecked(s))
+        }
+    };
+
+    let nodes = PyList::empty_bound(py);
+    for node in &snap.nodes {
+        let d = PyDict::new_bound(py);
+        d.set_item("kind", format!("{:?}", node.kind))?;
+        d.set_item("tag", sym(node.tag))?;
+        d.set_item("style_key", sym(node.style_key))?;
+        d.set_item("style", sym(node.style))?;
+        d.set_item("custom_code", sym(node.custom_code))?;
+        d.set_item("ref_name", sym(node.ref_name))?;
+        d.set_item("flags_bits", node.flags.bits())?;
+        d.set_item("subtree_hash", node.subtree_hash)?;
+        d.set_item(
+            "children",
+            (node.children.start, node.children.end),
+        )?;
+
+        let props = PyList::empty_bound(py);
+        for (k, v) in &node.rendered_props {
+            props.append((sym(*k), sym(*v)))?;
+        }
+        d.set_item("rendered_props", props)?;
+
+        let events = PyList::empty_bound(py);
+        for (trigger, body) in &node.event_callbacks {
+            events.append((sym(*trigger), sym(*body)))?;
+        }
+        d.set_item("event_callbacks", events)?;
+
+        let imports = PyList::empty_bound(py);
+        for entry in &node.imports {
+            imports.append((sym(entry.module), sym(entry.name)))?;
+        }
+        d.set_item("imports", imports)?;
+
+        let hi = PyList::empty_bound(py);
+        for h in &node.hooks_internal {
+            let h_d = PyDict::new_bound(py);
+            h_d.set_item("code", sym(h.code))?;
+            h_d.set_item("position", h.position)?;
+            hi.append(h_d)?;
+        }
+        d.set_item("hooks_internal", hi)?;
+
+        let hu = PyList::empty_bound(py);
+        for h in &node.hooks_user {
+            let h_d = PyDict::new_bound(py);
+            h_d.set_item("code", sym(h.code))?;
+            h_d.set_item("position", h.position)?;
+            hu.append(h_d)?;
+        }
+        d.set_item("hooks_user", hu)?;
+
+        let di = PyList::empty_bound(py);
+        for s in &node.dynamic_imports {
+            di.append(sym(*s))?;
+        }
+        d.set_item("dynamic_imports", di)?;
+
+        let vars_used = PyList::empty_bound(py);
+        for r in &node.vars_used {
+            vars_used.append(r.0)?;
+        }
+        d.set_item("vars_used", vars_used)?;
+
+        nodes.append(d)?;
+    }
+    out.set_item("nodes", nodes)?;
+    out.set_item("root", snap.root)?;
+
+    let var_data = PyList::empty_bound(py);
+    for entry in &snap.var_data {
+        let d = PyDict::new_bound(py);
+        d.set_item("state", sym(entry.state))?;
+        let position: Option<u8> = if entry.position == u8::MAX {
+            None
+        } else {
+            Some(entry.position)
+        };
+        d.set_item("position", position)?;
+        let hooks: Vec<Option<&'static str>> = snap.var_hooks
+            [entry.hooks.start as usize..entry.hooks.end as usize]
+            .iter()
+            .map(|s| sym(*s))
+            .collect();
+        d.set_item("hooks", hooks)?;
+        let imports: Vec<(Option<&'static str>, Option<&'static str>)> = snap.var_imports
+            [entry.imports.start as usize..entry.imports.end as usize]
+            .iter()
+            .map(|(m, n)| (sym(*m), sym(*n)))
+            .collect();
+        d.set_item("imports", imports)?;
+        let deps: Vec<Option<&'static str>> = snap.var_deps
+            [entry.deps.start as usize..entry.deps.end as usize]
+            .iter()
+            .map(|s| sym(*s))
+            .collect();
+        d.set_item("deps", deps)?;
+        let components: Vec<Option<&'static str>> = snap.var_components
+            [entry.components.start as usize..entry.components.end as usize]
+            .iter()
+            .map(|s| sym(*s))
+            .collect();
+        d.set_item("components", components)?;
+        var_data.append(d)?;
+    }
+    out.set_item("var_data", var_data)?;
+
+    let memo_bodies = PyList::empty_bound(py);
+    for body in &snap.memo_bodies {
+        let d = PyDict::new_bound(py);
+        d.set_item("name", sym(body.name))?;
+        d.set_item("root", body.root)?;
+        d.set_item("subtree_hash", body.subtree_hash)?;
+        d.set_item("signature", sym(body.signature))?;
+        memo_bodies.append(d)?;
+    }
+    out.set_item("memo_bodies", memo_bodies)?;
+
+    let app_wraps = PyList::empty_bound(py);
+    for wrap in &snap.app_wraps {
+        let d = PyDict::new_bound(py);
+        d.set_item("sort_key", wrap.sort_key)?;
+        d.set_item("name", sym(wrap.name))?;
+        d.set_item("root", wrap.root)?;
+        app_wraps.append(d)?;
+    }
+    out.set_item("app_wraps", app_wraps)?;
+
+    let cf = PyDict::new_bound(py);
+    let cf_map = |m: &std::collections::HashMap<u32, Symbol>| -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new_bound(py);
+        for (k, v) in m {
+            d.set_item(*k, sym(*v))?;
+        }
+        Ok(d)
+    };
+    cf.set_item("text_value", cf_map(&snap.control_flow.text_value)?)?;
+    cf.set_item("cond_test", cf_map(&snap.control_flow.cond_test)?)?;
+    cf.set_item("foreach_iter", cf_map(&snap.control_flow.foreach_iter)?)?;
+    cf.set_item("match_value", cf_map(&snap.control_flow.match_value)?)?;
+    cf.set_item("expr_value", cf_map(&snap.control_flow.expr_value)?)?;
+    cf.set_item("memo_key", cf_map(&snap.control_flow.memo_key)?)?;
+
+    let arms_d = PyDict::new_bound(py);
+    for (idx, arms) in &snap.control_flow.match_arms {
+        let pairs = PyList::empty_bound(py);
+        for (case, body) in arms {
+            pairs.append((sym(*case), *body))?;
+        }
+        arms_d.set_item(*idx, pairs)?;
+    }
+    cf.set_item("match_arms", arms_d)?;
+
+    let default_d = PyDict::new_bound(py);
+    for (idx, body) in &snap.control_flow.match_default {
+        default_d.set_item(*idx, *body)?;
+    }
+    cf.set_item("match_default", default_d)?;
+    out.set_item("control_flow", cf)?;
+
+    let page_meta = PyDict::new_bound(py);
+    page_meta.set_item("schema_version", snap.page_meta.schema_version)?;
+    page_meta.set_item("route", sym(snap.page_meta.route))?;
+    page_meta.set_item("title", sym(snap.page_meta.title))?;
+    let meta_list = PyList::empty_bound(py);
+    for (k, v) in &snap.page_meta.meta {
+        meta_list.append((sym(*k), sym(*v)))?;
+    }
+    page_meta.set_item("meta", meta_list)?;
+    out.set_item("page_meta", page_meta)?;
+
+    let wrap_redirects = PyDict::new_bound(py);
+    for (k, v) in &snap.wrap_redirects {
+        wrap_redirects.set_item(*k, *v)?;
+    }
+    out.set_item("wrap_redirects", wrap_redirects)?;
+
+    let special_props = PyDict::new_bound(py);
+    for (idx, syms) in &snap.special_props {
+        let lst: Vec<Option<&'static str>> = syms.iter().map(|s| sym(*s)).collect();
+        special_props.set_item(*idx, lst)?;
+    }
+    out.set_item("special_props", special_props)?;
+
+    let rename_props = PyDict::new_bound(py);
+    for (idx, pairs) in &snap.rename_props {
+        let lst: Vec<(Option<&'static str>, Option<&'static str>)> =
+            pairs.iter().map(|(a, b)| (sym(*a), sym(*b))).collect();
+        rename_props.set_item(*idx, lst)?;
+    }
+    out.set_item("rename_props", rename_props)?;
+
+    let app_style = PyDict::new_bound(py);
+    for (cls, css) in &snap.app_style_map {
+        app_style.set_item(sym(*cls), sym(*css))?;
+    }
+    out.set_item("app_style_map", app_style)?;
+
+    Ok(out)
 }
 
 fn file_matches(path: &str, content: &[u8]) -> bool {

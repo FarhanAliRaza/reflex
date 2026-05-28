@@ -26,7 +26,7 @@ the PyO3 component reader (``reflex_pyread``).
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,12 @@ def _route_to_ident(route: str) -> str:
 
     ``"/"`` → ``"Index"``, ``"/about"`` → ``"About"``,
     ``"/users/[id]"`` → ``"UsersId"``.
+
+    Args:
+        route: Reflex route path.
+
+    Returns:
+        A valid JS identifier for the route component.
     """
     parts = re.findall(r"[A-Za-z0-9]+", route) or ["index"]
     return "".join(p[:1].upper() + p[1:] for p in parts) or "Index"
@@ -124,14 +130,10 @@ def compile_pages(
         ``ParsedImportDict`` for the whole compile, suitable to pass to
         :meth:`App._get_frontend_packages`.
     """
-    from reflex_base.compiler.templates import _render_hooks, _RenderUtils
     from reflex_base.components.dynamic import bundled_libraries
     from reflex_base.config import get_config
 
-    from reflex.compiler import compiler as legacy_compiler
-    from reflex.compiler import utils as legacy_utils
     from reflex.compiler.compiler import (
-        _apply_common_imports,
         _normalize_library_name,
         _resolve_app_wrap_components,
         _resolve_radix_themes_plugin,
@@ -148,8 +150,8 @@ def compile_pages(
     from reflex_base.components.dynamic import bundle_library, reset_bundled_libraries
 
     reset_bundled_libraries()
-    _, _radix_for_bundle = _resolve_radix_themes_plugin(app, get_config().plugins)
-    for plugin in (*get_config().plugins, _radix_for_bundle):
+    _, radix_for_bundle = _resolve_radix_themes_plugin(app, get_config().plugins)
+    for plugin in (*get_config().plugins, radix_for_bundle):
         for dep in plugin.get_frontend_dependencies():
             bundle_library(dep)
 
@@ -190,41 +192,16 @@ def compile_pages(
             # subclass.
             stateful_routes.append(route)
 
-        # Harvest imports BEFORE memoize substitution: the Rust walker
-        # mirrors ``_get_all_imports`` (children + ``_get_components_in_props``)
-        # so wrappers haven't yet replaced anything. We need the union so
-        # ``bun install`` still pulls in every npm package the original
-        # components reference. ``collect_all_imports_into`` mutates
-        # ``all_imports`` in place — the previous
-        # ``merge_imports(all_imports, ...)`` pattern rebuilt the dict
-        # once per page and was O(N²) in cumulative page count.
-        sess.collect_all_imports_into(all_imports, component)
-
-        # Harvest app-wrap contributions from every component (Radix
-        # ColorMode provider, theme wrap, toaster, etc.). The legacy
-        # compile gathers these via `compile_ctx.app_wrap_components`
-        # during the plugin walk; we walk the evaluated trees ourselves
-        # so `_resolve_app_wrap_components` later produces the full
-        # wrapper set.
+        # Imports come from the arena entry below: freeze populates
+        # ``page_imports`` inline by merging each component's
+        # ``_get_imports()`` into ``PyRefs::bun_imports`` during the
+        # single PyO3 walk. The returned dict already has the
+        # ``$/utils/...`` alias prefix applied, so ``merge_imports_into``
+        # below appends into ``all_imports`` without re-walking the
+        # tree.
         collected_app_wraps.update(component._get_all_app_wrap_components())
 
         ident = _route_to_ident(route)
-
-        # Harvest custom-code + hooks BEFORE memoize substitution. These
-        # are Python strings the Rust emit splices verbatim — they
-        # travel as args next to the IR bytes, no Component PyObjects
-        # cross the boundary during emit.
-        page_custom_code = list(component._get_all_custom_code())
-        # Filter the React-runtime hooks Rust declares unconditionally
-        # (`useContext(StateContexts.<key>)` / `useContext(EventLoopContext)`)
-        # so they're not re-declared in the rendered hooks body.
-        page_all_hooks = component._get_all_hooks()
-        page_hooks_body = _render_hooks({
-            hook: data
-            for hook, data in page_all_hooks.items()
-            if "useContext(StateContexts." not in hook
-            and "useContext(EventLoopContext)" not in hook
-        })
 
         out_path = Path(compiler_utils.get_page_path(route))
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -233,7 +210,12 @@ def compile_pages(
         #   freeze → memoize_arena_pass → emit_page module +
         #   emit_memo_body modules → harvest imports.
         # GIL released for the in-arena transform + emit; freeze is
-        # the only PyO3 surface and runs once per page.
+        # the only PyO3 surface and runs once per page. The snapshot
+        # already carries per-node custom_code / dynamic_imports /
+        # hooks captured during freeze (via `_get_custom_code`,
+        # `_get_hooks_internal`, `_get_hooks_user` — the per-component
+        # variants), so the page emit pulls them straight from the
+        # snapshot. No `_get_all_*` aggregator runs in Python.
         (
             rust_js,
             arena_memo_bodies,
@@ -244,8 +226,6 @@ def compile_pages(
             route,
             title=None,
             meta_tags=None,
-            custom_code=page_custom_code,
-            hooks_body=page_hooks_body,
         )
         sess.merge_imports_into(all_imports, page_imports)
         for name, jsx in arena_memo_bodies:
@@ -274,7 +254,6 @@ def compile_pages(
 
     app_wrappers = _resolve_app_wrap_components(app, collected_app_wraps)
     app_root = app._app_root(app_wrappers)
-    sess.collect_all_imports_into(all_imports, app_root)
 
     # Harvest imports from every ``@rx.memo`` custom component for the
     # install step AND emit each component's standalone memo file —
@@ -290,31 +269,12 @@ def compile_pages(
     # component would leave the on-disk JSX out of sync.
     from reflex_base.components.component import CUSTOM_COMPONENTS
 
-    memo_files, _aggregate_imports = legacy_compiler._compile_memo_components(
-        dict.fromkeys(CUSTOM_COMPONENTS.values()),
-        (),
+    custom_components_dir = Path(compiler_utils.get_memo_components_dir())
+    custom_imports = sess.compile_custom_components_arena(
+        CUSTOM_COMPONENTS.values(),
+        str(custom_components_dir),
     )
-    for raw_path, code in memo_files:
-        _write(str(legacy_utils.resolve_path_of_web_dir(raw_path)), code)
-
-    for component in dict.fromkeys(CUSTOM_COMPONENTS.values()):
-        try:
-            _, custom_imports = compiler_utils.compile_custom_component(component)
-        except Exception:
-            continue
-        sess.merge_imports_into(all_imports, custom_imports)
-
-    app_root_imports = app_root._get_all_imports()
-    _apply_common_imports(app_root_imports)
-    imports_str = "\n".join(
-        _RenderUtils.get_import(m)
-        for m in compiler_utils.compile_imports(app_root_imports)
-    )
-
-    custom_code_str = "\n".join(app_root._get_all_custom_code())
-    hooks_str = _render_hooks(app_root._get_all_hooks())
-    render_str = _RenderUtils.render(app_root.render())
-    dynamic_imports_str = "\n".join(app_root._get_all_dynamic_imports())
+    sess.merge_imports_into(all_imports, custom_imports)
 
     window_libraries = list(
         dict.fromkeys(
@@ -334,16 +294,13 @@ def compile_pages(
         / base_constants.PageNames.APP_ROOT
     )
     Path(root_path).parent.mkdir(parents=True, exist_ok=True)
-    sess.compile_app_root_module(
-        imports_str,
-        dynamic_imports_str,
-        custom_code_str,
-        hooks_str,
-        render_str,
+    app_root_imports = sess.compile_app_root_arena(
+        app_root,
         import_window_libraries,
         window_imports_str,
         root_path,
     )
+    sess.merge_imports_into(all_imports, app_root_imports)
     # NB: deliberately not added to `written` — that map is the
     # route → page-file mapping the caller uses for status output, and
     # root.jsx isn't a route.
@@ -375,7 +332,6 @@ def _emit_static_artifacts(
     import json
 
     from reflex_base import constants as base_constants
-    from reflex_base.compiler.templates import _RenderUtils
     from reflex_base.components.component import (
         CUSTOM_COMPONENTS,
         evaluate_style_namespaces,
@@ -385,10 +341,10 @@ def _emit_static_artifacts(
     from reflex_base.utils.format import json_dumps
     from reflex_base.vars.base import LiteralVar
 
-    from reflex.compiler import compiler as legacy_compiler
     from reflex.compiler import utils as legacy_utils
     from reflex.compiler.compiler import (
         SYSTEM_COLOR_MODE,
+        _memo_component_index_specifier,
         _resolve_radix_themes_plugin,
         _resolve_root_stylesheets,
     )
@@ -402,6 +358,13 @@ def _emit_static_artifacts(
         app, config.plugins
     )
     radix_theme = radix_themes_plugin.get_theme()
+    artifact_cache = sess._static_artifact_keys
+
+    def _static_artifact_changed(name: str, key: tuple, path: str | Path) -> bool:
+        return artifact_cache.get(name) != (str(path), key) or not Path(path).exists()
+
+    def _remember_static_artifact(name: str, key: tuple, path: str | Path) -> None:
+        artifact_cache[name] = (str(path), key)
 
     # ---- utils/context.js (Rust) -----------------------------------------
     # Python still computes the dict inputs (initial state via Pydantic
@@ -427,40 +390,53 @@ def _emit_static_artifacts(
         initial_state_json = "{}"
         client_storage_json = "{}"
     ctx_path = legacy_utils.get_context_path()
-    Path(ctx_path).parent.mkdir(parents=True, exist_ok=True)
-    sess.compile_context_module(
+    ctx_key = (
         is_dev,
         default_color_mode_js,
         state_name_full,
-        state_keys,
+        tuple(state_keys),
         initial_state_json,
         client_storage_json,
-        ctx_path,
     )
+    if _static_artifact_changed("context", ctx_key, ctx_path):
+        Path(ctx_path).parent.mkdir(parents=True, exist_ok=True)
+        sess.compile_context_module(
+            is_dev,
+            default_color_mode_js,
+            state_name_full,
+            state_keys,
+            initial_state_json,
+            client_storage_json,
+            ctx_path,
+        )
+        _remember_static_artifact("context", ctx_key, ctx_path)
 
-    # ---- app/_document.js (Rust — Python pre-renders the dynamic strings)
-    document_root = legacy_utils.create_document_root(
-        app.head_components,
-        html_lang=app.html_lang,
-        html_custom_attrs=(
-            {"suppressHydrationWarning": True, **app.html_custom_attrs}
-            if app.html_custom_attrs
-            else {"suppressHydrationWarning": True}
-        ),
+    # ---- app/_document.js (Rust — wrapper builds the doc-root tree)
+    doc_html_attrs = (
+        {"suppressHydrationWarning": True, **app.html_custom_attrs}
+        if app.html_custom_attrs
+        else {"suppressHydrationWarning": True}
     )
-    doc_imports = document_root._get_all_imports()
-    legacy_compiler._apply_common_imports(doc_imports)
-    doc_imports_str = "\n".join(
-        _RenderUtils.get_import(m) for m in legacy_utils.compile_imports(doc_imports)
-    )
-    doc_render_str = _RenderUtils.render(document_root.render())
     doc_path = str(
         Path(compiler_utils.get_web_dir())
         / base_constants.Dirs.PAGES
         / base_constants.PageNames.DOCUMENT_ROOT
     )
-    Path(doc_path).parent.mkdir(parents=True, exist_ok=True)
-    sess.compile_document_root_module(doc_imports_str, doc_render_str, doc_path)
+    doc_head_components = list(app.head_components)
+    doc_key = (
+        tuple(str(component) for component in doc_head_components),
+        app.html_lang,
+        tuple(sorted(doc_html_attrs.items())),
+    )
+    if _static_artifact_changed("document", doc_key, doc_path):
+        Path(doc_path).parent.mkdir(parents=True, exist_ok=True)
+        sess.compile_document_root_arena(
+            head_components=doc_head_components,
+            html_lang=app.html_lang,
+            html_custom_attrs=doc_html_attrs,
+            out_path=doc_path,
+        )
+        _remember_static_artifact("document", doc_key, doc_path)
 
     # ---- styles/root stylesheet (Rust) -----------------------------------
     # Python still owns the user-stylesheet resolution + SASS compile
@@ -470,31 +446,41 @@ def _emit_static_artifacts(
         app.stylesheets, app.reset_style, plugins=compiler_plugins
     )
     style_path = legacy_utils.get_root_stylesheet_path()
-    Path(style_path).parent.mkdir(parents=True, exist_ok=True)
-    sess.compile_styles_root(sheets, style_path)
+    styles_key = (tuple(sheets),)
+    if _static_artifact_changed("styles", styles_key, style_path):
+        Path(style_path).parent.mkdir(parents=True, exist_ok=True)
+        sess.compile_styles_root(sheets, style_path)
+        _remember_static_artifact("styles", styles_key, style_path)
 
     # ---- utils/theme.js (Rust) -------------------------------------------
-    theme_component = legacy_utils.create_theme(app.style)
-    theme_js = str(LiteralVar.create(theme_component))
     theme_path = legacy_utils.get_theme_path()
-    Path(theme_path).parent.mkdir(parents=True, exist_ok=True)
-    sess.compile_theme_module(theme_js, theme_path)
+    theme_key = (repr(app.style), repr(radix_theme))
+    if _static_artifact_changed("theme", theme_key, theme_path):
+        theme_component = legacy_utils.create_theme(app.style)
+        Path(theme_path).parent.mkdir(parents=True, exist_ok=True)
+        sess.compile_theme_from_component_arena(theme_component, theme_path)
+        _remember_static_artifact("theme", theme_key, theme_path)
 
     # ---- utils/components.jsx — memo index (Rust) ------------------------
+    # The index re-exports each ``@rx.memo`` custom component so
+    # ``root.jsx`` can pull them in via ``$/utils/components``. The
+    # export name is the component's title-cased function name
+    # (``component.tag``), which is also the basename of the per-memo
+    # ``.jsx`` file written by ``compile_custom_components_arena``.
     index_entries: list[tuple[str, str]] = []
     for component in dict.fromkeys(CUSTOM_COMPONENTS.values()):
-        try:
-            render, _ = compiler_utils.compile_custom_component(component)
-        except Exception:
+        if component.tag is None:
             continue
-        name = render["name"]
         index_entries.append((
-            name,
-            legacy_compiler._memo_component_index_specifier(name),
+            component.tag,
+            _memo_component_index_specifier(component.tag),
         ))
     index_path = compiler_utils.get_components_path()
-    Path(index_path).parent.mkdir(parents=True, exist_ok=True)
-    sess.compile_memo_index(index_entries, index_path)
+    memo_index_key = tuple(index_entries)
+    if _static_artifact_changed("memo_index", memo_index_key, index_path):
+        Path(index_path).parent.mkdir(parents=True, exist_ok=True)
+        sess.compile_memo_index(index_entries, index_path)
+        _remember_static_artifact("memo_index", memo_index_key, index_path)
 
     # ---- Plugin save tasks (Tailwind config + root style, etc.) ----------
     # Plugins' ``pre_compile`` hook collects "save tasks" — closures that
@@ -503,16 +489,18 @@ def _emit_static_artifacts(
     # plugin output is config-dependent (Tailwind scans pages for classes,
     # for example); doing it inline matches the legacy ``compile_app``
     # plugin walk.
-    save_tasks: list[tuple] = []
-    modify_tasks: list[tuple[str, str, Any]] = []
+    save_tasks: list[tuple[Callable[..., Any], tuple[Any, ...], dict[str, Any]]] = []
+    modify_tasks: list[tuple[str, str, Callable[[str], str]]] = []
 
-    def _add_save_task(task_fn, *args, **kwargs):
+    def _add_save_task(task_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         save_tasks.append((task_fn, args, kwargs))
 
-    def _make_add_modify_task(plugin):
+    def _make_add_modify_task(
+        plugin: Any,
+    ) -> Callable[[str, Callable[[str], str]], None]:
         plugin_name = plugin.__class__.__module__ + plugin.__class__.__name__
 
-        def _add_modify_task(file_path, modify_fn):
+        def _add_modify_task(file_path: str, modify_fn: Callable[[str], str]) -> None:
             modify_tasks.append((plugin_name, file_path, modify_fn))
 
         return _add_modify_task
@@ -537,11 +525,11 @@ def _emit_static_artifacts(
             continue
         results = result if isinstance(result, list) else [result]
         for raw_path, code in results:
-            resolved = legacy_utils.resolve_path_of_web_dir(raw_path)
+            resolved = compiler_utils.resolve_path_of_web_dir(raw_path)
             output_mapping[resolved] = code
 
     for plugin_name, file_path, modify_fn in modify_tasks:
-        path = legacy_utils.resolve_path_of_web_dir(file_path)
+        path = compiler_utils.resolve_path_of_web_dir(file_path)
         content = output_mapping.get(path)
         if content is None:
             if path.exists():
@@ -572,10 +560,11 @@ def _emit_static_artifacts(
         if stateful_routes is not None
         else list(getattr(app, "_stateful_pages", []))
     )
-    sess.compile_stateful_pages_marker(
-        routes_list,
-        str(backend_dir / Dirs.STATEFUL_PAGES),
-    )
+    stateful_path = backend_dir / Dirs.STATEFUL_PAGES
+    stateful_key = (tuple(routes_list),)
+    if _static_artifact_changed("stateful_pages", stateful_key, stateful_path):
+        sess.compile_stateful_pages_marker(routes_list, str(stateful_path))
+        _remember_static_artifact("stateful_pages", stateful_key, stateful_path)
 
 
 def _write(path: str, code: str) -> None:
@@ -596,5 +585,3 @@ def _write(path: str, code: str) -> None:
     except OSError:
         pass
     p.write_bytes(encoded)
-
-

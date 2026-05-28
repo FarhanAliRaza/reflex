@@ -18,6 +18,7 @@ pub mod harvest;
 pub mod hooks_emit;
 pub mod imports_emit;
 pub mod jsx;
+pub mod jsx_compact_from_snapshot;
 pub mod memo;
 pub mod memoize_arena;
 pub mod memoize_pass;
@@ -36,6 +37,7 @@ pub use context_module::emit_context_module;
 pub use diagnostic::{Diagnostic, Severity};
 pub use document_root_module::emit_document_root_module;
 pub use jsx::{emit_component, emit_component_with_map, emit_value};
+pub use jsx_compact_from_snapshot::emit_jsx_compact_from_snapshot;
 pub use memo::{emit_memo_index, emit_memo_module};
 pub use memoize_arena::should_memoize_arena;
 pub use memoize_pass::{

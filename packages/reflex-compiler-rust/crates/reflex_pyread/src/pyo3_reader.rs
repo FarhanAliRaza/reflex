@@ -176,6 +176,10 @@ pub struct InternedAttrs {
     pub key: Py<PyString>,
     pub id: Py<PyString>,
     pub class_name: Py<PyString>,
+    pub style: Py<PyString>,
+    pub lib_dependencies: Py<PyString>,
+    pub special_props: Py<PyString>,
+    pub import_var: Py<PyString>,
     pub qualname: Py<PyString>,
     pub rename_props: Py<PyString>,
     pub memoization_mode: Py<PyString>,
@@ -211,6 +215,7 @@ pub struct InternedAttrs {
     pub m_get_dynamic_imports: Py<PyString>,
     pub m_get_hooks: Py<PyString>,
     pub m_get_added_hooks: Py<PyString>,
+    pub m_iter_parent_classes_with_method: Py<PyString>,
 }
 
 impl InternedAttrs {
@@ -229,6 +234,10 @@ impl InternedAttrs {
             key: s("key"),
             id: s("id"),
             class_name: s("class_name"),
+            style: s("style"),
+            lib_dependencies: s("lib_dependencies"),
+            special_props: s("special_props"),
+            import_var: s("import_var"),
             qualname: s("__qualname__"),
             rename_props: s("_rename_props"),
             memoization_mode: s("_memoization_mode"),
@@ -262,6 +271,7 @@ impl InternedAttrs {
             m_get_dynamic_imports: s("_get_dynamic_imports"),
             m_get_hooks: s("_get_hooks"),
             m_get_added_hooks: s("_get_added_hooks"),
+            m_iter_parent_classes_with_method: s("_iter_parent_classes_with_method"),
         }
     }
 }
@@ -349,6 +359,9 @@ pub struct ClassMetadata {
     /// Method-handle cache for heavy callbacks. Survives across
     /// compiles in the same session.
     pub method_handles: ClassMethodHandles,
+    /// Whether this class can use the generic static import path for
+    /// trivial instances. ``None`` until first observation.
+    pub default_imports_safe: Option<bool>,
     /// Bitmask of methods that have been marked "always trivial" for
     /// this class. One bit per `SkippableMethod` variant.
     pub skip_flags: u8,
@@ -371,6 +384,7 @@ impl Default for ClassMetadata {
             rename_props_resolved: false,
             memo_mode: None,
             method_handles: ClassMethodHandles::default(),
+            default_imports_safe: None,
             skip_flags: 0,
             trivial_counts: [0; SkippableMethod::COUNT],
             total_visits: 0,
@@ -443,22 +457,25 @@ impl HarvestState {
 
 impl<'py> PyRefs<'py> {
     pub fn new(py: Python<'py>) -> Result<Self, PyReadError> {
-        let vars_mod = py
-            .import_bound("reflex_base.vars.base")
+        let vars_mod =
+            py.import_bound("reflex_base.vars.base")
+                .map_err(|source| PyReadError::Attr {
+                    attr: "import reflex_base.vars.base",
+                    source,
+                })?;
+        let var_cls = vars_mod
+            .getattr("Var")
             .map_err(|source| PyReadError::Attr {
-                attr: "import reflex_base.vars.base",
+                attr: "reflex_base.vars.base.Var",
                 source,
             })?;
-        let var_cls = vars_mod.getattr("Var").map_err(|source| PyReadError::Attr {
-            attr: "reflex_base.vars.base.Var",
-            source,
-        })?;
-        let literal_var_cls = vars_mod
-            .getattr("LiteralVar")
-            .map_err(|source| PyReadError::Attr {
-                attr: "reflex_base.vars.base.LiteralVar",
-                source,
-            })?;
+        let literal_var_cls =
+            vars_mod
+                .getattr("LiteralVar")
+                .map_err(|source| PyReadError::Attr {
+                    attr: "reflex_base.vars.base.LiteralVar",
+                    source,
+                })?;
         let format_library_name = py
             .import_bound("reflex_base.utils.format")
             .and_then(|m| m.getattr("format_library_name"))
@@ -645,10 +662,8 @@ pub fn read_page<'arena, 'py>(
 
     // Drain the harvests collected during the single walk above.
     let harvest = refs.harvest.borrow();
-    let component_imports = arena
-        .alloc_slice_fill_iter(harvest.component_imports.iter().copied());
-    let state_bindings = arena
-        .alloc_slice_fill_iter(harvest.state_bindings.iter().copied());
+    let component_imports = arena.alloc_slice_fill_iter(harvest.component_imports.iter().copied());
+    let state_bindings = arena.alloc_slice_fill_iter(harvest.state_bindings.iter().copied());
     let needs_ref = harvest.needs_ref;
     drop(harvest);
 
@@ -759,13 +774,14 @@ fn read_cond<'arena, 'py>(
     let test = read_value(py, &cond_obj, arena, refs)?;
 
     let children_obj = getattr(component, "children")?;
-    let children: Bound<'_, PyList> = children_obj.downcast_into().map_err(|e| {
-        PyReadError::TypeMismatch {
-            attr: "Cond.children",
-            expected: "list",
-            got: e.to_string(),
-        }
-    })?;
+    let children: Bound<'_, PyList> =
+        children_obj
+            .downcast_into()
+            .map_err(|e| PyReadError::TypeMismatch {
+                attr: "Cond.children",
+                expected: "list",
+                got: e.to_string(),
+            })?;
     let mut iter = children.iter();
     let then_obj = iter.next();
     let else_obj = iter.next();
@@ -812,13 +828,12 @@ fn read_foreach<'arena, 'py>(
             attr: "Foreach._render()",
             source,
         })?;
-    let body_component =
-        iter_tag
-            .call_method0("render_component")
-            .map_err(|source| PyReadError::Attr {
-                attr: "IterTag.render_component()",
-                source,
-            })?;
+    let body_component = iter_tag
+        .call_method0("render_component")
+        .map_err(|source| PyReadError::Attr {
+            attr: "IterTag.render_component()",
+            source,
+        })?;
     let body_ir = read_component(py, &body_component, arena, refs)?;
     let body_alloc: &Component<'arena> = arena.alloc(body_ir);
 
@@ -894,10 +909,7 @@ fn read_match<'arena, 'py>(
         }
     }
 
-    let default_obj = component
-        .getattr("default")
-        .ok()
-        .filter(|v| !v.is_none());
+    let default_obj = component.getattr("default").ok().filter(|v| !v.is_none());
     let default: Option<&Component<'arena>> = match default_obj {
         Some(d) => {
             let ir = read_component(py, &d, arena, refs)?;
@@ -973,8 +985,7 @@ fn read_element<'arena, 'py>(
     let props = read_props(py, component, arena, refs)?;
     let children = read_children(py, component, arena, refs)?;
     let events = read_event_handlers(py, component, arena, refs)?;
-    let hooks: &[Hook<'arena>] =
-        arena.alloc_slice_fill_iter(std::iter::empty::<Hook<'arena>>());
+    let hooks: &[Hook<'arena>] = arena.alloc_slice_fill_iter(std::iter::empty::<Hook<'arena>>());
     Ok(Component::Element {
         tag: tag_sym,
         props,
@@ -1079,12 +1090,10 @@ fn read_props<'arena, 'py>(
     if let Ok(custom) = component.getattr("custom_attrs") {
         if !custom.is_none() {
             if let Ok(mapping) = custom.downcast::<PyMapping>() {
-                let keys = mapping
-                    .keys()
-                    .map_err(|source| PyReadError::Attr {
-                        attr: "custom_attrs.keys()",
-                        source,
-                    })?;
+                let keys = mapping.keys().map_err(|source| PyReadError::Attr {
+                    attr: "custom_attrs.keys()",
+                    source,
+                })?;
                 for key_res in keys.iter().map_err(|source| PyReadError::Attr {
                     attr: "iter(custom_attrs.keys())",
                     source,
@@ -1094,13 +1103,10 @@ fn read_props<'arena, 'py>(
                         source,
                     })?;
                     let name: String = py_str(&key)?;
-                    let val =
-                        mapping
-                            .get_item(&key)
-                            .map_err(|source| PyReadError::Attr {
-                                attr: "custom_attrs[k]",
-                                source,
-                            })?;
+                    let val = mapping.get_item(&key).map_err(|source| PyReadError::Attr {
+                        attr: "custom_attrs[k]",
+                        source,
+                    })?;
                     let value = read_value(py, &val, arena, refs)?;
                     props.push((intern(&name), value));
                 }
@@ -1123,13 +1129,14 @@ fn read_event_handlers<'arena, 'py>(
             Ok(v) if !v.is_none() => v,
             _ => return Ok(arena.alloc_slice_fill_iter(std::iter::empty::<EventHandler<'arena>>())),
         };
-        let triggers: Bound<'_, PyDict> = triggers_obj
-            .downcast_into()
-            .map_err(|e| PyReadError::TypeMismatch {
-                attr: "Component.event_triggers",
-                expected: "dict",
-                got: e.to_string(),
-            })?;
+        let triggers: Bound<'_, PyDict> =
+            triggers_obj
+                .downcast_into()
+                .map_err(|e| PyReadError::TypeMismatch {
+                    attr: "Component.event_triggers",
+                    expected: "dict",
+                    got: e.to_string(),
+                })?;
         triggers
     };
 
@@ -1141,8 +1148,7 @@ fn read_event_handlers<'arena, 'py>(
             // Side-effect triggers handled outside JSX — match bridge.py.
             continue;
         }
-        let (expr, var_data) =
-            event_handler_to_js(&handler_obj, arena, refs)?;
+        let (expr, var_data) = event_handler_to_js(&handler_obj, arena, refs)?;
         out.push(EventHandler {
             trigger: intern(&trigger_name),
             expr: arena.alloc_str(&expr),
@@ -1392,9 +1398,8 @@ fn read_var_data_imports(
                 attr: "VarData.imports[i]",
                 source,
             })?;
-            let t: Bound<'_, PyTuple> = p
-                .downcast_into()
-                .map_err(|e| PyReadError::TypeMismatch {
+            let t: Bound<'_, PyTuple> =
+                p.downcast_into().map_err(|e| PyReadError::TypeMismatch {
                     attr: "VarData.imports[i]",
                     expected: "tuple",
                     got: e.to_string(),
@@ -1587,9 +1592,8 @@ fn vardata_import_pairs(
                 attr: "VarData.imports[i]",
                 source,
             })?;
-            let t: Bound<'_, PyTuple> = p
-                .downcast_into()
-                .map_err(|e| PyReadError::TypeMismatch {
+            let t: Bound<'_, PyTuple> =
+                p.downcast_into().map_err(|e| PyReadError::TypeMismatch {
                     attr: "VarData.imports tuple",
                     expected: "tuple",
                     got: e.to_string(),
@@ -1694,8 +1698,8 @@ fn find_state_idents(expr: &str) -> Vec<String> {
             }
             // Body must end with `_state` and right boundary must be non-word.
             if j > body_start && bytes[..j].ends_with(SUFFIX.as_bytes()) {
-                let right_ok = j == bytes.len()
-                    || !(bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_');
+                let right_ok =
+                    j == bytes.len() || !(bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_');
                 if right_ok {
                     out.push(String::from_utf8_lossy(&bytes[i..j]).into_owned());
                     i = j;
@@ -1754,11 +1758,7 @@ where
 /// Yield every Var-typed value reachable from `root` (props, identity
 /// props, event handlers, Bare contents). Matches bridge._walk_values.
 #[allow(dead_code)]
-fn walk_values<F>(
-    root: &Bound<'_, PyAny>,
-    refs: &PyRefs<'_>,
-    f: &mut F,
-) -> Result<(), PyReadError>
+fn walk_values<F>(root: &Bound<'_, PyAny>, refs: &PyRefs<'_>, f: &mut F) -> Result<(), PyReadError>
 where
     F: FnMut(&Bound<'_, PyAny>) -> Result<(), PyReadError>,
 {
@@ -1793,9 +1793,8 @@ where
                     for (_trigger, handler) in d.iter() {
                         if isinstance(&handler, &refs.var_cls, "event handler")? {
                             f(&handler)?;
-                        } else if let Ok(wrapped) = refs
-                            .literal_var_cls
-                            .call_method1("create", (&handler,))
+                        } else if let Ok(wrapped) =
+                            refs.literal_var_cls.call_method1("create", (&handler,))
                         {
                             if isinstance(&wrapped, &refs.var_cls, "LiteralVar.create result")? {
                                 f(&wrapped)?;
@@ -1816,11 +1815,12 @@ where
 
 // ---- PyO3 helpers -----------------------------------------------------------
 
-fn getattr<'py>(obj: &Bound<'py, PyAny>, attr: &'static str) -> Result<Bound<'py, PyAny>, PyReadError> {
-    obj.getattr(attr).map_err(|source| PyReadError::Attr {
-        attr,
-        source,
-    })
+fn getattr<'py>(
+    obj: &Bound<'py, PyAny>,
+    attr: &'static str,
+) -> Result<Bound<'py, PyAny>, PyReadError> {
+    obj.getattr(attr)
+        .map_err(|source| PyReadError::Attr { attr, source })
 }
 
 fn read_attr_str(

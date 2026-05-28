@@ -506,6 +506,32 @@ def test_add_style_create(component1, component2):
     assert str(c2.style["color"]) == '"black"'
 
 
+def test_empty_add_style_recursive_preserves_compile_caches():
+    """Empty app/style defaults should not clear compile caches."""
+    component = rx.box(rx.box())
+    child = component.children[0]
+    sentinel: ParsedImportDict = {"sentinel": []}
+    setattr(component, "_imports_cache", sentinel)  # noqa: B010
+    setattr(child, "_imports_cache", sentinel)  # noqa: B010
+
+    component._add_style_recursive(Style())
+
+    assert component.__dict__.get("_imports_cache") is sentinel
+    assert child.__dict__.get("_imports_cache") is sentinel
+
+
+def test_nonempty_add_style_recursive_clears_compile_caches():
+    """Real style application still invalidates compile caches."""
+    component = rx.box()
+    sentinel: ParsedImportDict = {"sentinel": []}
+    setattr(component, "_imports_cache", sentinel)  # noqa: B010
+
+    component._add_style_recursive({Box: Style({"color": "red"})})
+
+    assert "_imports_cache" not in component.__dict__
+    assert str(component.style["color"]) == '"red"'
+
+
 def test_get_imports(component1, component2):
     """Test getting the imports of a component.
 

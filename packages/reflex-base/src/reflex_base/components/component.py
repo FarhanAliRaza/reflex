@@ -1355,6 +1355,16 @@ class Component(BaseComponent, ABC):
         if type(self)._add_style != Component._add_style:
             msg = "Do not override _add_style directly. Use add_style instead."
             raise UserWarning(msg)
+        if (
+            not style
+            and not isinstance(self.style, Var)
+            and not self.style
+            and not type(self)._iter_parent_classes_with_method("add_style")
+        ):
+            for child in self.children:
+                if isinstance(child, Component):
+                    child._add_style_recursive(style, theme)
+            return self
         new_style = self._add_style()
         style_vars = [new_style._var_data]
 
