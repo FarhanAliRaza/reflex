@@ -229,6 +229,29 @@ class CompilerSession:
         """
         return dict(self._inner.snapshot_stats(component))
 
+    def dump_snapshot(self, component: object) -> dict:
+        """Freeze ``component`` and return its ``Snapshot`` as a plain dict.
+
+        This is the parity-oracle vehicle for the Python-freezer work: the
+        dump is a lossless, deterministic serialization of every
+        emit-relevant snapshot field (``id()`` values are omitted). Two
+        snapshots compare equal iff their dumps do, so the eventual
+        gather-path snapshot can be proven byte-identical to the Rust
+        freeze walk via ``dump_snapshot`` on both. The snapshot is dumped
+        before the memoize pass, so it reflects the pure frozen tree.
+
+        Args:
+            component: the root ``BaseComponent`` instance to freeze.
+
+        Returns:
+            A nested dict mirroring the ``Snapshot`` arena: ``root``,
+            ``nodes`` (per-node fields), the ``var_data`` table + dense
+            backings, ``control_flow`` side tables, ``rename_props``,
+            ``special_props``, ``app_style_map``, ``app_wraps``, and
+            ``page_meta``.
+        """
+        return dict(self._inner.dump_snapshot(component))
+
     def should_memoize(self, component: object) -> bool:
         """Run the Rust memoize-decision walk on a Reflex ``Component``.
 

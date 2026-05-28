@@ -349,6 +349,28 @@ impl CompilerSession {
         Ok(d)
     }
 
+    /// Freeze a Component tree and return its `Snapshot` as a plain dict.
+    ///
+    /// The dump is the parity-oracle vehicle for the Python-freezer work
+    /// (refine-local plan, PR A): comparing
+    /// `dump_snapshot(build_from_wire(gather(c)))` against
+    /// `dump_snapshot(component)` proves the gather path matches the Rust
+    /// freeze walk byte-for-byte without re-implementing rendering in
+    /// Python. The snapshot is dumped *before* `memoize_arena_pass`, so it
+    /// is the pure frozen tree (no wrapper redirects / memo bodies).
+    ///
+    /// `id(component)` values (`node_pyids`) are intentionally omitted —
+    /// see `snapshot_dump`.
+    fn dump_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+        component: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let refs = PyRefs::new(py)?;
+        let snapshot = freeze_component(py, component, &refs)?;
+        crate::snapshot_dump::snapshot_to_pydict(py, &snapshot)
+    }
+
     /// Run the memoize-decision walk on a Component PyObject.
     ///
     /// Ports `reflex.compiler.plugins.memoize._should_memoize` to Rust

@@ -12,6 +12,7 @@
 //!    Salsa caching lands in D5 — for now every call rebuilds.
 
 mod session;
+mod snapshot_dump;
 
 use std::io::Cursor;
 
