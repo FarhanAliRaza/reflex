@@ -20,9 +20,8 @@ use reflex_codegen::{
 use reflex_db::CompilerDb;
 use reflex_pyread::{
     collect_all_imports as pyread_collect_all_imports,
-    collect_all_imports_into as pyread_collect_all_imports_into,
-    freeze_component, freeze_component_with_class_cache,
-    merge_imports_into as pyread_merge_imports_into,
+    collect_all_imports_into as pyread_collect_all_imports_into, freeze_component,
+    freeze_component_with_class_cache, merge_imports_into as pyread_merge_imports_into,
     should_memoize as memoize_should_memoize, ClassMetadataCache, MemoRefs, PyRefs,
 };
 
@@ -54,6 +53,19 @@ pub struct CompilerSession {
     /// suppress.
     direct_get_props_calls: std::rc::Rc<std::cell::Cell<u64>>,
     direct_rename_props_reads: std::rc::Rc<std::cell::Cell<u64>>,
+    /// PR F incremental compile: content-addressed page-emit cache keyed
+    /// on a complete hash of the snapshot's emit inputs + the page params.
+    /// On a hot-reload where a page's content is unchanged, the memoize +
+    /// emit tail is skipped and the cached `(page_js, memo_bodies)` is
+    /// returned. Keyed soundly (see `compute_emit_cache_key`), so a cache
+    /// hit is byte-identical to a fresh emit.
+    page_emit_cache: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u64, (String, Vec<(String, String)>)>>,
+    >,
+    /// Whether the page-emit cache is consulted. Off by default so the
+    /// default pipeline behaviour (and the parity tests) re-emit every
+    /// call; hot-reload drivers opt in via `set_emit_cache_enabled(True)`.
+    emit_cache_enabled: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 #[pymethods]
@@ -69,7 +81,18 @@ impl CompilerSession {
             freeze_trivial_skips: std::rc::Rc::new(std::cell::Cell::new(0)),
             direct_get_props_calls: std::rc::Rc::new(std::cell::Cell::new(0)),
             direct_rename_props_reads: std::rc::Rc::new(std::cell::Cell::new(0)),
+            page_emit_cache: std::rc::Rc::new(std::cell::RefCell::new(
+                std::collections::HashMap::new(),
+            )),
+            emit_cache_enabled: std::rc::Rc::new(std::cell::Cell::new(false)),
         }
+    }
+
+    /// Enable/disable the content-addressed page-emit cache (PR F). Off by
+    /// default; hot-reload drivers turn it on so unchanged pages skip the
+    /// memoize + emit tail.
+    fn set_emit_cache_enabled(&self, enabled: bool) {
+        self.emit_cache_enabled.set(enabled);
     }
 
     /// B: direct-from-Rust `get_props` invocations this session. Lets
@@ -142,6 +165,7 @@ impl CompilerSession {
     /// Drop all cached page renders. Equivalent to creating a new session.
     fn clear_cache(&self) {
         self.db.clear();
+        self.page_emit_cache.borrow_mut().clear();
     }
 
     /// Number of cached page renders. Useful for tests + diagnostics.
@@ -161,11 +185,7 @@ impl CompilerSession {
     ///         tuples.
     ///     out_path: absolute filesystem path the index gets written to.
     ///         Parent directory must already exist.
-    fn compile_memo_index(
-        &self,
-        reexports: Vec<(String, String)>,
-        out_path: &str,
-    ) -> PyResult<()> {
+    fn compile_memo_index(&self, reexports: Vec<(String, String)>, out_path: &str) -> PyResult<()> {
         let pairs: Vec<(&str, &str)> = reexports
             .iter()
             .map(|(n, s)| (n.as_str(), s.as_str()))
@@ -178,11 +198,7 @@ impl CompilerSession {
     /// Ports `styles_template` — wraps every stylesheet in an
     /// `@import url('…');` line under a single
     /// `@layer __reflex_base;` header.
-    fn compile_styles_root(
-        &self,
-        stylesheets: Vec<String>,
-        out_path: &str,
-    ) -> PyResult<()> {
+    fn compile_styles_root(&self, stylesheets: Vec<String>, out_path: &str) -> PyResult<()> {
         let refs: Vec<&str> = stylesheets.iter().map(String::as_str).collect();
         write_to_file(out_path, |w| emit_styles_root(&refs, w))
     }
@@ -201,11 +217,7 @@ impl CompilerSession {
     /// Mirrors `App._write_stateful_pages_marker`. Python decides which
     /// routes are stateful (it requires a state walk we haven't ported);
     /// Rust just serializes the list as JSON and writes the file.
-    fn compile_stateful_pages_marker(
-        &self,
-        routes: Vec<String>,
-        out_path: &str,
-    ) -> PyResult<()> {
+    fn compile_stateful_pages_marker(&self, routes: Vec<String>, out_path: &str) -> PyResult<()> {
         let refs: Vec<&str> = routes.iter().map(String::as_str).collect();
         write_to_file(out_path, |w| emit_stateful_pages_json(&refs, w))
     }
@@ -312,7 +324,10 @@ impl CompilerSession {
         if snapshot.nodes.is_empty() {
             return Ok(false);
         }
-        Ok(reflex_codegen::should_memoize_arena(&snapshot, snapshot.root))
+        Ok(reflex_codegen::should_memoize_arena(
+            &snapshot,
+            snapshot.root,
+        ))
     }
 
     /// PR7 verification helper. Returns a stats dict from a freshly
@@ -557,7 +572,7 @@ impl CompilerSession {
         // Release the GIL for the in-arena memoize + emit. None of the
         // following calls touch Python state — they read Snapshot,
         // write to `CodeBuffer`s, and return owned `String`s.
-        let (page_js, memo_bodies) = emit_page_and_memo_bodies(
+        let (page_js, memo_bodies) = self.emit_page_and_memo_bodies(
             py,
             snapshot,
             route_ident,
@@ -608,7 +623,7 @@ impl CompilerSession {
         let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
         let hooks_owned = hooks_body.unwrap_or("").to_string();
         let snapshot = crate::from_wire::build_snapshot_from_wire(bundle, compute_close)?;
-        Ok(emit_page_and_memo_bodies(
+        Ok(self.emit_page_and_memo_bodies(
             py,
             snapshot,
             route_ident,
@@ -651,7 +666,158 @@ fn parse_meta_tags(meta_tags: Option<&Bound<'_, PyList>>) -> PyResult<Vec<(Strin
 /// the page module + memo body emit is byte-identical regardless of how
 /// the `Snapshot` was sourced (live freeze vs wire rebuild). None of the
 /// work here touches Python state.
-fn emit_page_and_memo_bodies(
+impl CompilerSession {
+    /// Memoize + emit a frozen snapshot into `(page_js, memo_bodies)`,
+    /// short-circuiting through the content-addressed page-emit cache
+    /// (PR F). On a cache hit the GIL-released memoize + emit is skipped
+    /// entirely and the stored output is cloned out; the key
+    /// (`compute_emit_cache_key`) hashes every emit input so a hit is
+    /// byte-identical to a fresh emit.
+    fn emit_page_and_memo_bodies(
+        &self,
+        py: Python<'_>,
+        snapshot: reflex_ir::Snapshot,
+        route_ident: &str,
+        route: &str,
+        title: Option<&str>,
+        meta_pairs: Vec<(String, String)>,
+        custom_code: Vec<String>,
+        hooks_body: String,
+    ) -> (String, Vec<(String, String)>) {
+        if !self.emit_cache_enabled.get() {
+            return emit_page_and_memo_bodies_uncached(
+                py,
+                snapshot,
+                route_ident,
+                route,
+                title,
+                meta_pairs,
+                custom_code,
+                hooks_body,
+            );
+        }
+        let cache_key = compute_emit_cache_key(
+            &snapshot,
+            route_ident,
+            route,
+            title,
+            &meta_pairs,
+            &custom_code,
+            &hooks_body,
+        );
+        if let Some(hit) = self.page_emit_cache.borrow().get(&cache_key) {
+            return hit.clone();
+        }
+        let result = emit_page_and_memo_bodies_uncached(
+            py,
+            snapshot,
+            route_ident,
+            route,
+            title,
+            meta_pairs,
+            custom_code,
+            hooks_body,
+        );
+        self.page_emit_cache
+            .borrow_mut()
+            .insert(cache_key, result.clone());
+        result
+    }
+}
+
+/// Hash every input the page + memo-body emit reads: the root
+/// `subtree_hash` (which recursively folds each node's emit fields), the
+/// per-node `vars_used` + `flags` that the close pass doesn't fold, the
+/// `var_data` table + dense backings, the side tables emit consults
+/// (`app_style_map`, `rename_props`, `special_props`,
+/// `add_custom_code_extra`), and the page params. Sound by construction:
+/// any change that could alter the emitted JS changes the key.
+fn compute_emit_cache_key(
+    snap: &reflex_ir::Snapshot,
+    route_ident: &str,
+    route: &str,
+    title: Option<&str>,
+    meta_pairs: &[(String, String)],
+    custom_code: &[String],
+    hooks_body: &str,
+) -> u64 {
+    use xxhash_rust::xxh3::Xxh3;
+    let mut h = Xxh3::new();
+    h.update(&(snap.nodes.len() as u64).to_le_bytes());
+    h.update(&snap.root.to_le_bytes());
+    for node in &snap.nodes {
+        h.update(&node.subtree_hash.to_le_bytes());
+        h.update(&node.flags.bits().to_le_bytes());
+        for r in &node.vars_used {
+            h.update(&r.0.to_le_bytes());
+        }
+    }
+    // var_data table + dense backings (content emit references via hooks).
+    for e in &snap.var_data {
+        h.update(&e.state.as_u32().to_le_bytes());
+        h.update(&[e.position]);
+    }
+    for s in &snap.var_hooks {
+        h.update(&s.as_u32().to_le_bytes());
+    }
+    for (m, n) in &snap.var_imports {
+        h.update(&m.as_u32().to_le_bytes());
+        h.update(&n.as_u32().to_le_bytes());
+    }
+    for s in snap.var_deps.iter().chain(snap.var_components.iter()) {
+        h.update(&s.as_u32().to_le_bytes());
+    }
+    // Side tables (sorted for determinism) emit consults.
+    let mut style_keys: Vec<_> = snap.app_style_map.iter().collect();
+    style_keys.sort_by_key(|(k, _)| k.as_u32());
+    for (k, v) in style_keys {
+        h.update(&k.as_u32().to_le_bytes());
+        h.update(&v.as_u32().to_le_bytes());
+    }
+    let mut rename_keys: Vec<_> = snap.rename_props.iter().collect();
+    rename_keys.sort_by_key(|(k, _)| **k);
+    for (idx, pairs) in rename_keys {
+        h.update(&idx.to_le_bytes());
+        for (a, b) in pairs {
+            h.update(&a.as_u32().to_le_bytes());
+            h.update(&b.as_u32().to_le_bytes());
+        }
+    }
+    let mut special_keys: Vec<_> = snap.special_props.iter().collect();
+    special_keys.sort_by_key(|(k, _)| **k);
+    for (idx, syms) in special_keys {
+        h.update(&idx.to_le_bytes());
+        for s in syms {
+            h.update(&s.as_u32().to_le_bytes());
+        }
+    }
+    let mut extra_keys: Vec<_> = snap.add_custom_code_extra.iter().collect();
+    extra_keys.sort_by_key(|(k, _)| **k);
+    for (idx, syms) in extra_keys {
+        h.update(&idx.to_le_bytes());
+        for s in syms {
+            h.update(&s.as_u32().to_le_bytes());
+        }
+    }
+    // Page params (NUL-separated so concatenations can't alias).
+    for part in [route_ident, route, title.unwrap_or(""), hooks_body] {
+        h.update(part.as_bytes());
+        h.update(&[0]);
+    }
+    for (k, v) in meta_pairs {
+        h.update(k.as_bytes());
+        h.update(&[0]);
+        h.update(v.as_bytes());
+        h.update(&[0]);
+    }
+    for c in custom_code {
+        h.update(c.as_bytes());
+        h.update(&[0]);
+    }
+    h.digest()
+}
+
+fn emit_page_and_memo_bodies_uncached(
     py: Python<'_>,
     snapshot: reflex_ir::Snapshot,
     route_ident: &str,
@@ -687,11 +853,8 @@ fn emit_page_and_memo_bodies(
         // is the default — the arena freeze produces passthrough wrappers
         // only (snapshot-body detection is a follow-on).
         let mut bodies: Vec<(String, String)> = Vec::with_capacity(snap.memo_bodies.len());
-        let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> = snap
-            .memo_bodies
-            .iter()
-            .map(|b| (b.name, b.root))
-            .collect();
+        let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> =
+            snap.memo_bodies.iter().map(|b| (b.name, b.root)).collect();
         for (name_sym, root_idx) in body_specs {
             let mut body_buf = CodeBuffer::with_capacity(2048);
             let name_str = reflex_intern::resolve_unchecked(name_sym).to_owned();

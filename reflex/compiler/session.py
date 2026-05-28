@@ -47,6 +47,18 @@ class CompilerSession:
     def clear_cache(self) -> None:
         self._inner.clear_cache()
 
+    def set_emit_cache_enabled(self, enabled: bool) -> None:
+        """Toggle the content-addressed page-emit cache (PR F).
+
+        Off by default. When on, a page whose snapshot + params hash is
+        unchanged returns the cached ``(page_js, memo_bodies)`` without
+        re-running the memoize + emit tail — the hot-reload fast path.
+
+        Args:
+            enabled: whether to consult/populate the page-emit cache.
+        """
+        self._inner.set_emit_cache_enabled(bool(enabled))
+
     def cache_len(self) -> int:
         return int(self._inner.cache_len())
 
