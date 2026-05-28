@@ -18,8 +18,6 @@ or ``compile_page_from_bytes`` shim left. Static-artifact writers
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterable
-from pathlib import Path
 from typing import Any
 
 from reflex_base.utils.imports import ImportVar
@@ -76,26 +74,6 @@ class CompilerSession:
 
     # ---- Compile entry points ----------------------------------------------
 
-    def compile_memo_index(
-        self, reexports: list[tuple[str, str]], out_path: str
-    ) -> None:
-        """Write the memo index module (``.web/utils/components.jsx``).
-
-        Mirrors :func:`reflex_base.compiler.templates.memo_index_template`
-        — the small barrel file that re-exports each ``@rx.memo`` custom
-        component so ``root.jsx`` can pull them in via
-        ``$/utils/components``. The Rust side builds the content and
-        writes it to ``out_path`` in one PyO3 call.
-
-        Args:
-            reexports: list of ``(export_name, relative_module_specifier)``
-                tuples; e.g. ``("Foo", "components/Foo")`` produces
-                ``export { Foo } from "components/Foo";``.
-            out_path: absolute filesystem path the index gets written
-                to. Parent directory must already exist.
-        """
-        self._inner.compile_memo_index(list(reexports), out_path)
-
     def compile_styles_root(self, stylesheets: list[str], out_path: str) -> None:
         """Write ``.web/styles/styles.css``.
 
@@ -126,57 +104,6 @@ class CompilerSession:
             out_path: absolute filesystem path for the emitted module.
         """
         self._inner.compile_theme_from_component_arena(theme_component, out_path)
-
-    def compile_custom_components_arena(
-        self, components: Iterable, components_dir: str
-    ) -> dict[str, list]:
-        """Emit one ``.jsx`` file per ``@rx.memo`` custom component.
-
-        Replaces the legacy ``_compile_memo_components`` +
-        ``compile_custom_component`` chain. For each unique custom
-        component we render the inner Component tree via
-        ``get_component()`` and pipe it through the arena page entry
-        point — the same path real pages use — so no msgpack hop and no
-        plugin walk happens.
-
-        Each component lands in
-        ``<components_dir>/<component.tag>.jsx`` and its per-page
-        imports get merged into the returned dict for the
-        ``bun install`` step.
-
-        Args:
-            components: iterable of ``CustomComponent`` instances (the
-                values of ``CUSTOM_COMPONENTS``).
-            components_dir: target directory for the per-component
-                files; created if missing.
-
-        Returns:
-            Merged ``ParsedImportDict`` aggregating every component's
-            page-level imports.
-        """
-        out_dir = Path(components_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        merged: dict[str, list] = {}
-        for component in dict.fromkeys(components):
-            try:
-                rendered = component.get_component()
-            except Exception:
-                continue
-            name = component.tag
-            ident = name
-            route = f"/__memo__/{name}"
-            page_js, _bodies, imports = self._inner.compile_page_from_component_arena(
-                rendered,
-                ident,
-                route,
-                None,
-                None,
-                None,
-                None,
-            )
-            self._inner.write_if_changed(str(out_dir / f"{name}.jsx"), page_js)
-            self._inner.merge_imports_into(merged, imports)
-        return merged
 
     def compile_app_root_arena(
         self,

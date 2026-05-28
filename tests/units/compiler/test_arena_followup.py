@@ -1,7 +1,7 @@
 """TDD red-stage tests for the next arena-pipeline ports.
 
 The post-`b7fc5898` profile shows the remaining wall-clock outside the
-page+memo arena entry lives in four Python-driven blocks of
+page+memo arena entry lives in three Python-driven blocks of
 ``rust_pipeline.py``:
 
 1. ``compile_app_root_module`` is fed a hand-built string for every
@@ -17,9 +17,11 @@ page+memo arena entry lives in four Python-driven blocks of
    theme_component))`` — a Python serialization of the resolved theme
    Component. **Movable**: freeze the theme component and emit JS
    directly.
-4. ``_compile_memo_components`` (legacy compiler) emits each user
-   ``@rx.memo`` component via the legacy plugin chain. **Movable**:
-   each custom component is a Component tree the arena can ingest.
+
+Per-memo file emission was a fourth block, but the legacy
+``CUSTOM_COMPONENTS`` registry it relied on was removed when ``main``
+unified ``@rx.memo`` into ``reflex_base.components.memo.MEMOS``; that
+emission is dropped here pending a rewrite against the new registry.
 
 For each feature there are three classes of test:
 
@@ -318,100 +320,6 @@ def test_compile_theme_from_component_arena_matches_legacy(
 
 
 # ---------------------------------------------------------------------------
-# 4. Custom @rx.memo components via arena
-# ---------------------------------------------------------------------------
-
-
-def _toy_custom_memo_component() -> Any:
-    """Build a tiny ``@rx.memo``-style custom component for the test.
-
-    Mimics what ``CUSTOM_COMPONENTS`` collects during a real compile:
-    a function-defined Component the user wrote with ``@rx.memo``.
-    """
-
-    @rx.memo
-    def Greeting(name: rx.Var[str]) -> rx.Component:
-        return rx.text("Hello, ", name)
-
-    return Greeting(name="World")
-
-
-def test_compile_custom_components_arena_exists(sess: CompilerSession) -> None:
-    """RED: ``compile_custom_components_arena`` does not exist yet.
-
-    Contract: takes the ``CUSTOM_COMPONENTS`` list + a target
-    ``components_dir`` path, runs the arena pipeline per component,
-    writes each ``.web/utils/components/<Name>.jsx`` via
-    ``write_if_changed``, returns the merged
-    ``ParsedImportDict`` for the ``bun install`` step. Replaces
-    ``legacy_compiler._compile_memo_components`` for user-defined
-    ``@rx.memo`` components in ``rust_pipeline.py:293-303``.
-    """
-    assert hasattr(sess, "compile_custom_components_arena"), (
-        "CompilerSession needs `compile_custom_components_arena("
-        "components, components_dir)` so rust_pipeline.py:293-303 "
-        "stops calling legacy_compiler._compile_memo_components for "
-        "each user @rx.memo component."
-    )
-
-
-def test_compile_custom_components_arena_matches_legacy(
-    sess: CompilerSession, tmp_path: Path
-) -> None:
-    """GREEN once implemented: the arena emit must write one ``.jsx``
-    file per custom component, named after the component (matching the
-    legacy ``_compile_memo_components`` naming), with content that
-    embeds the rendered JSX. The imports dict must surface every
-    library each custom component imports.
-
-    We can't call ``_compile_memo_components`` to build a parallel
-    baseline (it's barred by both ``test_arena_end_to_end_no_legacy_calls``
-    and the removal direction in
-    ``test_custom_components_legacy_chain_removed``), so the contract is:
-    one file per component named ``<Name>.jsx``, content references the
-    component's tag/render output, and returned imports include the
-    component's library deps.
-    """
-    if not hasattr(sess, "compile_custom_components_arena"):
-        pytest.fail(
-            "compile_custom_components_arena not implemented — see "
-            "test_compile_custom_components_arena_exists."
-        )
-
-    components = [_toy_custom_memo_component()]
-
-    arena_dir = tmp_path / "arena_components"
-    arena_dir.mkdir()
-    arena_imports = sess.compile_custom_components_arena(
-        components, str(arena_dir)
-    )
-
-    written_files = sorted(p.name for p in arena_dir.iterdir())
-    assert len(written_files) == len(components), (
-        f"expected one .jsx file per custom component; got {written_files}"
-    )
-    for fname in written_files:
-        assert fname.endswith(".jsx"), (
-            f"custom-component artifact {fname!r} must be a .jsx file"
-        )
-        content = (arena_dir / fname).read_text()
-        # Each custom-component module must declare its export and
-        # reference some JSX content — these are the bare-minimum
-        # invariants the legacy chain also guaranteed.
-        assert "export" in content, f"{fname} missing an export statement"
-
-    # Arena imports must be a dict shape and (when components exist)
-    # non-empty since every Component pulls in at least the React
-    # runtime.
-    assert isinstance(arena_imports, dict)
-    if components:
-        assert len(arena_imports) > 0, (
-            "compile_custom_components_arena returned empty imports for "
-            "a non-empty component list"
-        )
-
-
-# ---------------------------------------------------------------------------
 # Usage + removal — rust_pipeline.py must call the new methods AND drop
 # the per-page Python harvest chains. These tests are the structural
 # half of red/green: a method existing is necessary but not sufficient,
@@ -564,42 +472,6 @@ def test_native_compile_theme_module_string_input_removed() -> None:
     )
 
 
-def test_rust_pipeline_uses_compile_custom_components_arena(
-    rust_pipeline_source: str,
-) -> None:
-    """``rust_pipeline.py`` must call
-    ``sess.compile_custom_components_arena`` instead of
-    ``legacy_compiler._compile_memo_components``."""
-    assert (
-        "compile_custom_components_arena" in rust_pipeline_source
-    ), (
-        "rust_pipeline.py must call "
-        "sess.compile_custom_components_arena(CUSTOM_COMPONENTS, ...) "
-        "instead of legacy_compiler._compile_memo_components."
-    )
-
-
-def test_custom_components_legacy_chain_removed(
-    rust_pipeline_source: str,
-) -> None:
-    """The legacy plugin-chain custom-component emit is gone from
-    ``rust_pipeline.py``."""
-    forbidden = [
-        "_compile_memo_components",
-        "compiler_utils.compile_custom_component",
-        # The file-writing wrapper that fed legacy's tuple shape
-        # should be gone too — write_if_changed handles the per-file
-        # disk side via the arena entry.
-        "legacy_utils.resolve_path_of_web_dir",
-    ]
-    found = [token for token in forbidden if token in rust_pipeline_source]
-    assert not found, (
-        f"rust_pipeline.py still contains pre-arena custom-component "
-        f"chain calls: {found}. Replace them with "
-        f"compile_custom_components_arena."
-    )
-
-
 def test_legacy_compiler_import_removed(rust_pipeline_source: str) -> None:
     """After every static-artifact + custom-component port lands,
     ``rust_pipeline.py`` no longer needs ``legacy_compiler``: every
@@ -666,12 +538,14 @@ def test_arena_end_to_end_no_legacy_calls(tmp_path: Path) -> None:
             "reflex_base.components.component.Component._get_all_dynamic_imports",
             _explode,
         ),
-        # The legacy plugin-chain callees that the four ports replace.
+        # The legacy plugin-chain callees that the ports replace.
+        # ``_compile_memo_components`` stays guarded: the pipeline no
+        # longer emits memos at all (the ``CUSTOM_COMPONENTS`` port was
+        # dropped), so the legacy memo compiler must never fire here.
         patch("reflex.compiler.utils.create_document_root", _explode),
         patch("reflex.compiler.compiler._compile_memo_components", _explode),
-        patch("reflex.compiler.utils.compile_custom_component", _explode),
     ]
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
         # If any patched function fires, rust_pipeline.compile_pages
         # raises AssertionError and the test reports which path got
         # called.

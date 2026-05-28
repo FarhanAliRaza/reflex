@@ -255,26 +255,12 @@ def compile_pages(
     app_wrappers = _resolve_app_wrap_components(app, collected_app_wraps)
     app_root = app._app_root(app_wrappers)
 
-    # Harvest imports from every ``@rx.memo`` custom component for the
-    # install step AND emit each component's standalone memo file —
-    # sonner / moment / marquee / inkeep / hast-util-to-string all live
-    # in custom-component bodies. Must run *after*
-    # ``_resolve_app_wrap_components`` since that's where
-    # ``memoized_toast_provider`` lazily registers itself in
-    # ``CUSTOM_COMPONENTS``.
-    #
-    # Without re-emitting the per-component files every run, stale
-    # ``.web/utils/components/<Name>.jsx`` produced by an older legacy
-    # compile would persist — and any Python-side change to the
-    # component would leave the on-disk JSX out of sync.
-    from reflex_base.components.component import CUSTOM_COMPONENTS
-
-    custom_components_dir = Path(compiler_utils.get_memo_components_dir())
-    custom_imports = sess.compile_custom_components_arena(
-        CUSTOM_COMPONENTS.values(),
-        str(custom_components_dir),
-    )
-    sess.merge_imports_into(all_imports, custom_imports)
+    # NOTE: per-memo file emission was removed here. The legacy
+    # ``CUSTOM_COMPONENTS`` registry no longer exists on ``main`` (the
+    # ``@rx.memo`` system was unified into
+    # ``reflex_base.components.memo.MEMOS``). Memo emission needs to be
+    # reimplemented against that registry; see ``compile_memo_components``
+    # in ``reflex.compiler.compiler`` for the new shape.
 
     window_libraries = list(
         dict.fromkeys(
@@ -332,10 +318,7 @@ def _emit_static_artifacts(
     import json
 
     from reflex_base import constants as base_constants
-    from reflex_base.components.component import (
-        CUSTOM_COMPONENTS,
-        evaluate_style_namespaces,
-    )
+    from reflex_base.components.component import evaluate_style_namespaces
     from reflex_base.config import get_config
     from reflex_base.constants import Dirs
     from reflex_base.utils.format import json_dumps
@@ -344,7 +327,6 @@ def _emit_static_artifacts(
     from reflex.compiler import utils as legacy_utils
     from reflex.compiler.compiler import (
         SYSTEM_COLOR_MODE,
-        _memo_component_index_specifier,
         _resolve_radix_themes_plugin,
         _resolve_root_stylesheets,
     )
@@ -461,26 +443,10 @@ def _emit_static_artifacts(
         sess.compile_theme_from_component_arena(theme_component, theme_path)
         _remember_static_artifact("theme", theme_key, theme_path)
 
-    # ---- utils/components.jsx — memo index (Rust) ------------------------
-    # The index re-exports each ``@rx.memo`` custom component so
-    # ``root.jsx`` can pull them in via ``$/utils/components``. The
-    # export name is the component's title-cased function name
-    # (``component.tag``), which is also the basename of the per-memo
-    # ``.jsx`` file written by ``compile_custom_components_arena``.
-    index_entries: list[tuple[str, str]] = []
-    for component in dict.fromkeys(CUSTOM_COMPONENTS.values()):
-        if component.tag is None:
-            continue
-        index_entries.append((
-            component.tag,
-            _memo_component_index_specifier(component.tag),
-        ))
-    index_path = compiler_utils.get_components_path()
-    memo_index_key = tuple(index_entries)
-    if _static_artifact_changed("memo_index", memo_index_key, index_path):
-        Path(index_path).parent.mkdir(parents=True, exist_ok=True)
-        sess.compile_memo_index(index_entries, index_path)
-        _remember_static_artifact("memo_index", memo_index_key, index_path)
+    # NOTE: the ``utils/components.jsx`` memo index was removed here along
+    # with the legacy ``CUSTOM_COMPONENTS`` registry. The new ``MEMOS``
+    # system declares each memo's ``library`` as its own per-file path, so
+    # pages import memos directly and no barrel index is emitted.
 
     # ---- Plugin save tasks (Tailwind config + root style, etc.) ----------
     # Plugins' ``pre_compile`` hook collects "save tasks" — closures that

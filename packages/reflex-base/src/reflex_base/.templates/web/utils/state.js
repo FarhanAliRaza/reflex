@@ -618,16 +618,21 @@ export const connect = async (
 
   const disconnectTrigger = (event) => {
     if (socket.current?.connected) {
-      console.log("Disconnect websocket on unload");
+      console.log("Disconnect websocket on page navigation");
       socket.current.disconnect();
     }
   };
 
   const pagehideHandler = (event) => {
-    if (event.persisted && socket.current?.connected) {
-      console.log("Disconnect backend before bfcache on navigation");
-      socket.current.disconnect();
+    if (!socket.current?.connected) {
+      return;
     }
+    if (event.persisted) {
+      console.log("Disconnect backend before bfcache on navigation");
+    } else {
+      console.log("Disconnect websocket on pagehide");
+    }
+    socket.current.disconnect();
   };
 
   // Once the socket is open, hydrate the page.
@@ -636,7 +641,6 @@ export const connect = async (
     setConnectErrors([]);
     window.addEventListener("pagehide", pagehideHandler);
     window.addEventListener("beforeunload", disconnectTrigger);
-    window.addEventListener("unload", disconnectTrigger);
     if (socket.current.rehydrate) {
       socket.current.rehydrate = false;
       queueEvents(initialEvents(), socket, true, navigate, params);
@@ -666,7 +670,6 @@ export const connect = async (
     socket.current.wait_connect = false;
     const try_reconnect =
       reason !== "io server disconnect" && reason !== "io client disconnect";
-    window.removeEventListener("unload", disconnectTrigger);
     window.removeEventListener("beforeunload", disconnectTrigger);
     window.removeEventListener("pagehide", pagehideHandler);
     if (try_reconnect) {
@@ -1138,6 +1141,28 @@ export const isTrue = (val) => {
 export const isNotNullOrUndefined = (val) => {
   return (val ?? undefined) !== undefined;
 };
+
+/***
+ * Python-semantics OR: returns `a` if python-truthy, else evaluates and returns `b`.
+ * `b` is a thunk so it is only evaluated when needed, preserving short-circuit.
+ * @template A
+ * @template B
+ * @param {A} a The left-hand value.
+ * @param {() => B} b Thunk producing the right-hand value.
+ * @returns {A | B} `a` if python-truthy, otherwise the result of `b()`.
+ */
+export const pyOr = (a, b) => (isTrue(a) ? a : b());
+
+/***
+ * Python-semantics AND: returns `a` if python-falsy, else evaluates and returns `b`.
+ * `b` is a thunk so it is only evaluated when needed, preserving short-circuit.
+ * @template A
+ * @template B
+ * @param {A} a The left-hand value.
+ * @param {() => B} b Thunk producing the right-hand value.
+ * @returns {A | B} `a` if python-falsy, otherwise the result of `b()`.
+ */
+export const pyAnd = (a, b) => (isTrue(a) ? b() : a);
 
 /**
  * Get the value from a ref.
