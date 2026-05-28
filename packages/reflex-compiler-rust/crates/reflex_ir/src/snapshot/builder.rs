@@ -129,6 +129,7 @@ impl SnapshotBuilder {
 /// Bottom-up via a single linear backward pass works because nodes are
 /// pushed in parent-before-children order, so any child's index is strictly
 /// greater than its parent's.
+#[inline]
 pub fn close_snapshot(snap: &mut Snapshot) {
     let n = snap.nodes.len();
     if n == 0 {

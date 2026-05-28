@@ -153,6 +153,67 @@ def test_gather_emit_matches_freeze_with_meta(sess: CompilerSession) -> None:
     assert wb == fb
 
 
+# Full-page parity through the real pipeline entry point
+# (compile_unevaluated_page applies styles + wraps in Fragment + attaches
+# <title>/<meta>). This is exactly the tree the PR E cutover feeds to
+# gather_arena, so it pins the cutover's correctness.
+_PAGES = {
+    "simple": lambda: rx.box(rx.text("hello"), rx.text("world")),
+    "styled": lambda: rx.vstack(rx.heading("Title"), rx.text("body"), spacing="4"),
+    "event_page": lambda: rx.box(rx.button("go", on_click=_GatherState.tick)),
+    "cond_page": lambda: rx.box(
+        rx.cond(_GatherState.n > 0, rx.text("a"), rx.text("b"))
+    ),
+}
+
+
+def _compile_unevaluated(fn, route, title=None):
+    from reflex.app import UnevaluatedPage
+    from reflex.compiler.compiler import compile_unevaluated_page
+
+    unev = UnevaluatedPage(
+        component=fn,
+        route=route,
+        title=title,
+        description=None,
+        image=None,
+        meta=[],
+        context=None,
+        on_load=None,
+    )
+    return compile_unevaluated_page(route, unev, {}, None)
+
+
+@pytest.mark.parametrize("name", list(_PAGES))
+def test_full_page_gather_emit_matches_freeze(
+    sess: CompilerSession, name: str
+) -> None:
+    component = _compile_unevaluated(_PAGES[name], "/")
+    custom_code = list(component._get_all_custom_code())
+    bundle = gather_arena(component)  # must not raise for these pages
+    fp, fb, _ = sess.compile_page_from_component_arena(
+        component, "Index", "/", custom_code=custom_code
+    )
+    wp, wb = sess.compile_page_from_arena(
+        bundle, "Index", "/", custom_code=custom_code, compute_close=True
+    )
+    assert wp == fp
+    assert wb == fb
+
+
+def test_full_page_with_title_gather_emit_matches_freeze(
+    sess: CompilerSession,
+) -> None:
+    component = _compile_unevaluated(lambda: rx.box(rx.text("x")), "/", title="My Page")
+    bundle = gather_arena(component)
+    fp, fb, _ = sess.compile_page_from_component_arena(component, "Index", "/")
+    wp, wb = sess.compile_page_from_arena(
+        bundle, "Index", "/", compute_close=True
+    )
+    assert wp == fp
+    assert wb == fb
+
+
 @pytest.mark.parametrize("fx", _FIXTURES, ids=[f.name for f in _FIXTURES])
 def test_corpus_gather_emit_matches_freeze_when_supported(
     sess: CompilerSession, fx

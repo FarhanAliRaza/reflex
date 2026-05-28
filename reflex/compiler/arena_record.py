@@ -328,6 +328,32 @@ def _gather_rename_props(component: Component) -> list[tuple[str, str]]:
     return [(str(k), str(v)) for k, v in rename.items()]
 
 
+def _gather_tag(component: Component) -> str:
+    """Compute the JSX tag, mirroring freeze's ``read_tag``.
+
+    Prefers ``alias`` over ``tag``, strips surrounding quotes, then
+    re-wraps in quotes for a global-scope HTML element with no library
+    (``"title"``, ``"meta"``, ``"div"``) -- emit treats ``"..."`` as a
+    pre-quoted tag literal.
+
+    Args:
+        component: the element component.
+
+    Returns:
+        The tag string (possibly quote-wrapped), or empty for no tag.
+    """
+    raw = getattr(component, "alias", None) or getattr(component, "tag", None)
+    if not raw:
+        return ""
+    trimmed = str(raw).strip('"')
+    if not trimmed:
+        return ""
+    library = getattr(component, "library", None)
+    if library is None and getattr(component, "_is_tag_in_global_scope", False):
+        return f'"{trimmed}"'
+    return trimmed
+
+
 def _gather_ref_name(component: Component) -> str:
     """Return the node's ref identifier, mirroring ``read_ref_name``.
 
@@ -496,9 +522,8 @@ class Gatherer:
         node["hooks_user"] = hooks_user
 
         if is_element:
-            tag = getattr(component, "alias", None) or getattr(component, "tag", None)
             node["kind"] = _KIND_ELEMENT
-            node["tag"] = str(tag) if tag else ""
+            node["tag"] = _gather_tag(component)
             node["style"] = _gather_style(component)
             node["rendered_props"] = _gather_rendered_props(component)
             node["event_callbacks"] = _gather_event_callbacks(component)
