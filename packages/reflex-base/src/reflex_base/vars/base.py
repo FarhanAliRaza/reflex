@@ -114,7 +114,94 @@ _var_literal_subclasses: list[tuple[type[LiteralVar], VarSubclassEntry]] = []
 
 
 # VarData is now the Rust-backed RustVarData (hard cutover, no Python impl).
-from reflex_compiler_rust._native import RustVarData as VarData  # noqa: E402
+from reflex_compiler_rust._native import (  # noqa: E402
+    RustLiteralVar,
+    RustVar,
+    RustVarData as VarData,
+)
+
+
+def _rust_var_classify(var_type: GenericType) -> type:
+    """Return the typed ``Var`` subclass that ``var_type`` classifies as.
+
+    Mirrors ``Var.guess_type``'s ``_var_subclasses`` registry matching, but
+    returns the matched class instead of converting a var — the single source of
+    truth for the ``isinstance`` bridge (so a ``RustVar`` is recognized as the
+    right typed ``Var`` based on its ``_var_type``).
+
+    Args:
+        var_type: The var's Python type.
+
+    Returns:
+        The matched typed ``Var`` subclass (``Var`` when nothing matches).
+    """
+    from .object import ObjectVar
+
+    if var_type is None:
+        return NoneVar
+    if var_type is NoReturn or var_type is Any:
+        return Var
+    var_type = types.value_inside_optional(var_type)
+    if var_type is Any:
+        return Var
+    fixed_type = get_origin(var_type) or var_type
+    if fixed_type in types.UnionTypes:
+        fixed_inner = [
+            get_origin(t) or t
+            for t in (types.value_inside_optional(a) for a in get_args(var_type))
+        ]
+        for entry in reversed(_var_subclasses):
+            if all(safe_issubclass(t, entry.python_types) for t in fixed_inner):
+                return entry.var_subclass
+        return ObjectVar if can_use_in_object_var(var_type) else Var
+    if fixed_type is Literal:
+        fixed_type = unionize(*(type(arg) for arg in get_args(var_type)))
+    if not isinstance(fixed_type, type):
+        return Var
+    if fixed_type is None:
+        return NoneVar
+    for entry in reversed(_var_subclasses):
+        if safe_issubclass(fixed_type, entry.python_types):
+            return entry.var_subclass
+    return ObjectVar if can_use_in_object_var(fixed_type) else Var
+
+
+def _literal_pair_for(var_subclass: type) -> type | None:
+    """Return the ``LiteralVar`` subclass paired with ``var_subclass``, if any.
+
+    Args:
+        var_subclass: A typed ``Var`` subclass (e.g. ``NumberVar``).
+
+    Returns:
+        The paired literal subclass (e.g. ``LiteralNumberVar``) or ``None``.
+    """
+    for literal_subclass, entry in _var_literal_subclasses:
+        if entry.var_subclass is var_subclass:
+            return literal_subclass
+    return None
+
+
+def _rust_var_isinstance(instance: RustVar, cls: type) -> bool:
+    """Whether a ``RustVar`` should be considered an instance of ``cls``.
+
+    Classifies the var's ``_var_type`` against the typed-``Var`` registry. For a
+    ``LiteralVar``-family target, the var must additionally be a
+    ``RustLiteralVar``.
+
+    Args:
+        instance: The Rust-backed var.
+        cls: The (Var-family) class being tested.
+
+    Returns:
+        ``True`` if ``instance`` matches ``cls``.
+    """
+    matched = _rust_var_classify(instance._var_type)
+    if type.__subclasscheck__(LiteralVar, cls):
+        if not isinstance(instance, RustLiteralVar):
+            return False
+        literal = _literal_pair_for(matched)
+        return literal is not None and type.__subclasscheck__(cls, literal)
+    return type.__subclasscheck__(cls, matched)
 
 
 def _decode_var_immutable(value: str) -> tuple[VarData | None, str]:
@@ -186,6 +273,24 @@ class MetaclassVar(type):
         super().__setattr__(
             name, value if name != _PYDANTIC_VALIDATE_VALUES else _pydantic_validator
         )
+
+    def __instancecheck__(cls, instance: Any) -> bool:
+        """Recognize Rust-backed vars as the typed ``Var`` they classify as.
+
+        A ``RustVar`` carries its type tag in ``_var_type``; the bridge maps that
+        to the matching typed ``Var`` subclass so ``isinstance(rust_var,
+        NumberVar)`` (etc.) behaves like the Python ``Var`` hierarchy. Python var
+        instances fall through to the default check.
+
+        Args:
+            instance: The object to test.
+
+        Returns:
+            Whether ``instance`` is an instance of ``cls``.
+        """
+        if isinstance(instance, RustVar):
+            return _rust_var_isinstance(instance, cls)
+        return super().__instancecheck__(instance)
 
 
 @dataclasses.dataclass(
