@@ -1673,20 +1673,18 @@ fn arg_names(py: Python<'_>, args_spec: &Bound<'_, PyAny>) -> PyResult<Vec<Strin
 ///     The rendered event-chain JS.
 #[pyfunction]
 pub fn rust_assemble_event_chain(py: Python<'_>, chain: Bound<'_, PyAny>) -> PyResult<String> {
-    let names = arg_names(py, &chain.getattr("args_spec")?)?;
-    let args_csv = names.join(", ");
+    let arg_names = arg_names(py, &chain.getattr("args_spec")?)?;
 
-    let mut chain_ea_pairs = Vec::new();
+    let mut chain_ea = Vec::new();
     for (k, v) in chain
         .getattr("event_actions")?
         .downcast::<pyo3::types::PyDict>()?
         .iter()
     {
-        chain_ea_pairs.push((k.extract::<String>()?, render_event_value(py, &v)?));
+        chain_ea.push((k.extract::<String>()?, render_event_value(py, &v)?));
     }
-    let chain_ea = js_object(&chain_ea_pairs);
 
-    let mut reis: Vec<String> = Vec::new();
+    let mut events: Vec<EventTriple> = Vec::new();
     for es in chain.getattr("events")?.iter()? {
         let es = es?;
         let name = event_handler_name(&es.getattr("handler")?)?;
@@ -1704,23 +1702,69 @@ pub fn rust_assemble_event_chain(py: Python<'_>, chain: Bound<'_, PyAny>) -> PyR
         {
             ea_pairs.push((k.extract::<String>()?, render_event_value(py, &v)?));
         }
-        reis.push(format!(
-            "(ReflexEvent(\"{name}\", {}, {}))",
-            js_object(&arg_pairs),
-            js_object(&ea_pairs)
-        ));
+        events.push((name, arg_pairs, ea_pairs));
     }
 
+    Ok(assemble_chain_js(&arg_names, &chain_ea, &events))
+}
+
+/// The pure string-assembly core shared by both event-chain entrypoints.
+///
+/// Takes already-extracted primitives — arg names, chain-level event actions,
+/// and per-event `(name, args, event_actions)` — and builds the
+/// `(_e) => addEvents([ReflexEvent(...)], [_e], …)` form. No PyO3 reads.
+type EventTriple = (String, Vec<(String, String)>, Vec<(String, String)>);
+
+fn assemble_chain_js(
+    arg_names: &[String],
+    chain_ea: &[(String, String)],
+    events: &[EventTriple],
+) -> String {
+    let args_csv = arg_names.join(", ");
+    let chain_ea_s = js_object(chain_ea);
+    let reis: Vec<String> = events
+        .iter()
+        .map(|(name, args, ea)| {
+            format!(
+                "(ReflexEvent(\"{name}\", {}, {}))",
+                js_object(args),
+                js_object(ea)
+            )
+        })
+        .collect();
     let body = if reis.len() == 1 {
-        format!("(addEvents([{}], [{args_csv}], {chain_ea}))", reis[0])
+        format!("(addEvents([{}], [{args_csv}], {chain_ea_s}))", reis[0])
     } else {
         let inner: String = reis
             .iter()
-            .map(|r| format!("(addEvents([{r}], [{args_csv}], {chain_ea}));"))
+            .map(|r| format!("(addEvents([{r}], [{args_csv}], {chain_ea_s}));"))
             .collect();
         format!("{{{inner}}}")
     };
-    Ok(format!("(({args_csv}) => {body})"))
+    format!("(({args_csv}) => {body})")
+}
+
+/// Assemble an event chain from a **pre-gathered primitive bundle** — the
+/// one-FFI-crossing path. Python gathers the raw chain (handler names, each
+/// arg's `_js_expr`, rendered action values, arg-names) in a single native
+/// pass and ships it here as plain tuples of strings; Rust does only the
+/// string assembly, with zero per-attribute PyO3 crossings.
+///
+/// Args:
+///     arg_names: The lambda arg names (e.g. `["_e"]`).
+///     chain_ea: Chain-level event actions as `(key, value_js)`.
+///     events: Per-event `(name, args, event_actions)` where args/actions are
+///         `(key, value_js)` lists.
+///
+/// Returns:
+///     The rendered event-chain JS.
+#[pyfunction]
+pub fn rust_assemble_event_chain_bundle(
+    arg_names: Vec<String>,
+    chain_ea: Vec<(String, String)>,
+    events: Vec<EventTriple>,
+) -> String {
+    assemble_chain_js(&arg_names, &chain_ea, &events)
 }
 
 /// Register the Var bindings into the `_native` module.
@@ -1739,5 +1783,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rust_from_python_var, m)?)?;
     m.add_function(wrap_pyfunction!(rust_create_string, m)?)?;
     m.add_function(wrap_pyfunction!(rust_assemble_event_chain, m)?)?;
+    m.add_function(wrap_pyfunction!(rust_assemble_event_chain_bundle, m)?)?;
     Ok(())
 }

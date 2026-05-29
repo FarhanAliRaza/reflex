@@ -52,3 +52,40 @@ def test_rust_event_chain_matches_python(key: str) -> None:
     assert chain is not None
     expected = str(LiteralVar.create(chain)._js_expr)
     assert _native.rust_assemble_event_chain(chain) == expected
+
+
+def _gather_bundle(chain) -> tuple:
+    """Gather a chain into the primitive (arg_names, chain_ea, events) bundle.
+
+    Args:
+        chain: The EventChain.
+
+    Returns:
+        The primitive bundle the Rust bundle-assembler consumes.
+    """
+    from reflex.compiler.arena_record import (
+        _arg_names,
+        _event_handler_name,
+        _render_event_value,
+    )
+
+    arg_names = _arg_names(chain.args_spec)
+    chain_ea = [(k, _render_event_value(v)) for k, v in chain.event_actions.items()]
+    events = [
+        (
+            _event_handler_name(es.handler),
+            [(a[0]._js_expr, _render_event_value(a[1])) for a in es.args],
+            [(k, _render_event_value(v)) for k, v in es.event_actions.items()],
+        )
+        for es in chain.events
+    ]
+    return arg_names, chain_ea, events
+
+
+@pytest.mark.parametrize("key", sorted(CASES))
+def test_rust_event_chain_bundle_matches_python(key: str) -> None:
+    """The one-crossing bundle assembler matches the Python assembler too."""
+    chain = _chain(CASES[key]())
+    assert chain is not None
+    expected = str(LiteralVar.create(chain)._js_expr)
+    assert _native.rust_assemble_event_chain_bundle(*_gather_bundle(chain)) == expected
