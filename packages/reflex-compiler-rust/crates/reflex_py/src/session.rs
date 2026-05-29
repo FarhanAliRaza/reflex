@@ -634,6 +634,75 @@ impl CompilerSession {
             hooks_owned,
         ))
     }
+
+    /// Profiling variant of [`Self::compile_page_from_arena`]: returns a
+    /// `dict[str, int]` of nanosecond timings for each internal Rust stage
+    /// (`build_snapshot`, `memoize`, `emit_page`, `emit_memo`) alongside the
+    /// page JS, so the Rust compile tail can be broken down per phase. The
+    /// emit cache is bypassed so every stage runs cold.
+    #[pyo3(signature = (bundle, route_ident, route, compute_close=true))]
+    fn compile_page_from_arena_profiled<'py>(
+        &self,
+        py: Python<'py>,
+        bundle: &Bound<'_, PyDict>,
+        route_ident: &str,
+        route: &str,
+        compute_close: bool,
+    ) -> PyResult<(String, Bound<'py, PyDict>)> {
+        use std::time::Instant;
+        let t0 = Instant::now();
+        let snapshot = crate::from_wire::build_snapshot_from_wire(bundle, compute_close)?;
+        let build_ns = t0.elapsed().as_nanos() as u64;
+
+        let route_ident_owned = route_ident.to_string();
+        let route_owned = route.to_string();
+        let (page_js, memoize_ns, emit_page_ns, emit_memo_ns) = py.allow_threads(move || {
+            let mut snap = snapshot;
+            let t = Instant::now();
+            reflex_codegen::memoize_arena_pass(&mut snap);
+            let memoize_ns = t.elapsed().as_nanos() as u64;
+
+            let t = Instant::now();
+            let mut page_buf = CodeBuffer::with_capacity(4096);
+            emit_page_module_from_snapshot(
+                &mut page_buf,
+                &snap,
+                &route_ident_owned,
+                &route_owned,
+                None,
+                &[],
+                &[],
+                "",
+            );
+            let page_js = String::from_utf8(page_buf.into_bytes()).unwrap_or_default();
+            let emit_page_ns = t.elapsed().as_nanos() as u64;
+
+            let t = Instant::now();
+            let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> =
+                snap.memo_bodies.iter().map(|b| (b.name, b.root)).collect();
+            for (name_sym, root_idx) in body_specs {
+                let mut body_buf = CodeBuffer::with_capacity(2048);
+                let name_str = reflex_intern::resolve_unchecked(name_sym).to_owned();
+                emit_memo_module_from_snapshot(
+                    &mut body_buf,
+                    &snap,
+                    root_idx,
+                    &name_str,
+                    "({ children })",
+                    "",
+                );
+            }
+            let emit_memo_ns = t.elapsed().as_nanos() as u64;
+            (page_js, memoize_ns, emit_page_ns, emit_memo_ns)
+        });
+
+        let d = PyDict::new_bound(py);
+        d.set_item("build_snapshot_ns", build_ns)?;
+        d.set_item("memoize_ns", memoize_ns)?;
+        d.set_item("emit_page_ns", emit_page_ns)?;
+        d.set_item("emit_memo_ns", emit_memo_ns)?;
+        Ok((page_js, d))
+    }
 }
 
 /// Parse the optional `meta_tags` list of `(name, content)` tuples into
