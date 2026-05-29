@@ -1218,6 +1218,17 @@ impl RustVar {
         other: &Bound<'_, PyAny>,
         reflected: bool,
     ) -> PyResult<RustVar> {
+        // String concatenation requires a string operand (matches
+        // StringVar.__add__'s isinstance(other, (StringVar, str)) guard).
+        if !is_string_operand(py, other)? {
+            let other_name = operand_type_name(other);
+            let (left, right) = if reflected {
+                (other_name.as_str(), "StringVar")
+            } else {
+                ("StringVar", other_name.as_str())
+            };
+            return Err(unsupported_operand_error(py, "+", left, right));
+        }
         let (ojs, _ot, ovd) = operand_parts(py, other)?;
         let (a, b) = if reflected {
             (ojs.as_str(), self.js_expr.as_str())
@@ -2440,18 +2451,38 @@ impl RustLiteralVar {
         if value.hasattr("_js_expr")? && value.hasattr("_var_type")? {
             return Ok(value.unbind());
         }
-        // Underlying RustVar: marker string -> concat, else scalar/list/dict.
-        let mut inner = match value.extract::<String>() {
-            Ok(s) if s.contains(VAR_OPENING_TAG) => rust_create_string(py, s),
-            _ => rust_literal(py, value.clone())?,
+        let extra = match _var_data {
+            Some(vd) => convert_var_data(&vd)?,
+            None => None,
         };
-        if let Some(vd) = _var_data {
-            if let Some(extra) = convert_var_data(&vd)? {
-                inner.var_data = VarData::merge([inner.var_data.as_ref(), Some(&extra)])
+        let merge_extra = |mut inner: RustVar| -> RustVar {
+            if let Some(extra) = &extra {
+                inner.var_data = VarData::merge([inner.var_data.as_ref(), Some(extra)])
                     .ok()
                     .flatten();
             }
+            inner
+        };
+        // A marker string decodes to a concat / cast var / folded literal. Only a
+        // genuinely literal result (a single JSON string literal) becomes a
+        // RustLiteralVar; a concat or a single embedded var is returned as the
+        // plain RustVar it is (matches LiteralStringVar.create, which returns a
+        // ConcatVarOperation / cast var, not a literal). Otherwise we would mint
+        // a bogus "literal" whose _var_value is the raw marker string.
+        if let Ok(s) = value.extract::<String>() {
+            if s.contains(VAR_OPENING_TAG) {
+                let inner = merge_extra(rust_create_string(py, s));
+                if let Some(literal_value) = json_string_value(py, &inner.js_expr) {
+                    let init = pyo3::PyClassInitializer::from(inner).add_subclass(RustLiteralVar {
+                        var_value: PyString::new_bound(py, &literal_value).into_any().unbind(),
+                    });
+                    return Ok(Py::new(py, init)?.into_any());
+                }
+                return Ok(Py::new(py, inner)?.into_any());
+            }
         }
+        // A plain scalar / list / dict becomes a literal carrying its value.
+        let inner = merge_extra(rust_literal(py, value.clone())?);
         let init = pyo3::PyClassInitializer::from(inner).add_subclass(RustLiteralVar {
             var_value: value.unbind(),
         });

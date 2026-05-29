@@ -20,10 +20,41 @@ from reflex_base.vars.base import LiteralVar, Var
 from reflex_compiler_rust._native import RustLiteralVar
 
 
-@pytest.mark.parametrize("value", [5, -7, 0, 1.5, 1.0, 100.0, True, False, None])
+@pytest.mark.parametrize(
+    "value", [5, -7, 0, 1.5, 1.0, 100.0, True, False, None, "hi", "", 'a"b']
+)
 def test_scalar_create_returns_rust_literal(value: object) -> None:
-    """Non-string scalars route to the Rust literal var."""
+    """Scalars (including plain strings) route to the Rust literal var."""
     assert isinstance(LiteralVar.create(value), RustLiteralVar)
+
+
+def test_string_serializes_to_value() -> None:
+    """A routed string literal serializes back to its Python value."""
+    from reflex_base.utils.format import json_dumps
+
+    assert json_dumps([1, LiteralVar.create("hi")]) == '[1, "hi"]'
+
+
+def test_fstring_single_var_is_not_literal() -> None:
+    """An f-string of a single state var decodes to the var (not a fake literal)."""
+    import reflex as rx
+
+    class _S(rx.State):
+        name: str = "x"
+
+    var = LiteralVar.create(f"{_S.name}")
+    # The single embedded var is returned (a plain expression), not wrapped as a
+    # bogus literal whose value is the marker string.
+    assert not isinstance(var, RustLiteralVar)
+    assert "name" in var._js_expr
+
+
+def test_fstring_all_literal_folds_to_literal() -> None:
+    """An f-string whose parts are all literals folds to a single literal."""
+    inner = LiteralVar.create("p")
+    folded = LiteralVar.create(f"foo{inner}bar")
+    assert isinstance(folded, RustLiteralVar)
+    assert str(folded) == '"foopbar"'
 
 
 @pytest.mark.parametrize(

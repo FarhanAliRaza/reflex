@@ -1389,7 +1389,7 @@ class LiteralVar(Var[VAR_TYPE]):
         # (datetime/Color/range/serializer-backed/dataclasses) also stay on the
         # Python dispatch below. Exact-type match keeps int subclasses (enums,
         # numpy, …) on the precise Python dispatch.
-        if type(value) in (bool, int, float, type(None)):
+        if type(value) in (bool, int, float, str, type(None)):
             return RustLiteralVar.create(value, _var_data=_var_data)
 
         for literal_subclass, var_subclass in _var_literal_subclasses[::-1]:
@@ -1543,6 +1543,23 @@ def serialize_literal(value: LiteralVar):
 
     Returns:
         The serialized Literal.
+    """
+    return value._var_value
+
+
+@serializers.serializer
+def serialize_rust_literal(value: RustLiteralVar):
+    """Serialize a Rust-backed literal var (the cutover target of LiteralVar).
+
+    Registered separately because ``RustLiteralVar`` is not a Python
+    ``LiteralVar`` subclass, so ``get_serializer`` cannot reach
+    ``serialize_literal`` via ``issubclass``.
+
+    Args:
+        value: The Rust literal var to serialize.
+
+    Returns:
+        The serialized literal value.
     """
     return value._var_value
 
