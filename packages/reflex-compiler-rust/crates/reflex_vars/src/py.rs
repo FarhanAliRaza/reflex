@@ -598,22 +598,21 @@ impl RustVar {
     /// Python's ``_decode_var_immutable`` and ``LiteralStringVar.create`` read),
     /// so a Rust var formatted into a Python f-string / operation decodes
     /// correctly — and also into the Rust registry for ``rust_create_string``.
-    fn __format__(&self, py: Python<'_>, _format_spec: &str) -> PyResult<String> {
+    fn __format__(slf: &Bound<'_, Self>, py: Python<'_>, _format_spec: &str) -> PyResult<String> {
+        let b = slf.borrow();
         let id = VAR_COUNTER.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut reg) = var_registry().lock() {
-            reg.insert(id, (self.js_expr.clone(), self.var_data.clone()));
+            reg.insert(id, (b.js_expr.clone(), b.var_data.clone()));
         }
-        let clone = RustVar {
-            js_expr: self.js_expr.clone(),
-            var_type: self.var_type.clone_ref(py),
-            var_data: self.var_data.clone(),
-        };
+        // Register the actual var object (not a base-RustVar clone) so its
+        // concrete class — e.g. RustLiteralVar — survives the round-trip; the
+        // string decoder folds adjacent literal-string vars by class.
         py.import_bound("reflex_base.vars.base")?
             .getattr("_global_vars")?
-            .set_item(id, Py::new(py, clone)?)?;
+            .set_item(id, slf.clone().into_any())?;
         Ok(format!(
             "{VAR_OPENING_TAG}{id}{VAR_CLOSING_TAG}{}",
-            self.js_expr
+            b.js_expr
         ))
     }
 
@@ -882,16 +881,54 @@ impl RustVar {
     /// `contains` dispatches by receiver type: strings/arrays use
     /// `.includes(x)`, objects use `.hasOwnProperty(key)`. All return bool with
     /// doubling var_data.
-    fn contains(&self, py: Python<'_>, needle: Bound<'_, PyAny>) -> PyResult<RustVar> {
+    #[pyo3(signature = (needle, field=None))]
+    fn contains(
+        &self,
+        py: Python<'_>,
+        needle: Bound<'_, PyAny>,
+        field: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<RustVar> {
+        let bool_ty = || PyBool::type_object_bound(py).into_any().unbind();
+        // Object membership is a key check with no field form.
+        if self.type_label(py).as_deref() == Some("dict") {
+            let (njs, _nt, nvd) = operand_parts(py, &needle)?;
+            return Ok(RustVar {
+                js_expr: format!("{}.hasOwnProperty({njs})", self.js_expr),
+                var_type: bool_ty(),
+                var_data: var_op_doubling(&[&self.var_data, &nvd]),
+            });
+        }
+        // A string receiver requires a string needle (matches StringVar).
+        if self.is_str(py) && !is_string_operand(py, &needle)? {
+            return Err(unsupported_operand_error(
+                py,
+                "contains",
+                "StringVar",
+                &operand_type_name(&needle),
+            ));
+        }
         let (njs, _nt, nvd) = operand_parts(py, &needle)?;
-        let js = if self.type_label(py).as_deref() == Some("dict") {
-            format!("{}.hasOwnProperty({njs})", self.js_expr)
-        } else {
-            format!("{}.includes({njs})", self.js_expr)
-        };
+        // The field form (`array`/`string` of objects): a string field selects
+        // the property to compare, rendering `.some(obj => obj[field] === x)`.
+        if let Some(field) = field {
+            if !is_string_operand(py, &field)? {
+                return Err(unsupported_operand_error(
+                    py,
+                    "contains",
+                    "Var",
+                    &operand_type_name(&field),
+                ));
+            }
+            let (fjs, _ft, fvd) = operand_parts(py, &field)?;
+            return Ok(RustVar {
+                js_expr: format!("{}.some(obj => obj[{fjs}] === {njs})", self.js_expr),
+                var_type: bool_ty(),
+                var_data: var_op_doubling(&[&self.var_data, &nvd, &fvd]),
+            });
+        }
         Ok(RustVar {
-            js_expr: js,
-            var_type: PyBool::type_object_bound(py).into_any().unbind(),
+            js_expr: format!("{}.includes({njs})", self.js_expr),
+            var_type: bool_ty(),
             var_data: var_op_doubling(&[&self.var_data, &nvd]),
         })
     }
@@ -2482,29 +2519,8 @@ pub fn rust_create_string(py: Python<'_>, value: String) -> RustVar {
         .filter(|p| !matches!(p, StrPart::Lit(s) if s.is_empty()))
         .collect();
 
-    // Single var → that var (as a string); single literal → string literal.
-    if filtered.len() == 1 {
-        return match &filtered[0] {
-            StrPart::Lit(s) => RustVar {
-                js_expr: render_js_string(s),
-                var_type: str_ty,
-                var_data: None,
-            },
-            StrPart::Var(js, data) => RustVar {
-                js_expr: js.clone(),
-                var_type: str_ty,
-                var_data: var_op_plain(&[data]),
-            },
-        };
-    }
-
-    let rendered: Vec<String> = filtered
-        .iter()
-        .map(|p| match p {
-            StrPart::Lit(s) => render_js_string(s),
-            StrPart::Var(js, _) => js.clone(),
-        })
-        .collect();
+    // var_data is the plain merge of every part's data (matches
+    // ConcatVarOperation, which merges all Var parts once).
     let datas: Vec<&Option<VarData>> = filtered
         .iter()
         .map(|p| match p {
@@ -2512,11 +2528,63 @@ pub fn rust_create_string(py: Python<'_>, value: String) -> RustVar {
             StrPart::Var(_, data) => data,
         })
         .collect();
+    let var_data = var_op_plain(&datas);
+
+    // Fold consecutive literal-string parts into a single JS string literal,
+    // mirroring ConcatVarOperation (which accumulates adjacent LiteralStringVar
+    // values). A part is a literal string if it is raw f-string text, or a
+    // marker var whose js is itself a JSON string literal.
+    let mut rendered: Vec<String> = Vec::new();
+    let mut acc: Option<String> = None;
+    for part in &filtered {
+        let literal_value = match part {
+            StrPart::Lit(s) => Some(s.clone()),
+            StrPart::Var(js, _) => json_string_value(py, js),
+        };
+        match literal_value {
+            Some(v) => acc.get_or_insert_with(String::new).push_str(&v),
+            None => {
+                if let Some(a) = acc.take() {
+                    rendered.push(render_js_string(&a));
+                }
+                if let StrPart::Var(js, _) = part {
+                    rendered.push(js.clone());
+                }
+            }
+        }
+    }
+    if let Some(a) = acc.take() {
+        rendered.push(render_js_string(&a));
+    }
+
+    if rendered.len() == 1 {
+        return RustVar {
+            js_expr: rendered.into_iter().next().unwrap(),
+            var_type: str_ty,
+            var_data,
+        };
+    }
     RustVar {
         js_expr: format!("({})", rendered.join("+")),
         var_type: str_ty,
-        var_data: var_op_plain(&datas),
+        var_data,
     }
+}
+
+/// The raw string value of a JS source if it is a JSON string literal (e.g.
+/// `"imagination"` -> `imagination`), else `None`. Used to detect foldable
+/// literal-string concat parts. Only literal string vars render as JSON string
+/// literals, so this reliably distinguishes them from expression operands.
+fn json_string_value(py: Python<'_>, js: &str) -> Option<String> {
+    if !js.starts_with('"') {
+        return None;
+    }
+    py.import_bound("json")
+        .ok()?
+        .call_method1("loads", (js,))
+        .ok()?
+        .extract::<String>()
+        .ok()
 }
 
 /// A stable `None` var_data to borrow for literal parts in the concat merge.

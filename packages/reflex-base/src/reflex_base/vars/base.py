@@ -1382,13 +1382,13 @@ class LiteralVar(Var[VAR_TYPE]):
 
         # Non-string scalars are produced by the Rust literal var (byte-identical
         # rendering, var_type and json to the Python literal subclasses). Strings
-        # are next: the f-string marker registry is unified (Rust decodes Python
-        # var markers from _global_vars), but LiteralStringVar's adjacent-literal
-        # folding and the `contains(field=...)` surface remain to port, so they
-        # stay on the Python dispatch for now. Lists/dicts and exotic types
-        # (datetime/Color/range/serializer-backed/dataclasses) also stay below
-        # (element-type inference + custom json). Exact-type match keeps int
-        # subclasses (enums, numpy, …) on the precise Python dispatch.
+        # are nearly ready (f-string marker decode + adjacent-literal folding +
+        # __format__ subclass preservation all landed), but routing them needs
+        # RustLiteralVar to survive _replace/to/_var_set_state (literal-preserving
+        # transforms) — the next slice. Lists/dicts and exotic types
+        # (datetime/Color/range/serializer-backed/dataclasses) also stay on the
+        # Python dispatch below. Exact-type match keeps int subclasses (enums,
+        # numpy, …) on the precise Python dispatch.
         if type(value) in (bool, int, float, type(None)):
             return RustLiteralVar.create(value, _var_data=_var_data)
 
