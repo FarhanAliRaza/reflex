@@ -42,6 +42,22 @@ import sys
 import time
 from pathlib import Path
 
+# Python 3.14 / pydantic 2.13 compatibility shim (must run before any reflex /
+# pydantic import): pydantic passes `prefer_fwd_module` to typing._eval_type,
+# which 3.14 removed. Drop kwargs the installed _eval_type no longer accepts.
+import inspect as _inspect
+import typing as _typing
+
+_orig_eval_type = _typing._eval_type
+_eval_type_params = _inspect.signature(_orig_eval_type).parameters
+if "prefer_fwd_module" not in _eval_type_params:
+
+    def _eval_type_compat(*args, **kwargs):
+        kwargs = {k: v for k, v in kwargs.items() if k in _eval_type_params}
+        return _orig_eval_type(*args, **kwargs)
+
+    _typing._eval_type = _eval_type_compat  # type: ignore[assignment]
+
 
 def _ns() -> int:
     return time.perf_counter_ns()

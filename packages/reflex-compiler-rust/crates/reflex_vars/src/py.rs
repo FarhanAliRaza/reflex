@@ -1429,11 +1429,22 @@ impl PyImportVar {
             && Some(i.package_path.clone()) == s("package_path")
     }
 
-    fn __hash__(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.inner.hash(&mut h);
-        h.finish()
+    /// Hash matching Python's frozen-dataclass `ImportVar.__hash__` =
+    /// `hash((tag, is_default, alias, install, render, package_path))`, so a
+    /// `RustImportVar` and a Python `ImportVar` with the same fields collapse
+    /// together in `set()`-based dedup (`collapse_imports`).
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        let i = &self.inner;
+        let tup = (
+            i.tag.clone(),
+            i.is_default,
+            i.alias.clone(),
+            i.install,
+            i.render,
+            i.package_path.clone(),
+        );
+        let obj: Py<PyAny> = tup.into_py(py);
+        obj.bind(py).hash()
     }
 
     /// Pickle support: reconstruct via the constructor.
