@@ -1676,7 +1676,10 @@ fn literal_json(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<String> {
         }
         return Ok(format!("{{{}}}", pairs.join(", ")));
     }
-    if value.is_instance_of::<PyList>() || value.is_instance_of::<pyo3::types::PyTuple>() {
+    if value.is_instance_of::<PyList>()
+        || value.is_instance_of::<pyo3::types::PyTuple>()
+        || value.is_instance_of::<pyo3::types::PySet>()
+    {
         let items: PyResult<Vec<String>> = value.iter()?.map(|e| literal_json(py, &e?)).collect();
         return Ok(format!("[{}]", items?.join(", ")));
     }
@@ -1857,8 +1860,13 @@ fn render_literal_js(value: &Bound<'_, PyAny>) -> PyResult<String> {
         }
         return Ok(render_js_string(&s));
     }
-    if let Ok(list) = value.downcast::<PyList>() {
-        let items: PyResult<Vec<String>> = list.iter().map(|v| render_literal_js(&v)).collect();
+    // Lists, tuples and sets all render as JS arrays (iterating preserves the
+    // Python object's order, so a set matches its own iteration).
+    if value.is_instance_of::<PyList>()
+        || value.is_instance_of::<pyo3::types::PyTuple>()
+        || value.is_instance_of::<pyo3::types::PySet>()
+    {
+        let items: PyResult<Vec<String>> = value.iter()?.map(|v| render_literal_js(&v?)).collect();
         return Ok(format!("[{}]", items?.join(", ")));
     }
     if let Ok(dict) = value.downcast::<pyo3::types::PyDict>() {
@@ -1966,7 +1974,10 @@ fn collect_container_var_data(
             push(&k, &mut parts)?;
             push(&v, &mut parts)?;
         }
-    } else if value.is_instance_of::<PyList>() || value.is_instance_of::<pyo3::types::PyTuple>() {
+    } else if value.is_instance_of::<PyList>()
+        || value.is_instance_of::<pyo3::types::PyTuple>()
+        || value.is_instance_of::<pyo3::types::PySet>()
+    {
         for elem in value.iter()? {
             push(&elem?, &mut parts)?;
         }
@@ -1986,6 +1997,7 @@ fn element_dispatch_var_data(py: Python<'_>, elem: &Bound<'_, PyAny>) -> PyResul
     if elem.downcast::<PyDict>().is_ok()
         || elem.is_instance_of::<PyList>()
         || elem.is_instance_of::<pyo3::types::PyTuple>()
+        || elem.is_instance_of::<pyo3::types::PySet>()
     {
         return collect_container_var_data(py, elem);
     }
