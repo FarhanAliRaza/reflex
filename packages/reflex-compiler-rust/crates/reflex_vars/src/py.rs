@@ -952,8 +952,18 @@ fn parse_imports_arg(
     for (lib, vars) in pairs {
         let lib = normalize_import_lib(&lib.extract::<String>()?);
         let mut ivs = Vec::new();
-        for item in vars.iter()? {
-            let item = item?;
+        // The dict value may be a single ImportVar/str OR a list/tuple/set of
+        // them (matches `merge_imports`, which `.append`s a scalar but
+        // `.extend`s a sequence).
+        let is_seq = vars.downcast::<PyList>().is_ok()
+            || vars.downcast::<pyo3::types::PyTuple>().is_ok()
+            || vars.downcast::<pyo3::types::PySet>().is_ok();
+        let items: Vec<Bound<'_, PyAny>> = if is_seq {
+            vars.iter()?.collect::<PyResult<Vec<_>>>()?
+        } else {
+            vec![vars.clone()]
+        };
+        for item in items {
             ivs.push(if let Ok(s) = item.extract::<String>() {
                 ImportVar::new(s)
             } else {
@@ -1138,8 +1148,19 @@ impl PyVarData {
 
     /// Imports as a mutable dict `{lib: [ImportVar, ...]}` (drop-in for
     /// `old_school_imports`).
-    fn old_school_imports(&self) -> Vec<(String, Vec<PyImportVar>)> {
-        self.imports()
+    fn old_school_imports<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let dict = pyo3::types::PyDict::new_bound(py);
+        for (lib, vars) in &self.inner.imports {
+            let mut ivs: Vec<Bound<'py, PyAny>> = Vec::with_capacity(vars.len());
+            for iv in vars {
+                ivs.push(Bound::new(py, PyImportVar { inner: iv.clone() })?.into_any());
+            }
+            dict.set_item(lib, pyo3::types::PyList::new_bound(py, ivs))?;
+        }
+        Ok(dict)
     }
 
     #[getter]
@@ -1193,41 +1214,45 @@ impl PyVarData {
         &self.inner.field_name
     }
 
+    /// Hooks as a tuple of strings (matches `VarData.hooks: tuple[str, ...]`).
     #[getter]
-    fn hooks(&self) -> Vec<String> {
-        self.inner.hooks.clone()
+    fn hooks<'py>(&self, py: Python<'py>) -> Bound<'py, pyo3::types::PyTuple> {
+        pyo3::types::PyTuple::new_bound(py, &self.inner.hooks)
     }
 
-    /// Imports as `[(lib, [ImportVar, ...]), ...]` — duplicates preserved,
-    /// matching the Python `VarData.imports` shape.
+    /// Imports as the `ParsedImportTuple` shape `((lib, (ImportVar, ...)), ...)`
+    /// — a **tuple** of tuples (the framework does `isinstance(imports, tuple)`),
+    /// duplicates preserved.
     #[getter]
-    fn imports(&self) -> Vec<(String, Vec<PyImportVar>)> {
-        self.inner
-            .imports
-            .iter()
-            .map(|(lib, vars)| {
-                (
-                    lib.clone(),
-                    vars.iter()
-                        .map(|iv| PyImportVar { inner: iv.clone() })
-                        .collect(),
-                )
-            })
-            .collect()
+    fn imports<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        let mut modules: Vec<Bound<'py, pyo3::types::PyTuple>> =
+            Vec::with_capacity(self.inner.imports.len());
+        for (lib, vars) in &self.inner.imports {
+            let mut ivs: Vec<Bound<'py, PyAny>> = Vec::with_capacity(vars.len());
+            for iv in vars {
+                ivs.push(Bound::new(py, PyImportVar { inner: iv.clone() })?.into_any());
+            }
+            let inner = pyo3::types::PyTuple::new_bound(py, ivs);
+            let pair: [Bound<'py, PyAny>; 2] =
+                [PyString::new_bound(py, lib).into_any(), inner.into_any()];
+            modules.push(pyo3::types::PyTuple::new_bound(py, pair));
+        }
+        Ok(pyo3::types::PyTuple::new_bound(py, modules))
     }
 
-    /// Deps as bare `RustVar`s (the framework reads only their `_js_expr`).
+    /// Deps as a tuple of bare `RustVar`s (the framework reads only `_js_expr`).
     #[getter]
-    fn deps(&self, py: Python<'_>) -> Vec<RustVar> {
-        self.inner
-            .deps
-            .iter()
-            .map(|d| RustVar {
+    fn deps<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        let mut out: Vec<Bound<'py, PyAny>> = Vec::with_capacity(self.inner.deps.len());
+        for d in &self.inner.deps {
+            let v = RustVar {
                 js_expr: d.js_expr().to_owned(),
                 var_type: py.None(),
                 var_data: None,
-            })
-            .collect()
+            };
+            out.push(Bound::new(py, v)?.into_any());
+        }
+        Ok(pyo3::types::PyTuple::new_bound(py, out))
     }
 }
 
@@ -1273,6 +1298,41 @@ impl PyImportVar {
                 package_path,
             },
         }
+    }
+
+    /// Field-wise equality against any `ImportVar`-like object (Python
+    /// `ImportVar` or another `RustImportVar`). Python's dataclass `__eq__`
+    /// returns `NotImplemented` for a foreign type, so this reflected compare is
+    /// what makes `ImportVar(...) in [rust_import_var, ...]` work.
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        let i = &self.inner;
+        let s =
+            |n: &str| -> Option<String> { other.getattr(n).ok().and_then(|v| v.extract().ok()) };
+        let b = |n: &str, d: bool| {
+            other
+                .getattr(n)
+                .ok()
+                .and_then(|v| v.extract().ok())
+                .unwrap_or(d)
+        };
+        i.tag == s("tag")
+            && i.alias
+                == other
+                    .getattr("alias")
+                    .ok()
+                    .and_then(|v| v.extract::<Option<String>>().ok())
+                    .flatten()
+            && i.is_default == b("is_default", !i.is_default)
+            && i.install == b("install", !i.install)
+            && i.render == b("render", !i.render)
+            && Some(i.package_path.clone()) == s("package_path")
+    }
+
+    fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.inner.hash(&mut h);
+        h.finish()
     }
 
     #[getter]
