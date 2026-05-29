@@ -1120,6 +1120,57 @@ impl RustVar {
         })
     }
 
+    /// Map a function over each array element (`ArrayVar.foreach`):
+    /// `{arr}.map(((arg) => {fn(arg)}))`. The user function runs in Python with
+    /// a synthetic element var; its result becomes the arrow body. Result type
+    /// is `list[Any]`; var_data doubles the array and the body.
+    fn foreach(&self, py: Python<'_>, func: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let inspect = py.import_bound("inspect")?;
+        if !func.is_callable() {
+            return Err(unsupported_operand_error(
+                py,
+                "foreach",
+                "ArrayVar",
+                &operand_type_name(&func),
+            ));
+        }
+        let num_args = inspect
+            .call_method1("signature", (&func,))?
+            .getattr("parameters")?
+            .len()?;
+        if num_args > 1 {
+            return Err(var_type_error(
+                py,
+                "The function passed to foreach should take at most one argument.",
+            ));
+        }
+        let base = py.import_bound("reflex_base.vars.base")?;
+        let (arg_names, body) = if num_args == 0 {
+            (String::new(), func.call0()?)
+        } else {
+            let arg_name: String = base
+                .getattr("get_unique_variable_name")?
+                .call0()?
+                .extract()?;
+            let first_arg = Bound::new(
+                py,
+                RustVar {
+                    js_expr: arg_name.clone(),
+                    var_type: self.value_type(py, 0),
+                    var_data: None,
+                },
+            )?;
+            (arg_name, func.call1((first_arg,))?)
+        };
+        let (body_js, _bt, body_vd) = operand_parts(py, &body)?;
+        let function_js = format!("(({arg_names}) => {body_js})");
+        Ok(RustVar {
+            js_expr: format!("{}.map({function_js})", self.js_expr),
+            var_type: list_of(py, py.import_bound("typing")?.getattr("Any")?.unbind()),
+            var_data: var_op_doubling(&[&self.var_data, &body_vd]),
+        })
+    }
+
     /// Reverse an array: `{arr}.slice().reverse()`, keeps the array's type,
     /// doubling. A non-array receiver raises (matches the `reverse` guard in
     /// `Var.__getattr__`).
