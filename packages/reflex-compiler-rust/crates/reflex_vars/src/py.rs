@@ -82,10 +82,11 @@ impl RustVar {
     // rendering + var_type).
 
     fn __add__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
-        if self.is_str(py) {
-            return self.str_concat(py, &other, false);
+        match self.type_label(py).as_deref() {
+            Some("str") => self.str_concat(py, &other, false),
+            Some("list") => self.array_concat(py, &other),
+            _ => self.arith(py, &other, "+", false),
         }
-        self.arith(py, &other, "+", false)
     }
 
     fn __radd__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
@@ -242,11 +243,18 @@ impl RustVar {
         })
     }
 
+    /// `contains` dispatches by receiver type: strings/arrays use
+    /// `.includes(x)`, objects use `.hasOwnProperty(key)`. All return bool with
+    /// doubling var_data.
     fn contains(&self, py: Python<'_>, needle: Bound<'_, PyAny>) -> PyResult<RustVar> {
-        // str.includes — for the string receiver. bool result, doubling.
         let (njs, _nt, nvd) = operand_parts(py, &needle)?;
+        let js = if self.type_label(py).as_deref() == Some("dict") {
+            format!("{}.hasOwnProperty({njs})", self.js_expr)
+        } else {
+            format!("{}.includes({njs})", self.js_expr)
+        };
         Ok(RustVar {
-            js_expr: format!("{}.includes({njs})", self.js_expr),
+            js_expr: js,
             var_type: PyBool::type_object_bound(py).into_any().unbind(),
             var_data: var_op_doubling(&[&self.var_data, &nvd]),
         })
@@ -267,24 +275,110 @@ impl RustVar {
         self.str_split(py, separator.as_ref())
     }
 
-    /// String length is `split("").length` — two stacked doubling ops, so the
-    /// var_data multiplies twice (the corpus `str_length` carries 8 imports).
+    /// `length` dispatches by type: a string is `split("").length` (two
+    /// stacked doubling ops -> 8 imports), an array is `{arr}.length` (one ->
+    /// 4). Both return int.
     fn length(&self, py: Python<'_>) -> PyResult<RustVar> {
-        let split = self.str_split(py, None)?;
+        let (js, data) = if self.is_str(py) {
+            let split = self.str_split(py, None)?;
+            (
+                format!("{}.length", split.js_expr),
+                var_op_doubling(&[&split.var_data]),
+            )
+        } else {
+            (
+                format!("{}.length", self.js_expr),
+                var_op_doubling(&[&self.var_data]),
+            )
+        };
         Ok(RustVar {
-            js_expr: format!("{}.length", split.js_expr),
+            js_expr: js,
             var_type: PyInt::type_object_bound(py).into_any().unbind(),
-            var_data: var_op_doubling(&[&split.var_data]),
+            var_data: data,
         })
     }
 
-    fn __getitem__(&self, py: Python<'_>, index: Bound<'_, PyAny>) -> PyResult<RustVar> {
-        // String item: `{s}?.at?.({i})` via `{string}` (doubling).
-        let (ijs, _it, ivd) = operand_parts(py, &index)?;
+    /// Reverse an array: `{arr}.slice().reverse()`, keeps the array's type,
+    /// doubling.
+    fn reverse(&self, py: Python<'_>) -> RustVar {
+        RustVar {
+            js_expr: format!("{}.slice().reverse()", self.js_expr),
+            var_type: self.var_type.clone_ref(py),
+            var_data: var_op_doubling(&[&self.var_data]),
+        }
+    }
+
+    /// Join an array into a string: `{arr}.join({sep})`, str result, doubling.
+    #[pyo3(signature = (separator = None))]
+    fn join(&self, py: Python<'_>, separator: Option<Bound<'_, PyAny>>) -> PyResult<RustVar> {
+        let (sjs, svd) = match separator {
+            Some(s) => {
+                let (js, _t, vd) = operand_parts(py, &s)?;
+                (js, vd)
+            }
+            None => ("\"\"".to_owned(), None),
+        };
         Ok(RustVar {
-            js_expr: format!("{}?.at?.({ijs})", self.js_expr),
+            js_expr: format!("{}.join({sjs})", self.js_expr),
             var_type: PyString::type_object_bound(py).into_any().unbind(),
-            var_data: var_op_doubling(&[&self.var_data, &ivd]),
+            var_data: var_op_doubling(&[&self.var_data, &svd]),
+        })
+    }
+
+    /// Object keys: `Object.keys({obj} ?? {})`, list result, doubling.
+    fn keys(&self, py: Python<'_>) -> RustVar {
+        RustVar {
+            js_expr: format!("Object.keys({} ?? {{}})", self.js_expr),
+            var_type: PyList::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_doubling(&[&self.var_data]),
+        }
+    }
+
+    /// Object values: `Object.values({obj} ?? {})`, list result, doubling.
+    fn values(&self, py: Python<'_>) -> RustVar {
+        RustVar {
+            js_expr: format!("Object.values({} ?? {{}})", self.js_expr),
+            var_type: PyList::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_doubling(&[&self.var_data]),
+        }
+    }
+
+    /// Item access dispatches by receiver type: a string uses
+    /// `{s}?.at?.({i})` (str, doubling), an array uses `{a}?.at?.({i})`
+    /// (element type, plain), an object uses `{o}?.[{k}]` (value type, plain).
+    fn __getitem__(&self, py: Python<'_>, index: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let (ijs, _it, ivd) = operand_parts(py, &index)?;
+        match self.type_label(py).as_deref() {
+            Some("str") => Ok(RustVar {
+                js_expr: format!("{}?.at?.({ijs})", self.js_expr),
+                var_type: PyString::type_object_bound(py).into_any().unbind(),
+                var_data: var_op_doubling(&[&self.var_data, &ivd]),
+            }),
+            Some("dict") => Ok(RustVar {
+                js_expr: format!("{}?.[{ijs}]", self.js_expr),
+                var_type: self.value_type(py, 1),
+                var_data: var_op_plain(&[&self.var_data, &ivd]),
+            }),
+            _ => Ok(RustVar {
+                js_expr: format!("{}?.at?.({ijs})", self.js_expr),
+                var_type: self.value_type(py, 0),
+                var_data: var_op_plain(&[&self.var_data, &ivd]),
+            }),
+        }
+    }
+
+    /// Attribute access on an object var: `{o}?.["name"]`, value type, plain.
+    /// Mirrors `ObjectVar.__getattr__`. Underscore names raise `AttributeError`
+    /// so internal / dunder lookups fall through to normal resolution rather
+    /// than being turned into a bogus item access.
+    fn __getattr__(&self, py: Python<'_>, name: String) -> PyResult<RustVar> {
+        if name.starts_with('_') {
+            return Err(pyo3::exceptions::PyAttributeError::new_err(name));
+        }
+        Ok(RustVar {
+            js_expr: format!("{}?.[{}]", self.js_expr, render_js_string(&name)),
+            var_type: self.value_type(py, 1),
+            var_data: var_op_plain(&[&self.var_data]),
         })
     }
 }
@@ -295,6 +389,47 @@ impl RustVar {
         self.var_type
             .bind(py)
             .is(&PyString::type_object_bound(py).into_any())
+    }
+
+    /// The `__name__` of this var's type (e.g. "str", "list", "dict"), used to
+    /// dispatch type-specific methods. `None` if the type has no `__name__`.
+    fn type_label(&self, py: Python<'_>) -> Option<String> {
+        self.var_type
+            .bind(py)
+            .getattr("__name__")
+            .ok()
+            .and_then(|n| n.extract::<String>().ok())
+    }
+
+    /// The element/value type of a container var: `var_type.__args__[idx]`
+    /// (index 0 for sequences, 1 for mappings). Falls back to the container
+    /// type itself when there are no type args.
+    fn value_type(&self, py: Python<'_>, idx: usize) -> Py<PyAny> {
+        self.var_type
+            .bind(py)
+            .getattr("__args__")
+            .ok()
+            .and_then(|args| args.get_item(idx).ok())
+            .map(|t| t.unbind())
+            .unwrap_or_else(|| self.var_type.clone_ref(py))
+    }
+
+    /// Array concatenation (`array_concat_operation`): `[...{a}, ...{b}]`. The
+    /// result type is `a_type | b_type` (computed via Python's `|` so the
+    /// rendered type matches exactly), doubling var_data.
+    fn array_concat(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let (ojs, ot, ovd) = operand_parts(py, other)?;
+        let var_type = self
+            .var_type
+            .bind(py)
+            .call_method1("__or__", (ot,))
+            .map(|t| t.unbind())
+            .unwrap_or_else(|_| self.var_type.clone_ref(py));
+        Ok(RustVar {
+            js_expr: format!("[...{}, ...{ojs}]", self.js_expr),
+            var_type,
+            var_data: var_op_doubling(&[&self.var_data, &ovd]),
+        })
     }
 
     /// Build a unary string→string op `f(self)` with doubling var_data.

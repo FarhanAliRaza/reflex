@@ -1,19 +1,22 @@
-"""Parity gate for the Rust ``Var`` — scalars, operators, and var_data.
+"""Parity gate for the Rust ``Var`` against the golden oracle.
 
 Byte-parity proof of the Var cutover so far: the Rust-backed ``Var``
 (``_native.RustVar``) must reproduce the exact ``_js_expr`` / ``_var_type`` /
-``_get_all_var_data()`` the Python ``Var`` froze in the golden oracle. Covered:
+``_get_all_var_data()`` the Python ``Var`` froze in the golden oracle. Every
+case asserts the **full record** (including the var_data merge and the exact
+import multiplicity Python produces); operator/method leaves are seeded from
+the Python state var (``rust_from_python_var``) so composition is what's under
+test, not state-name mangling. Covered:
 
-* scalar literals (``lit_*``) + raw vars, via ``rust_literal`` / ``rust_raw_var``;
-* every number/boolean/comparison operator (``num_*`` / ``bool_*``), composed
-  over a leaf seeded from the Python state var (``rust_from_python_var``) so the
-  full record — including the var_data merge and the exact import multiplicity
-  Python produces — is asserted.
+* scalar literals (``lit_*``) + raw vars;
+* number/boolean/comparison operators (``num_*`` / ``bool_*``);
+* string methods + casting (``str_*`` / ``to_*``);
+* array + object methods (``arr_*`` / ``obj_*``).
 
-As later slices land (typed subclasses, string/array/object methods, casting,
-the f-string marker protocol) this file grows to cover them, until the Rust
-``Var`` passes the *whole* golden corpus and the Python implementation can be
-deleted. Until then it pins what is already done so it cannot regress.
+The remaining corpus surface — the f-string marker protocol (``fstr_*``) — and
+then the typed-subclass facades land next, after which the Rust ``Var`` passes
+the whole golden corpus and the Python implementation can be deleted. Until
+then this pins what is already done so it cannot regress.
 """
 
 from __future__ import annotations
@@ -169,6 +172,60 @@ def test_rust_operator_matches_golden(key: str, golden: dict) -> None:
 def test_rust_string_and_cast_matches_golden(key: str, golden: dict) -> None:
     """A Rust string method / cast reproduces the golden record byte-for-byte."""
     assert _record(STRING_CASES[key]()) == golden[key]
+
+
+# --- array + object method slice ---
+# Item access uses element/value type from var_type.__args__; concat unions the
+# two array types via Python's `|`. Methods compose on the same var_op
+# primitives, so the import multiplicity matches.
+def _items() -> object:
+    """A Rust list[int] leaf mirroring ``_GoldenState.items``.
+
+    Returns:
+        A RustVar equivalent to ``_GoldenState.items``.
+    """
+    return _native.rust_from_python_var(_GoldenState.items)
+
+
+def _words() -> object:
+    """A Rust list[str] leaf mirroring ``_GoldenState.words``.
+
+    Returns:
+        A RustVar equivalent to ``_GoldenState.words``.
+    """
+    return _native.rust_from_python_var(_GoldenState.words)
+
+
+def _data() -> object:
+    """A Rust dict[str, int] leaf mirroring ``_GoldenState.data``.
+
+    Returns:
+        A RustVar equivalent to ``_GoldenState.data``.
+    """
+    return _native.rust_from_python_var(_GoldenState.data)
+
+
+CONTAINER_CASES = {
+    "arr_length": lambda: _items().length(),
+    "arr_getitem": lambda: _items()[0],
+    "arr_contains": lambda: _items().contains(1),
+    "arr_reverse": lambda: _items().reverse(),
+    "arr_join": lambda: _words().join(","),
+    "arr_concat": lambda: (
+        _items() + _native.rust_raw_var("[4, 5]", _GoldenState.items._var_type)
+    ),
+    "obj_getitem": lambda: _data()["a"],
+    "obj_getattr": lambda: _data().a,
+    "obj_keys": lambda: _data().keys(),
+    "obj_values": lambda: _data().values(),
+    "obj_contains": lambda: _data().contains("a"),
+}
+
+
+@pytest.mark.parametrize("key", sorted(CONTAINER_CASES))
+def test_rust_container_matches_golden(key: str, golden: dict) -> None:
+    """A Rust array/object method reproduces the golden record byte-for-byte."""
+    assert _record(CONTAINER_CASES[key]()) == golden[key]
 
 
 def test_seeded_leaf_matches_golden(golden: dict) -> None:
