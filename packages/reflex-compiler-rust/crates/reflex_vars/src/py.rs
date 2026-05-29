@@ -131,6 +131,64 @@ impl RustVar {
         self.var_data.clone().map(|vd| PyVarData { inner: vd })
     }
 
+    /// The var's own stored VarData (matches the Python `Var._var_data`
+    /// dataclass field). For a base var this equals `_get_all_var_data()`;
+    /// exposed because framework code reads `._var_data` directly.
+    #[getter]
+    fn _var_data(&self) -> Option<PyVarData> {
+        self.var_data.clone().map(|vd| PyVarData { inner: vd })
+    }
+
+    /// Whether this is a local JS variable (matches `Var._var_is_local`: always
+    /// `False`). A legacy compat property framework code still reads.
+    #[getter]
+    fn _var_is_local(&self) -> bool {
+        false
+    }
+
+    /// Whether the var is a string literal (matches `Var._var_is_string`: always
+    /// `False`). A legacy compat property framework code still reads.
+    #[getter]
+    fn _var_is_string(&self) -> bool {
+        false
+    }
+
+    /// Whether the var's type is strictly `float` (matches
+    /// `NumberVar._is_strict_float` = `safe_issubclass(var_type, float)`).
+    fn _is_strict_float(&self, py: Python<'_>) -> bool {
+        self.var_type
+            .bind(py)
+            .downcast::<PyType>()
+            .map(|t| t.is_subclass_of::<PyFloat>().unwrap_or(false))
+            .unwrap_or(false)
+    }
+
+    /// Whether the var's type is strictly `int` (matches
+    /// `NumberVar._is_strict_int` = `safe_issubclass(var_type, int)`).
+    fn _is_strict_int(&self, py: Python<'_>) -> bool {
+        self.var_type
+            .bind(py)
+            .downcast::<PyType>()
+            .map(|t| t.is_subclass_of::<PyInt>().unwrap_or(false))
+            .unwrap_or(false)
+    }
+
+    /// Unary plus (matches `NumberVar.__pos__` / `BooleanVar.__pos__`): a number
+    /// is returned unchanged; a boolean is coerced via `Number(...)`.
+    fn __pos__(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<RustVar>> {
+        if slf.type_label(py).as_deref() == Some("bool") {
+            return Ok(Py::new(
+                py,
+                RustVar {
+                    js_expr: format!("Number({})", slf.js_expr),
+                    var_type: PyInt::type_object_bound(py).into_any().unbind(),
+                    var_data: var_op_doubling(&[&slf.var_data]),
+                },
+            )?);
+        }
+        Ok(slf.into())
+    }
+
     /// The enclosing state name (matches `Var._var_state`).
     #[getter]
     fn _var_state(&self) -> String {
@@ -228,14 +286,22 @@ impl RustVar {
         })
     }
 
-    /// Convert to a boolean var: `isTrue({self})` (matches `Var.bool` /
-    /// `boolify`). var_data is the doubling op merge plus the `isTrue` import.
-    fn bool(&self, py: Python<'_>) -> RustVar {
-        RustVar {
-            js_expr: format!("isTrue({})", self.js_expr),
-            var_type: PyBool::type_object_bound(py).into_any().unbind(),
-            var_data: var_op_with_import(&self.var_data, "isTrue"),
+    /// Convert to a boolean var (matches `Var.bool` / `boolify`):
+    /// `isTrue({self})`. An already-boolean var is returned unchanged (matches
+    /// `BooleanVar.bool` returning `self`). var_data is the doubling op merge
+    /// plus the `isTrue` import.
+    fn bool(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<RustVar>> {
+        if slf.type_label(py).as_deref() == Some("bool") {
+            return Ok(slf.into());
         }
+        Ok(Py::new(
+            py,
+            RustVar {
+                js_expr: format!("isTrue({})", slf.js_expr),
+                var_type: PyBool::type_object_bound(py).into_any().unbind(),
+                var_data: var_op_with_import(&slf.var_data, "isTrue"),
+            },
+        )?)
     }
 
     /// `isNotNullOrUndefined({self})` (matches `Var.is_not_none`).
@@ -584,12 +650,18 @@ impl RustVar {
         if self.is_str(py) {
             return self.str_mul(py, &other);
         }
+        if is_array_operand(py, &other)? {
+            return self.repeat_array(py, &other);
+        }
         self.arith(py, &other, "*", false)
     }
 
     fn __rmul__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
         if self.is_str(py) {
             return self.str_mul(py, &other);
+        }
+        if is_array_operand(py, &other)? {
+            return self.repeat_array(py, &other);
         }
         self.arith(py, &other, "*", true)
     }
@@ -612,6 +684,14 @@ impl RustVar {
     }
 
     fn __floordiv__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        if !is_number_operand(py, &other)? {
+            return Err(unsupported_operand_error(
+                py,
+                "//",
+                "NumberVar",
+                &operand_type_name(&other),
+            ));
+        }
         let (ojs, ot, ovd) = operand_parts(py, &other)?;
         Ok(RustVar {
             js_expr: format!("Math.floor({} / {ojs})", self.js_expr),
@@ -671,6 +751,32 @@ impl RustVar {
         other: Bound<'_, PyAny>,
         op: CompareOp,
     ) -> PyResult<RustVar> {
+        // Ordering comparisons require an operand compatible with the receiver's
+        // type (numbers compare to numbers, strings to strings, arrays to
+        // arrays); equality compares anything. Matches the typed-Var operators.
+        let sym = match op {
+            CompareOp::Lt => Some("<"),
+            CompareOp::Le => Some("<="),
+            CompareOp::Gt => Some(">"),
+            CompareOp::Ge => Some(">="),
+            CompareOp::Eq | CompareOp::Ne => None,
+        };
+        if let Some(sym) = sym {
+            let valid = match var_category(py, &self.var_type)?.as_str() {
+                "NumberVar" | "BooleanVar" => is_number_operand(py, &other)?,
+                "StringVar" | "ColorVar" => is_string_operand(py, &other)?,
+                "ArrayVar" => is_array_operand(py, &other)?,
+                _ => false,
+            };
+            if !valid {
+                return Err(unsupported_operand_error(
+                    py,
+                    sym,
+                    "Var",
+                    &operand_type_name(&other),
+                ));
+            }
+        }
         let (ojs, _ot, ovd) = operand_parts(py, &other)?;
         let lhs = &self.js_expr;
         let js = match op {
@@ -963,6 +1069,31 @@ impl RustVar {
         })
     }
 
+    /// Repeat an array `count` times (`repeat_array_operation`, reached via
+    /// `number * array` / `array * number`): `self` is the count, `array` the
+    /// operand. Renders `Array.from({ length: {count} }).flatMap(() => {array})`
+    /// with the array's type and doubling var_data. A strict-float count raises
+    /// (matches `ArrayVar.__mul__`).
+    fn repeat_array(&self, py: Python<'_>, array: &Bound<'_, PyAny>) -> PyResult<RustVar> {
+        if self._is_strict_float(py) {
+            return Err(unsupported_operand_error(
+                py,
+                "*",
+                &operand_type_name(array),
+                "NumberVar",
+            ));
+        }
+        let (ajs, at, avd) = operand_parts(py, array)?;
+        Ok(RustVar {
+            js_expr: format!(
+                "Array.from({{ length: {} }}).flatMap(() => {ajs})",
+                self.js_expr
+            ),
+            var_type: at,
+            var_data: var_op_doubling(&[&avd, &self.var_data]),
+        })
+    }
+
     /// Build a unary string→string op `f(self)` with doubling var_data.
     fn str_unary_op(&self, py: Python<'_>, render: impl Fn(&str) -> String) -> RustVar {
         RustVar {
@@ -1041,6 +1172,17 @@ impl RustVar {
         sym: &str,
         reflected: bool,
     ) -> PyResult<RustVar> {
+        // Numeric var operations require a numeric operand (matches the
+        // NumberVar operators' `isinstance(other, NUMBER_TYPES)` guard).
+        if !is_number_operand(py, other)? {
+            let other_name = operand_type_name(other);
+            let (left, right) = if reflected {
+                (other_name.as_str(), "NumberVar")
+            } else {
+                ("NumberVar", other_name.as_str())
+            };
+            return Err(unsupported_operand_error(py, sym, left, right));
+        }
         let (ojs, ot, ovd) = operand_parts(py, other)?;
         let (lhs, rhs) = if reflected {
             (ojs.as_str(), self.js_expr.as_str())
@@ -1078,6 +1220,14 @@ fn operand_parts(
             b.var_type.clone_ref(py),
             b.var_data.clone(),
         ));
+    }
+    // A Python (non-Rust) Var operand: extract its parts directly instead of
+    // trying to make a literal of it (mixed Python/Rust var operations).
+    if value.hasattr("_js_expr")? && value.hasattr("_var_type")? {
+        let js_expr: String = value.getattr("_js_expr")?.str()?.extract()?;
+        let var_type = value.getattr("_var_type")?.unbind();
+        let var_data = convert_var_data(&value.call_method0("_get_all_var_data")?)?;
+        return Ok((js_expr, var_type, var_data));
     }
     let lit = rust_literal(py, value.clone())?;
     Ok((lit.js_expr, lit.var_type, lit.var_data))
@@ -1150,6 +1300,84 @@ fn var_type_error(py: Python<'_>, msg: &str) -> PyErr {
                 .unwrap_or_else(|e| e.value_bound(py).clone().into_any()),
         ),
         Err(_) => pyo3::exceptions::PyTypeError::new_err(msg.to_owned()),
+    }
+}
+
+/// Whether `value` is a numeric operand (matches `isinstance(value,
+/// NUMBER_TYPES)` = `int`/`float`/`Decimal`/`NumberVar`). The `NumberVar` check
+/// goes through the isinstance bridge, so a numeric RustVar qualifies too.
+fn is_number_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let number_types = py
+        .import_bound("reflex_base.vars.number")?
+        .getattr("NUMBER_TYPES")?;
+    value.is_instance(&number_types)
+}
+
+/// Whether `value` is an array operand (a `list`/`tuple`, or an `ArrayVar` —
+/// including a RustVar that classifies as one).
+fn is_array_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if value.is_instance_of::<PyList>() || value.downcast::<pyo3::types::PyTuple>().is_ok() {
+        return Ok(true);
+    }
+    let array_var = py
+        .import_bound("reflex_base.vars.sequence")?
+        .getattr("ArrayVar")?;
+    value.is_instance(&array_var)
+}
+
+/// Whether `value` is a string operand (`str` or a `StringVar`, including a
+/// RustVar that classifies as one).
+fn is_string_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if value.is_instance_of::<PyString>() {
+        return Ok(true);
+    }
+    let string_var = py
+        .import_bound("reflex_base.vars.sequence")?
+        .getattr("StringVar")?;
+    value.is_instance(&string_var)
+}
+
+/// The typed-`Var` category name for a `var_type` (e.g. `"NumberVar"`,
+/// `"StringVar"`, `"ArrayVar"`), via the same classifier the isinstance bridge
+/// uses. Used to dispatch operator validation by the receiver's type.
+fn var_category(py: Python<'_>, var_type: &Py<PyAny>) -> PyResult<String> {
+    py.import_bound("reflex_base.vars.base")?
+        .getattr("_rust_var_classify")?
+        .call1((var_type.bind(py),))?
+        .getattr("__name__")?
+        .extract()
+}
+
+/// The `type(value).__name__` of an operand (for operand-error messages).
+fn operand_type_name(value: &Bound<'_, PyAny>) -> String {
+    value
+        .get_type()
+        .name()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|_| "object".to_owned())
+}
+
+/// `raise_unsupported_operand_types(sym, (left, right))` as a `VarTypeError`.
+fn unsupported_operand_error(py: Python<'_>, sym: &str, left: &str, right: &str) -> PyErr {
+    var_type_error(
+        py,
+        &format!("Unsupported Operand type(s) for {sym}: {left}, {right}"),
+    )
+}
+
+/// Build a `reflex_base.utils.exceptions.PrimitiveUnserializableToJSONError`
+/// PyErr with `msg`. Falls back to a plain `ValueError` (its base) if the class
+/// can't be imported.
+fn primitive_unserializable_error(py: Python<'_>, msg: &str) -> PyErr {
+    match py
+        .import_bound("reflex_base.utils.exceptions")
+        .and_then(|m| m.getattr("PrimitiveUnserializableToJSONError"))
+    {
+        Ok(cls) => PyErr::from_value_bound(
+            cls.call1((msg,))
+                .unwrap_or_else(|e| e.value_bound(py).clone().into_any()),
+        ),
+        Err(_) => pyo3::exceptions::PyValueError::new_err(msg.to_owned()),
     }
 }
 
@@ -1260,10 +1488,20 @@ fn render_literal_js(value: &Bound<'_, PyAny>) -> PyResult<String> {
         .to_owned());
     }
     if value.is_instance_of::<PyInt>() {
-        return Ok(value.extract::<i64>()?.to_string());
+        // Python str() handles arbitrary-precision ints (i64 would overflow).
+        return Ok(value.str()?.to_string());
     }
     if value.is_instance_of::<PyFloat>() {
-        return Ok(render_js_float(value.extract::<f64>()?));
+        let f = value.extract::<f64>()?;
+        if f.is_infinite() {
+            return Ok(if f > 0.0 { "Infinity" } else { "-Infinity" }.to_owned());
+        }
+        if f.is_nan() {
+            return Ok("NaN".to_owned());
+        }
+        // Python `str(value)` keeps the trailing ".0" (1.0 -> "1.0"); Rust's
+        // f64 Display drops it ("1"), so defer to Python for byte-parity.
+        return Ok(value.str()?.to_string());
     }
     if value.is_instance_of::<PyString>() {
         return Ok(render_js_string(&value.extract::<String>()?));
@@ -1581,13 +1819,6 @@ fn convert_import_var(iv: &Bound<'_, PyAny>) -> PyResult<ImportVar> {
             .and_then(|p| p.extract())
             .unwrap_or_else(|_| "/".to_owned()),
     })
-}
-
-/// Render an f64 as JS source. Integral floats keep a trailing `.0` only when
-/// Python's `repr` would; for now this matches the corpus (`1.5` -> `1.5`).
-fn render_js_float(f: f64) -> String {
-    // Rust's f64 Display already yields the shortest round-trip form ("1.5").
-    format!("{f}")
 }
 
 /// A Rust-backed `VarData` exposed to Python with the read surface the
@@ -1974,12 +2205,36 @@ impl RustLiteralVar {
         Ok(var.bind(py).call_method0("_get_all_var_data")?.unbind())
     }
 
-    /// JSON form of the literal value (matches `LiteralVar.json` =
-    /// `json.dumps(self._var_value)`).
+    /// JSON form of the literal value (matches `LiteralVar.json`).
+    ///
+    /// A `Decimal` serializes as its float; a non-finite float (`inf`/`nan`)
+    /// raises `PrimitiveUnserializableToJSONError` (matching
+    /// `LiteralNumberVar.json`); everything else is `json.dumps(value)`.
     fn json(&self, py: Python<'_>) -> PyResult<String> {
-        py.import_bound("json")?
-            .call_method1("dumps", (self.var_value.bind(py),))?
-            .extract()
+        let value = self.var_value.bind(py);
+        let json = py.import_bound("json")?;
+        let decimal = py.import_bound("decimal")?.getattr("Decimal")?;
+        if value.is_instance(&decimal)? {
+            let as_float = value.call_method0("__float__")?;
+            return json.call_method1("dumps", (as_float,))?.extract();
+        }
+        if value.is_instance_of::<PyFloat>() {
+            let f = value.extract::<f64>()?;
+            if f.is_infinite() || f.is_nan() {
+                let rendered = if f.is_nan() {
+                    "NaN"
+                } else if f > 0.0 {
+                    "Infinity"
+                } else {
+                    "-Infinity"
+                };
+                return Err(primitive_unserializable_error(
+                    py,
+                    &format!("No valid JSON representation for {rendered}"),
+                ));
+            }
+        }
+        json.call_method1("dumps", (value,))?.extract()
     }
 
     /// `LiteralVar.create(value, _var_data=None)` — entirely in Rust.

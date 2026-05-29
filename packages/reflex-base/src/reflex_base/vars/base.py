@@ -1380,6 +1380,18 @@ class LiteralVar(Var[VAR_TYPE]):
                 return value
             return value._replace(merge_var_data=_var_data)
 
+        # Non-string scalars are produced by the Rust literal var (byte-identical
+        # rendering, var_type and json to the Python literal subclasses).
+        # Strings stay on the Python dispatch until the f-string marker registry
+        # is unified (a Python Var's __format__ registers its marker only in
+        # _global_vars, which the Rust string decoder does not yet read).
+        # Lists/dicts and exotic types (datetime/Color/range/serializer-backed/
+        # dataclasses) also stay on the Python dispatch below (element-type
+        # inference + custom json formatting). Exact-type match keeps int
+        # subclasses (enums, numpy, …) on the precise Python dispatch.
+        if type(value) in (bool, int, float, type(None)):
+            return RustLiteralVar.create(value, _var_data=_var_data)
+
         for literal_subclass, var_subclass in _var_literal_subclasses[::-1]:
             if isinstance(value, var_subclass.python_types):
                 return literal_subclass.create(value, _var_data=_var_data)
