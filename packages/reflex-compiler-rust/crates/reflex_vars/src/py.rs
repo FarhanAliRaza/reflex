@@ -1551,6 +1551,58 @@ fn unsupported_operand_error(py: Python<'_>, sym: &str, left: &str, right: &str)
     )
 }
 
+/// Recursive JSON rendering of a literal value (matches `LiteralVar.json` over
+/// the literal subclasses).
+///
+/// Arrays/tuples render `[a, b]` and dicts `{k:v, …}` (colon, no space) by
+/// json-ing each `LiteralVar.create(element)`; a `Var` element delegates to its
+/// own `.json()`; a `Decimal` serializes as its float; a non-finite float
+/// raises; other scalars are `json.dumps(value)`.
+fn literal_json(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<String> {
+    // A Var element renders via its own json() (mirrors LiteralVar.create(elem)).
+    if value.hasattr("_js_expr")? && value.hasattr("_var_type")? {
+        return value.call_method0("json")?.extract();
+    }
+    if let Ok(dict) = value.downcast::<PyDict>() {
+        let mut pairs = Vec::with_capacity(dict.len());
+        for (k, v) in dict.iter() {
+            pairs.push(format!(
+                "{}:{}",
+                literal_json(py, &k)?,
+                literal_json(py, &v)?
+            ));
+        }
+        return Ok(format!("{{{}}}", pairs.join(", ")));
+    }
+    if value.is_instance_of::<PyList>() || value.is_instance_of::<pyo3::types::PyTuple>() {
+        let items: PyResult<Vec<String>> = value.iter()?.map(|e| literal_json(py, &e?)).collect();
+        return Ok(format!("[{}]", items?.join(", ")));
+    }
+    let json = py.import_bound("json")?;
+    let decimal = py.import_bound("decimal")?.getattr("Decimal")?;
+    if value.is_instance(&decimal)? {
+        let as_float = value.call_method0("__float__")?;
+        return json.call_method1("dumps", (as_float,))?.extract();
+    }
+    if value.is_instance_of::<PyFloat>() {
+        let f = value.extract::<f64>()?;
+        if f.is_infinite() || f.is_nan() {
+            let rendered = if f.is_nan() {
+                "NaN"
+            } else if f > 0.0 {
+                "Infinity"
+            } else {
+                "-Infinity"
+            };
+            return Err(primitive_unserializable_error(
+                py,
+                &format!("No valid JSON representation for {rendered}"),
+            ));
+        }
+    }
+    json.call_method1("dumps", (value,))?.extract()
+}
+
 /// Build a `reflex_base.utils.exceptions.PrimitiveUnserializableToJSONError`
 /// PyErr with `msg`. Falls back to a plain `ValueError` (its base) if the class
 /// can't be imported.
@@ -1740,12 +1792,19 @@ fn literal_var_type(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyA
     if value.is_instance_of::<PyString>() {
         return Ok(PyString::type_object_bound(py).into_any().unbind());
     }
-    let typing = py.import_bound("typing")?;
-    if value.is_instance_of::<PyList>() {
-        return Ok(typing.getattr("Sequence")?.unbind());
-    }
-    if value.is_instance_of::<pyo3::types::PyDict>() {
-        return Ok(typing.getattr("Mapping")?.unbind());
+    // Containers carry an inferred element type (Sequence[int], Mapping[str,
+    // int], …); defer to Python's figure_out_type for byte-parity with the
+    // Python literal subclasses (it recurses + unionizes).
+    if value.is_instance_of::<PyList>()
+        || value.is_instance_of::<pyo3::types::PyDict>()
+        || value.is_instance_of::<pyo3::types::PyTuple>()
+        || value.is_instance_of::<pyo3::types::PySet>()
+    {
+        return py
+            .import_bound("reflex_base.vars.base")?
+            .getattr("figure_out_type")?
+            .call1((value,))
+            .map(|t| t.unbind());
     }
     Ok(py.None())
 }
@@ -2391,36 +2450,16 @@ impl RustLiteralVar {
         Ok(var.bind(py).call_method0("_get_all_var_data")?.unbind())
     }
 
-    /// JSON form of the literal value (matches `LiteralVar.json`).
+    /// JSON form of the literal value (matches `LiteralVar.json` across the
+    /// literal subclasses).
     ///
-    /// A `Decimal` serializes as its float; a non-finite float (`inf`/`nan`)
-    /// raises `PrimitiveUnserializableToJSONError` (matching
-    /// `LiteralNumberVar.json`); everything else is `json.dumps(value)`.
+    /// Arrays render `[a, b]` and objects `{k:v, …}` (colon, no space) by
+    /// recursively json-ing each `LiteralVar.create(element)` (matching
+    /// `LiteralArrayVar.json` / `LiteralObjectVar.json`). A `Decimal` serializes
+    /// as its float; a non-finite float raises
+    /// `PrimitiveUnserializableToJSONError`; other scalars are `json.dumps`.
     fn json(&self, py: Python<'_>) -> PyResult<String> {
-        let value = self.var_value.bind(py);
-        let json = py.import_bound("json")?;
-        let decimal = py.import_bound("decimal")?.getattr("Decimal")?;
-        if value.is_instance(&decimal)? {
-            let as_float = value.call_method0("__float__")?;
-            return json.call_method1("dumps", (as_float,))?.extract();
-        }
-        if value.is_instance_of::<PyFloat>() {
-            let f = value.extract::<f64>()?;
-            if f.is_infinite() || f.is_nan() {
-                let rendered = if f.is_nan() {
-                    "NaN"
-                } else if f > 0.0 {
-                    "Infinity"
-                } else {
-                    "-Infinity"
-                };
-                return Err(primitive_unserializable_error(
-                    py,
-                    &format!("No valid JSON representation for {rendered}"),
-                ));
-            }
-        }
-        json.call_method1("dumps", (value,))?.extract()
+        literal_json(py, self.var_value.bind(py))
     }
 
     /// `LiteralVar.create(value, _var_data=None)` — entirely in Rust.
