@@ -454,6 +454,9 @@ fn _native(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Var-in-Rust de-risking spike.
     m.add_class::<SpikeVar>()?;
 
+    // Rust Var cutover: the production Var bindings (scalar-literal slice).
+    reflex_vars::register(m)?;
+
     // A: batched per-Component extractor. Replaces ~15-20 individual
     // ``getattr`` / ``call_method0`` PyO3 crossings per Component
     // with a single function call that returns a tuple of every

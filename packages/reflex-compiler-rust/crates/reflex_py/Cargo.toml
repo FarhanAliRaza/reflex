@@ -25,3 +25,4 @@ reflex_arena    = { workspace = true }
 reflex_intern   = { workspace = true }
 reflex_db       = { workspace = true }
 reflex_pyread   = { workspace = true }
+reflex_vars     = { workspace = true }
