@@ -674,57 +674,56 @@ fn render_js_string(s: &str) -> String {
     out
 }
 
-/// Build a scalar `RustVar` from a Python value, dispatching on its type.
+/// Render a Python literal value to its JS source, recursing into lists/dicts.
 ///
-/// Mirrors the scalar cases of `LiteralVar.create`. `bool` must be checked
-/// before `int` (Python `bool` is a subclass of `int`).
+/// Mirrors the rendering side of `LiteralVar.create`: scalars as in
+/// `rust_literal`, lists as `[a, b, ...]`, dicts as `({ ["k"] : v, ... })`
+/// (key as a bracketed JS string, matching `LiteralObjectVar`).
 ///
 /// Args:
-///     py: The GIL token.
-///     value: The Python scalar to wrap.
+///     value: The Python value to render.
 ///
 /// Returns:
-///     A `RustVar` whose `_js_expr` / `_var_type` match the Python literal.
-#[pyfunction]
-pub fn rust_literal(py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<RustVar> {
+///     The JS source for the value.
+fn render_literal_js(value: &Bound<'_, PyAny>) -> PyResult<String> {
     if value.is_none() {
-        return Ok(RustVar {
-            js_expr: "null".to_owned(),
-            var_type: py.None(),
-            var_data: None,
-        });
+        return Ok("null".to_owned());
     }
     // bool before int — bool is an int subclass in Python.
     if value.is_instance_of::<PyBool>() {
-        let b = value.extract::<bool>()?;
-        return Ok(RustVar {
-            js_expr: if b { "true" } else { "false" }.to_owned(),
-            var_type: PyBool::type_object_bound(py).into_any().unbind(),
-            var_data: None,
-        });
+        return Ok(if value.extract::<bool>()? {
+            "true"
+        } else {
+            "false"
+        }
+        .to_owned());
     }
     if value.is_instance_of::<PyInt>() {
-        let i = value.extract::<i64>()?;
-        return Ok(RustVar {
-            js_expr: i.to_string(),
-            var_type: PyInt::type_object_bound(py).into_any().unbind(),
-            var_data: None,
-        });
+        return Ok(value.extract::<i64>()?.to_string());
     }
     if value.is_instance_of::<PyFloat>() {
-        let f = value.extract::<f64>()?;
-        return Ok(RustVar {
-            js_expr: render_js_float(f),
-            var_type: PyFloat::type_object_bound(py).into_any().unbind(),
-            var_data: None,
-        });
+        return Ok(render_js_float(value.extract::<f64>()?));
     }
     if value.is_instance_of::<PyString>() {
-        let s = value.extract::<String>()?;
-        return Ok(RustVar {
-            js_expr: render_js_string(&s),
-            var_type: PyString::type_object_bound(py).into_any().unbind(),
-            var_data: None,
+        return Ok(render_js_string(&value.extract::<String>()?));
+    }
+    if let Ok(list) = value.downcast::<PyList>() {
+        let items: PyResult<Vec<String>> = list.iter().map(|v| render_literal_js(&v)).collect();
+        return Ok(format!("[{}]", items?.join(", ")));
+    }
+    if let Ok(dict) = value.downcast::<pyo3::types::PyDict>() {
+        let mut pairs = Vec::with_capacity(dict.len());
+        for (k, v) in dict.iter() {
+            pairs.push(format!(
+                "[{}] : {}",
+                render_literal_js(&k)?,
+                render_literal_js(&v)?
+            ));
+        }
+        return Ok(if pairs.is_empty() {
+            "({  })".to_owned()
+        } else {
+            format!("({{ {} }})", pairs.join(", "))
         });
     }
     let type_name = value
@@ -733,8 +732,57 @@ pub fn rust_literal(py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<RustVar
         .map(|n| n.to_string())
         .unwrap_or_else(|_| "?".to_owned());
     Err(pyo3::exceptions::PyTypeError::new_err(format!(
-        "rust_literal: unsupported scalar type {type_name}"
+        "rust_literal: unsupported literal type {type_name}"
     )))
+}
+
+/// The `_var_type` object for a literal value (matches `figure_out_type` for
+/// the cases the corpus exercises): scalars map to their builtin type, lists to
+/// `typing.Sequence`, dicts to `typing.Mapping`.
+fn literal_var_type(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    if value.is_none() {
+        return Ok(py.None());
+    }
+    if value.is_instance_of::<PyBool>() {
+        return Ok(PyBool::type_object_bound(py).into_any().unbind());
+    }
+    if value.is_instance_of::<PyInt>() {
+        return Ok(PyInt::type_object_bound(py).into_any().unbind());
+    }
+    if value.is_instance_of::<PyFloat>() {
+        return Ok(PyFloat::type_object_bound(py).into_any().unbind());
+    }
+    if value.is_instance_of::<PyString>() {
+        return Ok(PyString::type_object_bound(py).into_any().unbind());
+    }
+    let typing = py.import_bound("typing")?;
+    if value.is_instance_of::<PyList>() {
+        return Ok(typing.getattr("Sequence")?.unbind());
+    }
+    if value.is_instance_of::<pyo3::types::PyDict>() {
+        return Ok(typing.getattr("Mapping")?.unbind());
+    }
+    Ok(py.None())
+}
+
+/// Build a literal `RustVar` from a Python value (scalar, list, or dict).
+///
+/// Mirrors `LiteralVar.create` for plain values: renders the JS source and
+/// assigns the literal var type. Literals carry no var_data.
+///
+/// Args:
+///     py: The GIL token.
+///     value: The Python value to wrap.
+///
+/// Returns:
+///     A `RustVar` whose `_js_expr` / `_var_type` match the Python literal.
+#[pyfunction]
+pub fn rust_literal(py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<RustVar> {
+    Ok(RustVar {
+        js_expr: render_literal_js(&value)?,
+        var_type: literal_var_type(py, &value)?,
+        var_data: None,
+    })
 }
 
 /// Build a raw `RustVar` from an explicit JS expression and var type.

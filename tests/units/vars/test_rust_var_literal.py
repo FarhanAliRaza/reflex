@@ -11,12 +11,15 @@ test, not state-name mangling. Covered:
 * scalar literals (``lit_*``) + raw vars;
 * number/boolean/comparison operators (``num_*`` / ``bool_*``);
 * string methods + casting (``str_*`` / ``to_*``);
-* array + object methods (``arr_*`` / ``obj_*``).
+* array + object methods (``arr_*`` / ``obj_*``);
+* the f-string marker protocol (``fstr_*``).
 
-The remaining corpus surface — the f-string marker protocol (``fstr_*``) — and
-then the typed-subclass facades land next, after which the Rust ``Var`` passes
-the whole golden corpus and the Python implementation can be deleted. Until
-then this pins what is already done so it cannot regress.
+The Rust ``Var`` now reproduces the **whole** golden corpus byte-for-byte (a
+completeness guard asserts every golden key is exercised). What remains for the
+cutover is integration, not rendering: the typed-subclass facades
+(``NumberVar`` / ``StringVar`` / …) that delegate to ``RustVar``, the
+leaf-creation bridge (state-name mangling / hook synthesis), and then the rip —
+deleting the Python ``Var`` and re-pointing ``reflex_base.vars``.
 """
 
 from __future__ import annotations
@@ -42,6 +45,11 @@ SCALAR_CASES: dict[str, object] = {
     "lit_bool_true": True,
     "lit_bool_false": False,
     "lit_none": None,
+    "lit_list": [1, 2, 3],
+    "lit_list_str": ["a", "b"],
+    "lit_nested_list": [[1, 2], [3]],
+    "lit_dict": {"a": 1, "b": 2},
+    "lit_dict_nested": {"a": {"b": 1}},
 }
 
 
@@ -243,6 +251,25 @@ FSTRING_CASES = {
 def test_rust_fstring_matches_golden(key: str, golden: dict) -> None:
     """A Rust f-string (format -> marker -> decode) matches the golden record."""
     assert _record(FSTRING_CASES[key]()) == golden[key]
+
+
+def test_rust_var_covers_whole_golden_corpus(golden: dict) -> None:
+    """Every golden expression must be exercised by some Rust-Var case.
+
+    This is the cutover's completeness gate: the Rust Var reproduces the entire
+    corpus byte-for-byte. Guards against a golden key being added without a
+    corresponding Rust case (which would let it pass unchecked).
+    """
+    covered = (
+        set(SCALAR_CASES)
+        | {"raw_var"}
+        | set(LEAF_CASES)
+        | set(OPERATOR_CASES)
+        | set(STRING_CASES)
+        | set(CONTAINER_CASES)
+        | set(FSTRING_CASES)
+    )
+    assert covered == set(golden)
 
 
 LEAF_CASES = {
