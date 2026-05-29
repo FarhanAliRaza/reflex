@@ -136,6 +136,20 @@ impl RustVar {
         &self.js_expr
     }
 
+    /// Pickle support: reconstruct via the constructor (state persistence
+    /// pickles/dills Vars embedded in state).
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let cls = RustVar::type_object_bound(py).into_any().unbind();
+        let vd: Py<PyAny> = match &self.var_data {
+            Some(v) => Bound::new(py, PyVarData { inner: v.clone() })?
+                .into_any()
+                .unbind(),
+            None => py.None(),
+        };
+        let args = (self.js_expr.clone(), self.var_type.clone_ref(py), vd);
+        Ok((cls, args.into_py(py)))
+    }
+
     /// Format into an f-string fragment (matches `Var.__format__`): register
     /// this var under a fresh id and emit `<reflex.Var>{id}</reflex.Var>{js}`.
     /// `rust_create_string` (or Python's `LiteralVar.create`) decodes it back.
@@ -993,16 +1007,32 @@ fn parse_hooks_arg(hooks: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<String>> {
         out.push(s);
         return Ok(out);
     }
-    // dict iterates keys; list/tuple iterate values — both are hook strings.
-    let iter = if let Ok(dict) = obj.downcast::<pyo3::types::PyDict>() {
-        dict.keys().into_any()
+    // A hooks dict maps `hook_str -> VarData | None`: each value's own hooks are
+    // dependencies that must appear BEFORE the key (depth-first), matching
+    // `VarData`'s nested-hook flattening. A list/tuple is just hook strings.
+    if let Ok(dict) = obj.downcast::<pyo3::types::PyDict>() {
+        for (k, v) in dict.iter() {
+            if !v.is_none() {
+                if let Ok(nested) = v.getattr("hooks") {
+                    for h in nested.iter()? {
+                        let h: String = h?.extract()?;
+                        if seen.insert(h.clone()) {
+                            out.push(h);
+                        }
+                    }
+                }
+            }
+            let key: String = k.extract()?;
+            if seen.insert(key.clone()) {
+                out.push(key);
+            }
+        }
     } else {
-        obj.clone()
-    };
-    for h in iter.iter()? {
-        let h: String = h?.extract()?;
-        if seen.insert(h.clone()) {
-            out.push(h);
+        for h in obj.iter()? {
+            let h: String = h?.extract()?;
+            if seen.insert(h.clone()) {
+                out.push(h);
+            }
         }
     }
     Ok(out)
@@ -1183,6 +1213,20 @@ impl PyVarData {
         )
     }
 
+    /// Pickle support: reconstruct via the constructor from (state, field_name,
+    /// imports, hooks, deps).
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let cls = PyVarData::type_object_bound(py).into_any().unbind();
+        let args = (
+            self.inner.state.clone(),
+            self.inner.field_name.clone(),
+            self.imports(py)?,
+            self.hooks(py),
+            self.deps(py)?,
+        );
+        Ok((cls, args.into_py(py)))
+    }
+
     /// Truthiness — `False` when every field is empty (matches `__bool__`).
     fn __bool__(&self) -> bool {
         !self.inner.is_empty()
@@ -1333,6 +1377,28 @@ impl PyImportVar {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.inner.hash(&mut h);
         h.finish()
+    }
+
+    /// Pickle support: reconstruct via the constructor.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        let cls = PyImportVar::type_object_bound(py).into_any().unbind();
+        let i = &self.inner;
+        let args = (
+            i.tag.clone(),
+            i.is_default,
+            i.alias.clone(),
+            i.install,
+            i.render,
+            i.package_path.clone(),
+        );
+        Ok((cls, args.into_py(py)))
+    }
+
+    /// The display name used in `import { name } from "lib"` (drop-in for
+    /// `ImportVar.name`).
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name()
     }
 
     #[getter]
