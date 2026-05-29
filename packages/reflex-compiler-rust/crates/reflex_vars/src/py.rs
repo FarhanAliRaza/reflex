@@ -1438,6 +1438,7 @@ impl PyImportVar {
 /// operator) and adds `_var_value` plus the `create` dispatch.
 #[pyclass(
     extends = RustVar,
+    subclass,
     frozen,
     name = "RustLiteralVar",
     module = "reflex_compiler_rust._native"
@@ -1499,6 +1500,123 @@ impl RustLiteralVar {
         });
         Ok(Py::new(py, init)?.into_any())
     }
+}
+
+/// Rust-backed `LiteralEventChainVar` — extends `RustLiteralVar`, mirroring
+/// `LiteralEventChainVar(…, LiteralVar, EventChainVar)`. Its `create` renders
+/// the chain JS via the Rust assembler (instead of composing a per-event Var
+/// tree, which is the ~3 ms Python hotspot) and gathers the chain's var_data.
+#[pyclass(
+    extends = RustLiteralVar,
+    frozen,
+    name = "RustLiteralEventChainVar",
+    module = "reflex_compiler_rust._native"
+)]
+pub struct RustLiteralEventChainVar {}
+
+#[pymethods]
+impl RustLiteralEventChainVar {
+    /// `LiteralEventChainVar.create(value, _var_data=None)` in Rust.
+    ///
+    /// Args:
+    ///     _cls: The class object (unused).
+    ///     py: The GIL token.
+    ///     value: The `EventChain`.
+    ///     _var_data: Extra var_data to merge in.
+    ///
+    /// Returns:
+    ///     A `RustLiteralEventChainVar` whose `_js_expr` is the assembled chain.
+    #[classmethod]
+    #[pyo3(signature = (value, _var_data = None))]
+    fn create(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        value: Bound<'_, PyAny>,
+        _var_data: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let js_expr = rust_assemble_event_chain(py, value.clone())?;
+        let var_type = value.get_type().into_any().unbind();
+        let var_data = gather_event_chain_var_data(py, &value, _var_data.as_ref())?;
+        let base = RustVar {
+            js_expr,
+            var_type,
+            var_data,
+        };
+        let init = pyo3::PyClassInitializer::from(base)
+            .add_subclass(RustLiteralVar {
+                var_value: value.unbind(),
+            })
+            .add_subclass(RustLiteralEventChainVar {});
+        Ok(Py::new(py, init)?.into_any())
+    }
+}
+
+/// Gather an event chain's aggregate var_data: the `addEvents` EVENTS
+/// imports/hook (from `reflex_base.constants.compiler`) plus the var_data of
+/// every Var referenced in the chain's events (handler args + event actions)
+/// and the chain-level actions, plus any caller-supplied `extra`.
+fn gather_event_chain_var_data(
+    py: Python<'_>,
+    chain: &Bound<'_, PyAny>,
+    extra: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<VarData>> {
+    let compiler = py.import_bound("reflex_base.constants.compiler")?;
+    let events_imports = compiler.getattr("Imports")?.getattr("EVENTS")?;
+    let events_hook: String = compiler.getattr("Hooks")?.getattr("EVENTS")?.extract()?;
+    // The `addEvents` invocation carries this EVENTS var_data, and the chain
+    // includes it ONCE PER EVENT statement (plus once more for the
+    // apply-event-actions wrapper when chain-level actions exist).
+    let events_vd = VarData {
+        imports: parse_imports_arg(Some(&events_imports))?,
+        hooks: vec![events_hook],
+        ..VarData::default()
+    };
+    let mut parts: Vec<VarData> = Vec::new();
+
+    let collect = |obj: &Bound<'_, PyAny>, parts: &mut Vec<VarData>| -> PyResult<()> {
+        if let Ok(true) = obj.hasattr("_get_all_var_data") {
+            if let Some(vd) = convert_var_data(&obj.call_method0("_get_all_var_data")?)? {
+                parts.push(vd);
+            }
+        }
+        Ok(())
+    };
+
+    let events: Vec<Bound<'_, PyAny>> =
+        chain.getattr("events")?.iter()?.collect::<PyResult<_>>()?;
+    // No events still emits a single addEvents invocation.
+    if events.is_empty() {
+        parts.push(events_vd.clone());
+    }
+    for es in &events {
+        parts.push(events_vd.clone());
+        for arg in es.getattr("args")?.iter()? {
+            let arg = arg?;
+            collect(&arg.get_item(0)?, &mut parts)?;
+            collect(&arg.get_item(1)?, &mut parts)?;
+        }
+        for v in es
+            .getattr("event_actions")?
+            .downcast::<pyo3::types::PyDict>()?
+            .values()
+        {
+            collect(&v, &mut parts)?;
+        }
+    }
+    let chain_actions = chain.getattr("event_actions")?;
+    let chain_actions = chain_actions.downcast::<pyo3::types::PyDict>()?;
+    if !chain_actions.is_empty() {
+        parts.push(events_vd.clone());
+        for v in chain_actions.values() {
+            collect(&v, &mut parts)?;
+        }
+    }
+    if let Some(e) = extra {
+        if let Some(vd) = convert_var_data(e)? {
+            parts.push(vd);
+        }
+    }
+    Ok(VarData::merge(parts.iter().map(Some)).ok().flatten())
 }
 
 /// One segment of a decoded marker string: a literal chunk or a referenced var.
@@ -1846,6 +1964,7 @@ pub fn rust_assemble_event_chain_bundle(
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustVar>()?;
     m.add_class::<RustLiteralVar>()?;
+    m.add_class::<RustLiteralEventChainVar>()?;
     m.add_class::<PyVarData>()?;
     m.add_class::<PyImportVar>()?;
     m.add_function(wrap_pyfunction!(rust_literal, m)?)?;
