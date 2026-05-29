@@ -16,6 +16,7 @@
 // macro-generated wrappers under pyo3 0.22, not on any explicit cast we write.
 #![allow(clippy::useless_conversion)]
 
+use pyo3::basic::CompareOp;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyFloat, PyInt, PyString};
 use pyo3::PyTypeInfo;
@@ -60,6 +61,198 @@ impl RustVar {
     fn __str__(&self) -> &str {
         &self.js_expr
     }
+
+    // --- number operators ---
+    // These mirror `NumberVar` in `vars/number.py`. The operand `{lhs}`/`{rhs}`
+    // is each var's `_js_expr`; arithmetic result type is `unionize(lhs, rhs)`.
+    // var_data propagation lands in the next slice (this slice pins the JS
+    // rendering + var_type).
+
+    fn __add__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        self.arith(py, &other, "+", false)
+    }
+
+    fn __radd__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        self.arith(py, &other, "+", true)
+    }
+
+    fn __sub__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        self.arith(py, &other, "-", false)
+    }
+
+    fn __rsub__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        self.arith(py, &other, "-", true)
+    }
+
+    fn __mul__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        self.arith(py, &other, "*", false)
+    }
+
+    fn __rmul__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        self.arith(py, &other, "*", true)
+    }
+
+    fn __truediv__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        self.arith(py, &other, "/", false)
+    }
+
+    fn __mod__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        self.arith(py, &other, "%", false)
+    }
+
+    fn __pow__(
+        &self,
+        py: Python<'_>,
+        other: Bound<'_, PyAny>,
+        _modulo: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<RustVar> {
+        self.arith(py, &other, "**", false)
+    }
+
+    fn __floordiv__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let (ojs, ot) = operand_parts(py, &other)?;
+        Ok(RustVar {
+            js_expr: format!("Math.floor({} / {ojs})", self.js_expr),
+            var_type: unionize(py, &self.var_type, &ot),
+        })
+    }
+
+    fn __neg__(&self, py: Python<'_>) -> RustVar {
+        RustVar {
+            js_expr: format!("-({})", self.js_expr),
+            var_type: self.var_type.clone_ref(py),
+        }
+    }
+
+    fn __abs__(&self, py: Python<'_>) -> RustVar {
+        RustVar {
+            js_expr: format!("Math.abs({})", self.js_expr),
+            var_type: self.var_type.clone_ref(py),
+        }
+    }
+
+    fn __invert__(&self, py: Python<'_>) -> RustVar {
+        RustVar {
+            js_expr: format!("!({})", self.js_expr),
+            var_type: PyBool::type_object_bound(py).into_any().unbind(),
+        }
+    }
+
+    fn __and__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let (ojs, ot) = operand_parts(py, &other)?;
+        Ok(RustVar {
+            js_expr: format!("({} && {ojs})", self.js_expr),
+            var_type: unionize(py, &self.var_type, &ot),
+        })
+    }
+
+    fn __or__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let (ojs, ot) = operand_parts(py, &other)?;
+        Ok(RustVar {
+            js_expr: format!("({} || {ojs})", self.js_expr),
+            var_type: unionize(py, &self.var_type, &ot),
+        })
+    }
+
+    /// Comparisons (`<`, `<=`, `>`, `>=`, `==`, `!=`) — all return a boolean
+    /// var. Equality wraps each operand with `?.valueOf?.()` (matches
+    /// `equal_operation` / `not_equal_operation`).
+    fn __richcmp__(
+        &self,
+        py: Python<'_>,
+        other: Bound<'_, PyAny>,
+        op: CompareOp,
+    ) -> PyResult<RustVar> {
+        let (ojs, _ot) = operand_parts(py, &other)?;
+        let lhs = &self.js_expr;
+        let js = match op {
+            CompareOp::Lt => format!("({lhs} < {ojs})"),
+            CompareOp::Le => format!("({lhs} <= {ojs})"),
+            CompareOp::Gt => format!("({lhs} > {ojs})"),
+            CompareOp::Ge => format!("({lhs} >= {ojs})"),
+            CompareOp::Eq => format!("({lhs}?.valueOf?.() === {ojs}?.valueOf?.())"),
+            CompareOp::Ne => format!("({lhs}?.valueOf?.() !== {ojs}?.valueOf?.())"),
+        };
+        Ok(RustVar {
+            js_expr: js,
+            var_type: PyBool::type_object_bound(py).into_any().unbind(),
+        })
+    }
+}
+
+impl RustVar {
+    /// Build a binary arithmetic op `(lhs sym rhs)`, result type unionized.
+    ///
+    /// `reflected` swaps operand order (the `__r*__` reflected dunders), so
+    /// `1 + var` renders `(1 + var)`.
+    fn arith(
+        &self,
+        py: Python<'_>,
+        other: &Bound<'_, PyAny>,
+        sym: &str,
+        reflected: bool,
+    ) -> PyResult<RustVar> {
+        let (ojs, ot) = operand_parts(py, other)?;
+        let (lhs, rhs) = if reflected {
+            (ojs.as_str(), self.js_expr.as_str())
+        } else {
+            (self.js_expr.as_str(), ojs.as_str())
+        };
+        Ok(RustVar {
+            js_expr: format!("({lhs} {sym} {rhs})"),
+            var_type: unionize(py, &self.var_type, &ot),
+        })
+    }
+}
+
+/// Extract an operand's `(js_expr, var_type)` for use in an operator.
+///
+/// A `RustVar` operand contributes its own expression/type; a Python scalar is
+/// coerced through `rust_literal` (mirrors the `LiteralVar.create` the Python
+/// operators apply to non-Var operands).
+///
+/// Args:
+///     py: The GIL token.
+///     value: The operand (a `RustVar` or a Python scalar).
+///
+/// Returns:
+///     The operand's JS expression and Python var-type object.
+fn operand_parts(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<(String, Py<PyAny>)> {
+    if let Ok(rv) = value.downcast::<RustVar>() {
+        let b = rv.borrow();
+        return Ok((b.js_expr.clone(), b.var_type.clone_ref(py)));
+    }
+    let lit = rust_literal(py, value.clone())?;
+    Ok((lit.js_expr, lit.var_type))
+}
+
+/// Combine two number var-types into the result type of an arithmetic op.
+///
+/// Mirrors `unionize` for the cases the corpus exercises: equal types collapse
+/// to that type (`int+int -> int`, `float+float -> float`); a mixed
+/// `int`/`float` pair widens to `float`. Anything else falls back to the left
+/// type.
+///
+/// Args:
+///     py: The GIL token.
+///     a: The left var-type object.
+///     b: The right var-type object.
+///
+/// Returns:
+///     The unionized var-type object.
+fn unionize(py: Python<'_>, a: &Py<PyAny>, b: &Py<PyAny>) -> Py<PyAny> {
+    let ab = a.bind(py);
+    let bb = b.bind(py);
+    if ab.is(bb) {
+        return a.clone_ref(py);
+    }
+    let float_ty = PyFloat::type_object_bound(py);
+    let int_ty = PyInt::type_object_bound(py);
+    let is_num = |o: &Bound<'_, PyAny>| o.is(&float_ty) || o.is(&int_ty);
+    if is_num(ab) && is_num(bb) {
+        return float_ty.into_any().unbind();
+    }
+    a.clone_ref(py)
 }
 
 /// Render a Python string as a JS string literal (double-quoted, escaped).
