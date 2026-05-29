@@ -1551,6 +1551,28 @@ impl RustLiteralEventChainVar {
     }
 }
 
+/// Public wrapper: gather an event chain's aggregate var_data as a
+/// `RustVarData` (or `None`). Lets the Python `LiteralEventChainVar.create`
+/// reuse the exact gather without rebuilding the per-event Var tree.
+///
+/// Args:
+///     py: The GIL token.
+///     chain: The `EventChain`.
+///     _var_data: Extra var_data to merge in.
+///
+/// Returns:
+///     The chain's aggregate `RustVarData`, or `None`.
+#[pyfunction]
+#[pyo3(signature = (chain, _var_data = None))]
+pub fn rust_event_chain_var_data(
+    py: Python<'_>,
+    chain: Bound<'_, PyAny>,
+    _var_data: Option<Bound<'_, PyAny>>,
+) -> PyResult<Option<PyVarData>> {
+    Ok(gather_event_chain_var_data(py, &chain, _var_data.as_ref())?
+        .map(|inner| PyVarData { inner }))
+}
+
 /// Gather an event chain's aggregate var_data: the `addEvents` EVENTS
 /// imports/hook (from `reflex_base.constants.compiler`) plus the var_data of
 /// every Var referenced in the chain's events (handler args + event actions)
@@ -1582,14 +1604,36 @@ fn gather_event_chain_var_data(
         Ok(())
     };
 
+    // The invocation an EventSpec is wrapped in: the default `addEvents`
+    // carries the EVENTS var_data; a custom invocation carries its own (which
+    // may be empty, e.g. FunctionStringVar("")).
+    let invocation = chain.getattr("invocation")?;
+    let invocation_vd: Option<VarData> = if invocation.is_none() {
+        Some(events_vd.clone())
+    } else {
+        convert_var_data(&invocation.call_method0("_get_all_var_data")?)?
+    };
+
     let events: Vec<Bound<'_, PyAny>> =
         chain.getattr("events")?.iter()?.collect::<PyResult<_>>()?;
-    // No events still emits a single addEvents invocation.
+    // No events still emits a single invocation.
     if events.is_empty() {
-        parts.push(events_vd.clone());
+        if let Some(vd) = &invocation_vd {
+            parts.push(vd.clone());
+        }
     }
     for es in &events {
-        parts.push(events_vd.clone());
+        // A FunctionVar event (no `handler`) renders as `event.call(...)` and
+        // contributes only its own var_data — no invocation. An EventSpec is
+        // wrapped in the invocation, so it carries the invocation's var_data
+        // plus its args' and actions' var_data.
+        if !es.hasattr("handler")? {
+            collect(es, &mut parts)?;
+            continue;
+        }
+        if let Some(vd) = &invocation_vd {
+            parts.push(vd.clone());
+        }
         for arg in es.getattr("args")?.iter()? {
             let arg = arg?;
             collect(&arg.get_item(0)?, &mut parts)?;
@@ -1833,11 +1877,21 @@ fn event_handler_name(handler: &Bound<'_, PyAny>) -> PyResult<String> {
 }
 
 /// Lambda arg names for a trigger's `args_spec` (`e` -> `_e`), via
-/// `inspect.signature` (mirrors `_arg_names`).
+/// `inspect.signature` (mirrors `_arg_names`). An `args_spec` that is a
+/// sequence of spec functions uses its first element (matches the Python
+/// `args_spec[0] if isinstance(..., Sequence)`); a `str` is not a sequence here.
 fn arg_names(py: Python<'_>, args_spec: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    let spec = if (args_spec.is_instance_of::<pyo3::types::PyList>()
+        || args_spec.is_instance_of::<pyo3::types::PyTuple>())
+        && args_spec.len().map(|n| n > 0).unwrap_or(false)
+    {
+        args_spec.get_item(0)?
+    } else {
+        args_spec.clone()
+    };
     let sig = py
         .import_bound("inspect")?
-        .call_method1("signature", (args_spec,))?;
+        .call_method1("signature", (spec,))?;
     let mut names = Vec::new();
     for key in sig.getattr("parameters")?.call_method0("keys")?.iter()? {
         names.push(format!("_{}", key?.extract::<String>()?));
@@ -1860,7 +1914,17 @@ fn arg_names(py: Python<'_>, args_spec: &Bound<'_, PyAny>) -> PyResult<Vec<Strin
 ///     The rendered event-chain JS.
 #[pyfunction]
 pub fn rust_assemble_event_chain(py: Python<'_>, chain: Bound<'_, PyAny>) -> PyResult<String> {
-    let arg_names = arg_names(py, &chain.getattr("args_spec")?)?;
+    let names = arg_names(py, &chain.getattr("args_spec")?)?;
+    let (arrow_args, arg_def_expr, call_args) = arg_forms(&names);
+
+    // The function each EventSpec is wrapped in: default `addEvents`, or a
+    // custom invocation's js (e.g. forms' `submit_it`).
+    let invocation = chain.getattr("invocation")?;
+    let invocation_js = if invocation.is_none() {
+        "addEvents".to_owned()
+    } else {
+        invocation.getattr("_js_expr")?.str()?.to_string()
+    };
 
     let mut chain_ea = Vec::new();
     for (k, v) in chain
@@ -1871,9 +1935,22 @@ pub fn rust_assemble_event_chain(py: Python<'_>, chain: Bound<'_, PyAny>) -> PyR
         chain_ea.push((k.extract::<String>()?, render_event_value(py, &v)?));
     }
 
-    let mut events: Vec<EventTriple> = Vec::new();
-    for es in chain.getattr("events")?.iter()? {
-        let es = es?;
+    let events: Vec<Bound<'_, PyAny>> =
+        chain.getattr("events")?.iter()?.collect::<PyResult<_>>()?;
+
+    let mut statements: Vec<String> = Vec::new();
+    if events.is_empty() {
+        statements.push(format!("({invocation_js}([], {arg_def_expr}, ({{  }})))"));
+    }
+    for es in &events {
+        // A FunctionVar event (no `handler`) renders as a direct call
+        // `(fn(call_args))`; an EventSpec renders the addEvents(ReflexEvent) form
+        // with an ALWAYS-empty 3rd arg (chain actions go in the wrapper).
+        if !es.hasattr("handler")? {
+            let func = es.getattr("_js_expr")?.str()?.to_string();
+            statements.push(format!("({func}({call_args}))"));
+            continue;
+        }
         let name = event_handler_name(&es.getattr("handler")?)?;
         let mut arg_pairs = Vec::new();
         for a in es.getattr("args")?.iter()? {
@@ -1889,10 +1966,22 @@ pub fn rust_assemble_event_chain(py: Python<'_>, chain: Bound<'_, PyAny>) -> PyR
         {
             ea_pairs.push((k.extract::<String>()?, render_event_value(py, &v)?));
         }
-        events.push((name, arg_pairs, ea_pairs));
+        let rei = format!(
+            "(ReflexEvent(\"{name}\", {}, {}))",
+            js_object(&arg_pairs),
+            js_object(&ea_pairs)
+        );
+        statements.push(format!(
+            "({invocation_js}([{rei}], {arg_def_expr}, ({{  }})))"
+        ));
     }
 
-    Ok(assemble_chain_js(&arg_names, &chain_ea, &events))
+    Ok(finalize_chain(
+        &arrow_args,
+        &statements,
+        &chain_ea,
+        &call_args,
+    ))
 }
 
 /// The pure string-assembly core shared by both event-chain entrypoints.
@@ -1907,28 +1996,76 @@ fn assemble_chain_js(
     chain_ea: &[(String, String)],
     events: &[EventTriple],
 ) -> String {
-    let args_csv = arg_names.join(", ");
-    let chain_ea_s = js_object(chain_ea);
-    let reis: Vec<String> = events
-        .iter()
-        .map(|(name, args, ea)| {
-            format!(
-                "(ReflexEvent(\"{name}\", {}, {}))",
-                js_object(args),
-                js_object(ea)
-            )
-        })
-        .collect();
-    let body = if reis.len() == 1 {
-        format!("(addEvents([{}], [{args_csv}], {chain_ea_s}))", reis[0])
+    let (arrow_args, arg_def_expr, call_args) = arg_forms(arg_names);
+    // One addEvents per event (3rd arg ALWAYS empty — chain actions live in the
+    // applyEventActions wrapper). No events still emits a single addEvents([]).
+    let statements: Vec<String> = if events.is_empty() {
+        vec![format!("(addEvents([], {arg_def_expr}, ({{  }})))")]
     } else {
-        let inner: String = reis
+        events
             .iter()
-            .map(|r| format!("(addEvents([{r}], [{args_csv}], {chain_ea_s}));"))
-            .collect();
-        format!("{{{inner}}}")
+            .map(|(name, args, ea)| {
+                let rei = format!(
+                    "(ReflexEvent(\"{name}\", {}, {}))",
+                    js_object(args),
+                    js_object(ea)
+                );
+                format!("(addEvents([{rei}], {arg_def_expr}, ({{  }})))")
+            })
+            .collect()
     };
-    format!("(({args_csv}) => {body})")
+    finalize_chain(&arrow_args, &statements, chain_ea, &call_args)
+}
+
+/// Argument forms for an event-chain trigger from its lambda arg names:
+/// `(arrow_args, arg_def_expr, call_args)`. With params `e` -> `_e`:
+/// `("_e", "[_e]", "_e")`; with none: `("...args", "args", "...args")`.
+fn arg_forms(names: &[String]) -> (String, String, String) {
+    if names.is_empty() {
+        (
+            "...args".to_owned(),
+            "args".to_owned(),
+            "...args".to_owned(),
+        )
+    } else {
+        let csv = names.join(", ");
+        (csv.clone(), format!("[{csv}]"), csv)
+    }
+}
+
+/// Wrap statements into the final `((arrow_args) => body)`. With chain-level
+/// event actions, the statement block is wrapped in
+/// `applyEventActions((() => {block}), {actions}, call_args)`; otherwise a
+/// single statement is the body directly and multiple form a `{...}` block.
+fn finalize_chain(
+    arrow_args: &str,
+    statements: &[String],
+    chain_ea: &[(String, String)],
+    call_args: &str,
+) -> String {
+    let block = || -> String {
+        format!(
+            "{{{}}}",
+            statements
+                .iter()
+                .map(|s| format!("{s};"))
+                .collect::<String>()
+        )
+    };
+    let body = if chain_ea.is_empty() {
+        if statements.len() == 1 {
+            statements[0].clone()
+        } else {
+            block()
+        }
+    } else {
+        format!(
+            "(applyEventActions((() => {}), {}, {call_args}))",
+            block(),
+            js_object(chain_ea)
+        )
+    };
+    format!("(({arrow_args}) => {body})")
 }
 
 /// Assemble an event chain from a **pre-gathered primitive bundle** — the
@@ -1973,5 +2110,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rust_create_string, m)?)?;
     m.add_function(wrap_pyfunction!(rust_assemble_event_chain, m)?)?;
     m.add_function(wrap_pyfunction!(rust_assemble_event_chain_bundle, m)?)?;
+    m.add_function(wrap_pyfunction!(rust_event_chain_var_data, m)?)?;
     Ok(())
 }
