@@ -970,9 +970,21 @@ impl RustVar {
         field: Option<Bound<'_, PyAny>>,
     ) -> PyResult<RustVar> {
         let bool_ty = || PyBool::type_object_bound(py).into_any().unbind();
+        // Only string / array / object vars support `contains` (matches the
+        // `contains` guard in `Var.__getattr__`).
+        let category = var_category(py, &self.var_type)?;
+        if !matches!(
+            category.as_str(),
+            "StringVar" | "ColorVar" | "ArrayVar" | "ObjectVar"
+        ) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Var of type {} does not support contains check.",
+                self.var_type.bind(py).str()?
+            )));
+        }
         // Object membership is a key check with no field form. Classify via the
         // bridge (var_type may be a generic `Mapping[..]` with no __name__).
-        if var_category(py, &self.var_type)? == "ObjectVar" {
+        if category == "ObjectVar" {
             let (njs, _nt, nvd) = operand_parts(py, &needle)?;
             return Ok(RustVar {
                 js_expr: format!("{}.hasOwnProperty({njs})", self.js_expr),
@@ -1058,7 +1070,7 @@ impl RustVar {
     /// Reverse a string (`StringVar.reversed` = `split().reverse().join()`).
     fn reversed(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let split = Bound::new(py, slf.borrow().str_split(py, None)?)?;
-        let reversed = Bound::new(py, split.borrow().reverse(py))?;
+        let reversed = Bound::new(py, split.borrow().reverse(py)?)?;
         RustVar::join(&reversed, py, None)
     }
 
@@ -1109,13 +1121,19 @@ impl RustVar {
     }
 
     /// Reverse an array: `{arr}.slice().reverse()`, keeps the array's type,
-    /// doubling.
-    fn reverse(&self, py: Python<'_>) -> RustVar {
-        RustVar {
+    /// doubling. A non-array receiver raises (matches the `reverse` guard in
+    /// `Var.__getattr__`).
+    fn reverse(&self, py: Python<'_>) -> PyResult<RustVar> {
+        if var_category(py, &self.var_type)? != "ArrayVar" {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "Cannot reverse non-list var.",
+            ));
+        }
+        Ok(RustVar {
             js_expr: format!("{}.slice().reverse()", self.js_expr),
             var_type: self.var_type.clone_ref(py),
             var_data: var_op_doubling(&[&self.var_data]),
-        }
+        })
     }
 
     /// Join an array into a string: `{arr}.join({sep})`, str result, doubling.
@@ -1237,30 +1255,60 @@ impl RustVar {
         })
     }
 
-    /// Item access dispatches by receiver type: a string uses
-    /// `{s}?.at?.({i})` (str, doubling), an array uses `{a}?.at?.({i})`
-    /// (element type, plain), an object uses `{o}?.[{k}]` (value type, plain).
+    /// Item access dispatches by receiver type (matches the typed `__getitem__`
+    /// family). Strings/arrays require an integer index (or a non-strict-float
+    /// NumberVar); objects require a string/int key. A literal string key on an
+    /// object resolves as attribute access (field type). Invalid index types
+    /// raise the `[]` unsupported-operand error.
     fn __getitem__(&self, py: Python<'_>, index: Bound<'_, PyAny>) -> PyResult<RustVar> {
-        let (ijs, _it, ivd) = operand_parts(py, &index)?;
-        // Dispatch by the receiver category (var_type may be a generic with no
-        // __name__): strings/arrays index with `?.at?.()`, objects with `?.[]`.
-        match var_category(py, &self.var_type)?.as_str() {
-            "StringVar" | "ColorVar" => Ok(RustVar {
-                js_expr: format!("{}?.at?.({ijs})", self.js_expr),
-                var_type: PyString::type_object_bound(py).into_any().unbind(),
-                var_data: var_op_doubling(&[&self.var_data, &ivd]),
-            }),
-            "ObjectVar" => Ok(RustVar {
+        let category = var_category(py, &self.var_type)?;
+        if category == "ObjectVar" {
+            let str_key = is_string_operand(py, &index)?;
+            if !str_key && !valid_repeat_count(py, &index, false)? {
+                return Err(unsupported_operand_error(
+                    py,
+                    "[]",
+                    "ObjectVar",
+                    &operand_type_name(&index),
+                ));
+            }
+            // A literal string key resolves to the field (attribute) access.
+            if let Ok(name) = index.extract::<String>() {
+                return self.__getattr__(py, name);
+            }
+            let (ijs, _it, ivd) = operand_parts(py, &index)?;
+            return Ok(RustVar {
                 js_expr: format!("{}?.[{ijs}]", self.js_expr),
                 var_type: self.value_type(py, 1),
                 var_data: var_op_plain(&[&self.var_data, &ivd]),
-            }),
-            _ => Ok(RustVar {
-                js_expr: format!("{}?.at?.({ijs})", self.js_expr),
-                var_type: self.value_type(py, 0),
-                var_data: var_op_plain(&[&self.var_data, &ivd]),
-            }),
+            });
         }
+        // String / array receivers: integer (non-strict-float) index required.
+        if !valid_repeat_count(py, &index, false)? {
+            return Err(unsupported_operand_error(
+                py,
+                "[]",
+                if category == "StringVar" || category == "ColorVar" {
+                    "StringVar"
+                } else {
+                    "ArrayVar"
+                },
+                &operand_type_name(&index),
+            ));
+        }
+        let (ijs, _it, ivd) = operand_parts(py, &index)?;
+        if category == "StringVar" || category == "ColorVar" {
+            return Ok(RustVar {
+                js_expr: format!("{}?.at?.({ijs})", self.js_expr),
+                var_type: PyString::type_object_bound(py).into_any().unbind(),
+                var_data: var_op_doubling(&[&self.var_data, &ivd]),
+            });
+        }
+        Ok(RustVar {
+            js_expr: format!("{}?.at?.({ijs})", self.js_expr),
+            var_type: self.value_type(py, 0),
+            var_data: var_op_plain(&[&self.var_data, &ivd]),
+        })
     }
 
     /// Attribute-as-item access on an **object** var: `{o}?.["name"]`. Mirrors
