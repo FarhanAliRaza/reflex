@@ -228,8 +228,21 @@ def test_rust_container_matches_golden(key: str, golden: dict) -> None:
     assert _record(CONTAINER_CASES[key]()) == golden[key]
 
 
-def test_seeded_leaf_matches_golden(golden: dict) -> None:
-    """A leaf seeded from a Python state var reproduces its golden record."""
-    assert (
-        _record(_native.rust_from_python_var(_GoldenState.count)) == golden["state_int"]
-    )
+LEAF_CASES = {
+    "state_int": lambda: _GoldenState.count,
+    "state_float": lambda: _GoldenState.ratio,
+    "state_str": lambda: _GoldenState.name,
+    "state_bool": lambda: _GoldenState.flag,
+    "state_list": lambda: _GoldenState.items,
+    "state_dict": lambda: _GoldenState.data,
+}
+
+
+@pytest.mark.parametrize("key", sorted(LEAF_CASES))
+def test_seeded_leaf_matches_golden(key: str, golden: dict) -> None:
+    """A leaf seeded from a Python state var reproduces its golden record.
+
+    Covers every typed state leaf (int/float/str/bool/list/dict), confirming
+    rust_from_python_var carries js_expr, var_type, and var_data faithfully.
+    """
+    assert _record(_native.rust_from_python_var(LEAF_CASES[key]())) == golden[key]
