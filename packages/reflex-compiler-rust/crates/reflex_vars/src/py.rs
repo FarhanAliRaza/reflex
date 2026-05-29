@@ -207,6 +207,27 @@ impl RustVar {
         })
     }
 
+    /// Bind this var to a state (matches `Var._var_set_state`): renders
+    /// `{state_name}.{self}` and merges the `from_state` reactive var_data
+    /// (useContext hook + StateContexts/useContext imports) onto self's.
+    /// `guess_type()` is identity for RustVar, so the bound var is returned
+    /// directly.
+    fn _var_set_state(&self, py: Python<'_>, state: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let state_name = match state.extract::<String>() {
+            Ok(s) => s,
+            Err(_) => state_full_name(&state)?.replace('.', "__"),
+        };
+        let from_vd = build_from_state(&state, self.js_expr.clone())?;
+        let var_data = VarData::merge([Some(&from_vd), self.var_data.as_ref()])
+            .ok()
+            .flatten();
+        Ok(RustVar {
+            js_expr: format!("{state_name}.{}", self.js_expr),
+            var_type: self.var_type.clone_ref(py),
+            var_data,
+        })
+    }
+
     /// Convert to a boolean var: `isTrue({self})` (matches `Var.bool` /
     /// `boolify`). var_data is the doubling op merge plus the `isTrue` import.
     fn bool(&self, py: Python<'_>) -> RustVar {
@@ -855,6 +876,39 @@ fn unary_var_data(a: &Option<VarData>) -> Option<VarData> {
     var_op_doubling(&[a])
 }
 
+/// The state name for a `state` arg: the str itself, or the state class's
+/// `get_full_name()`.
+fn state_full_name(state: &Bound<'_, PyAny>) -> PyResult<String> {
+    match state.extract::<String>() {
+        Ok(s) => Ok(s),
+        Err(_) => state.call_method0("get_full_name")?.extract(),
+    }
+}
+
+/// Build the `from_state` var_data: the reactive `useContext` hook +
+/// StateContexts/useContext imports (state name mangled `.`->`__`). Shared by
+/// `VarData.from_state` and `Var._var_set_state`.
+fn build_from_state(state: &Bound<'_, PyAny>, field_name: String) -> PyResult<VarData> {
+    let state_name = state_full_name(state)?;
+    let mangled = state_name.replace('.', "__");
+    let hook = format!("const {mangled} = useContext(StateContexts.{mangled})");
+    Ok(VarData {
+        state: state_name,
+        field_name,
+        imports: vec![
+            (
+                "$/utils/context".to_owned(),
+                vec![ImportVar::new("StateContexts")],
+            ),
+            ("react".to_owned(), vec![ImportVar::new("useContext")]),
+        ],
+        hooks: vec![hook],
+        deps: Vec::new(),
+        position: None,
+        components: Vec::new(),
+    })
+}
+
 /// Combine two number var-types into the result type of an arithmetic op.
 ///
 /// Mirrors `unionize` for the cases the corpus exercises: equal types collapse
@@ -1328,28 +1382,8 @@ impl PyVarData {
     #[staticmethod]
     #[pyo3(signature = (state, field_name = String::new()))]
     fn from_state(state: Bound<'_, PyAny>, field_name: String) -> PyResult<PyVarData> {
-        let state_name = match state.extract::<String>() {
-            Ok(s) => s,
-            Err(_) => state.call_method0("get_full_name")?.extract()?,
-        };
-        let mangled = state_name.replace('.', "__");
-        let hook = format!("const {mangled} = useContext(StateContexts.{mangled})");
         Ok(PyVarData {
-            inner: VarData {
-                state: state_name,
-                field_name,
-                imports: vec![
-                    (
-                        "$/utils/context".to_owned(),
-                        vec![ImportVar::new("StateContexts")],
-                    ),
-                    ("react".to_owned(), vec![ImportVar::new("useContext")]),
-                ],
-                hooks: vec![hook],
-                deps: Vec::new(),
-                position: None,
-                components: Vec::new(),
-            },
+            inner: build_from_state(&state, field_name)?,
         })
     }
 
@@ -1641,6 +1675,14 @@ impl RustLiteralVar {
     #[getter]
     fn _var_value(&self, py: Python<'_>) -> Py<PyAny> {
         self.var_value.clone_ref(py)
+    }
+
+    /// JSON form of the literal value (matches `LiteralVar.json` =
+    /// `json.dumps(self._var_value)`).
+    fn json(&self, py: Python<'_>) -> PyResult<String> {
+        py.import_bound("json")?
+            .call_method1("dumps", (self.var_value.bind(py),))?
+            .extract()
     }
 
     /// `LiteralVar.create(value, _var_data=None)` — entirely in Rust.
