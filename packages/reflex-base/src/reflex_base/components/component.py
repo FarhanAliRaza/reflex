@@ -17,6 +17,7 @@ from hashlib import md5
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast, get_args, get_origin
 
+from reflex_compiler_rust._native import RustImportVar, RustVar
 from rich.markup import escape
 from typing_extensions import dataclass_transform
 
@@ -592,10 +593,32 @@ def _update_deterministic_hash(hasher: Any, value: object) -> None:
         hasher.update(len(value).to_bytes(8, "little"))
         for item in value:
             _update_deterministic_hash(hasher, item)
-    elif isinstance(value, Var):
+    elif isinstance(value, (Var, RustVar)):
         hasher.update(b"v")
         _update_deterministic_hash(hasher, value._js_expr)
         _update_deterministic_hash(hasher, value._get_all_var_data())
+    elif isinstance(value, VarData):
+        hasher.update(b"V")
+        _update_deterministic_hash(hasher, value.state)
+        _update_deterministic_hash(hasher, value.field_name)
+        _update_deterministic_hash(hasher, value.hooks)
+        _update_deterministic_hash(hasher, value.deps)
+        _update_deterministic_hash(hasher, value.position)
+        for lib, import_vars in value.imports:
+            _update_deterministic_hash(hasher, lib)
+            for import_var in import_vars:
+                _update_deterministic_hash(hasher, import_var)
+        for component in value.components:
+            _update_deterministic_hash(hasher, component)
+    elif isinstance(value, RustImportVar):
+        # Hash identically to a Python ``ImportVar`` dataclass (same field set
+        # and order) so Rust- and Python-built imports collide when equal.
+        hasher.update(b"D")
+        fields = ("tag", "is_default", "alias", "install", "render", "package_path")
+        hasher.update(len(fields).to_bytes(8, "little"))
+        for field_name in fields:
+            hasher.update(field_name.encode())
+            _update_deterministic_hash(hasher, getattr(value, field_name))
     elif dataclasses.is_dataclass(value):
         fields = dataclasses.fields(value)
         hasher.update(b"D")
