@@ -1,15 +1,19 @@
-"""Parity gate for the Rust ``Var`` — scalar-literal slice.
+"""Parity gate for the Rust ``Var`` — scalars, operators, and var_data.
 
-This is the first byte-parity proof of the Var cutover: the Rust-backed
-``Var`` (``_native.RustVar``, built via ``rust_literal`` / ``rust_raw_var``)
-must render the exact ``_js_expr`` / ``_var_type`` / ``_get_all_var_data()``
-the Python ``Var`` froze in the golden oracle for the scalar subset
-(``lit_*`` + ``raw_var``).
+Byte-parity proof of the Var cutover so far: the Rust-backed ``Var``
+(``_native.RustVar``) must reproduce the exact ``_js_expr`` / ``_var_type`` /
+``_get_all_var_data()`` the Python ``Var`` froze in the golden oracle. Covered:
 
-As later slices land (operators, typed subclasses, state/var_data, casting)
-this file grows to cover them, until the Rust ``Var`` passes the *whole* golden
-corpus and the Python implementation can be deleted. Until then it pins the
-slice that is already done so it cannot regress.
+* scalar literals (``lit_*``) + raw vars, via ``rust_literal`` / ``rust_raw_var``;
+* every number/boolean/comparison operator (``num_*`` / ``bool_*``), composed
+  over a leaf seeded from the Python state var (``rust_from_python_var``) so the
+  full record — including the var_data merge and the exact import multiplicity
+  Python produces — is asserted.
+
+As later slices land (typed subclasses, string/array/object methods, casting,
+the f-string marker protocol) this file grows to cover them, until the Rust
+``Var`` passes the *whole* golden corpus and the Python implementation can be
+deleted. Until then it pins what is already done so it cannot regress.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from pathlib import Path
 import pytest
 from reflex_compiler_rust import _native
 
-from tests.units.vars._var_corpus import _GoldenState, _record, _type_name
+from tests.units.vars._var_corpus import _GoldenState, _record
 
 GOLDEN_PATH = Path(__file__).resolve().parent / "var_golden.json"
 
@@ -62,38 +66,35 @@ def test_rust_raw_var_matches_golden(golden: dict) -> None:
 
 
 # --- operator slice ---
-# var_data propagation is the *next* slice, so these assert js_expr + var_type
-# only. The Rust leaf is seeded from the Python state var's js_expr/type, so
-# the operator rendering is what's under test (not state-name mangling). Each
-# entry maps a golden key to a builder over the seeded Rust leaves.
+# The Rust leaf is seeded from the Python state var (js_expr + type + var_data)
+# via rust_from_python_var, so operator *composition* is what's under test (not
+# state-name mangling). These assert the full _record — js_expr, var_type, AND
+# var_data (including the exact import multiplicity Python produces).
 def _num() -> object:
-    """A Rust int leaf seeded from the Python state var.
+    """A Rust int leaf mirroring ``_GoldenState.count`` (with var_data).
 
     Returns:
-        A RustVar mirroring ``_GoldenState.count``.
+        A RustVar equivalent to ``_GoldenState.count``.
     """
-    leaf = _GoldenState.count
-    return _native.rust_raw_var(leaf._js_expr, leaf._var_type)
+    return _native.rust_from_python_var(_GoldenState.count)
 
 
 def _ratio() -> object:
-    """A Rust float leaf seeded from the Python state var.
+    """A Rust float leaf mirroring ``_GoldenState.ratio`` (with var_data).
 
     Returns:
-        A RustVar mirroring ``_GoldenState.ratio``.
+        A RustVar equivalent to ``_GoldenState.ratio``.
     """
-    leaf = _GoldenState.ratio
-    return _native.rust_raw_var(leaf._js_expr, leaf._var_type)
+    return _native.rust_from_python_var(_GoldenState.ratio)
 
 
 def _flag() -> object:
-    """A Rust bool leaf seeded from the Python state var.
+    """A Rust bool leaf mirroring ``_GoldenState.flag`` (with var_data).
 
     Returns:
-        A RustVar mirroring ``_GoldenState.flag``.
+        A RustVar equivalent to ``_GoldenState.flag``.
     """
-    leaf = _GoldenState.flag
-    return _native.rust_raw_var(leaf._js_expr, leaf._var_type)
+    return _native.rust_from_python_var(_GoldenState.flag)
 
 
 OPERATOR_CASES = {
@@ -123,8 +124,17 @@ OPERATOR_CASES = {
 
 
 @pytest.mark.parametrize("key", sorted(OPERATOR_CASES))
-def test_rust_operator_renders_golden(key: str, golden: dict) -> None:
-    """A Rust operator renders the golden js_expr + var_type (var_data next)."""
-    rust_var = OPERATOR_CASES[key]()
-    assert rust_var._js_expr == golden[key]["js_expr"]
-    assert _type_name(rust_var._var_type) == golden[key]["var_type"]
+def test_rust_operator_matches_golden(key: str, golden: dict) -> None:
+    """A Rust operator reproduces the golden record byte-for-byte.
+
+    Asserts the full _record (js_expr + var_type + var_data), so the var_data
+    merge / import multiplicity is validated alongside the rendering.
+    """
+    assert _record(OPERATOR_CASES[key]()) == golden[key]
+
+
+def test_seeded_leaf_matches_golden(golden: dict) -> None:
+    """A leaf seeded from a Python state var reproduces its golden record."""
+    assert (
+        _record(_native.rust_from_python_var(_GoldenState.count)) == golden["state_int"]
+    )
