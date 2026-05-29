@@ -136,6 +136,47 @@ impl RustVar {
         &self.js_expr
     }
 
+    /// Hash (matches `Var.__hash__` = `hash((_js_expr, _var_type, _var_data))`).
+    /// Defined explicitly because `__richcmp__` otherwise nulls `__hash__`.
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        let vd: Py<PyAny> = match &self.var_data {
+            Some(v) => Bound::new(py, PyVarData { inner: v.clone() })?
+                .into_any()
+                .unbind(),
+            None => py.None(),
+        };
+        let tup = pyo3::types::PyTuple::new_bound(
+            py,
+            [
+                self.js_expr.clone().into_py(py),
+                self.var_type.clone_ref(py),
+                vd,
+            ],
+        );
+        tup.hash()
+    }
+
+    /// Structural equality (matches `Var.equals`): same js_expr, var_type, and
+    /// aggregate var_data.
+    fn equals(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<bool> {
+        let Ok(ojs) = other.getattr("_js_expr") else {
+            return Ok(false);
+        };
+        if ojs.str()?.to_string() != self.js_expr {
+            return Ok(false);
+        }
+        if !self.var_type.bind(py).eq(other.getattr("_var_type")?)? {
+            return Ok(false);
+        }
+        let my_vd: Py<PyAny> = match &self.var_data {
+            Some(v) => Bound::new(py, PyVarData { inner: v.clone() })?
+                .into_any()
+                .unbind(),
+            None => py.None(),
+        };
+        my_vd.bind(py).eq(other.call_method0("_get_all_var_data")?)
+    }
+
     /// Pickle support: reconstruct via the constructor (state persistence
     /// pickles/dills Vars embedded in state).
     fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
@@ -152,13 +193,28 @@ impl RustVar {
 
     /// Format into an f-string fragment (matches `Var.__format__`): register
     /// this var under a fresh id and emit `<reflex.Var>{id}</reflex.Var>{js}`.
-    /// `rust_create_string` (or Python's `LiteralVar.create`) decodes it back.
-    fn __format__(&self, _format_spec: &str) -> String {
+    ///
+    /// Registers into the **Python** ``_global_vars`` dict (the shared registry
+    /// Python's ``_decode_var_immutable`` and ``LiteralStringVar.create`` read),
+    /// so a Rust var formatted into a Python f-string / operation decodes
+    /// correctly — and also into the Rust registry for ``rust_create_string``.
+    fn __format__(&self, py: Python<'_>, _format_spec: &str) -> PyResult<String> {
         let id = VAR_COUNTER.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut reg) = var_registry().lock() {
             reg.insert(id, (self.js_expr.clone(), self.var_data.clone()));
         }
-        format!("{VAR_OPENING_TAG}{id}{VAR_CLOSING_TAG}{}", self.js_expr)
+        let clone = RustVar {
+            js_expr: self.js_expr.clone(),
+            var_type: self.var_type.clone_ref(py),
+            var_data: self.var_data.clone(),
+        };
+        py.import_bound("reflex_base.vars.base")?
+            .getattr("_global_vars")?
+            .set_item(id, Py::new(py, clone)?)?;
+        Ok(format!(
+            "{VAR_OPENING_TAG}{id}{VAR_CLOSING_TAG}{}",
+            self.js_expr
+        ))
     }
 
     // --- number operators ---
@@ -453,12 +509,13 @@ impl RustVar {
         }
     }
 
-    /// Attribute access on an object var: `{o}?.["name"]`, value type, plain.
-    /// Mirrors `ObjectVar.__getattr__`. Underscore names raise `AttributeError`
-    /// so internal / dunder lookups fall through to normal resolution rather
-    /// than being turned into a bogus item access.
+    /// Attribute-as-item access on an **object** var: `{o}?.["name"]`. Mirrors
+    /// `ObjectVar.__getattr__`. Restricted to dict/object vars; on any other
+    /// var type (and for underscore/dunder names) this raises `AttributeError`
+    /// so a missing Var-protocol method surfaces cleanly instead of becoming a
+    /// bogus item access.
     fn __getattr__(&self, py: Python<'_>, name: String) -> PyResult<RustVar> {
-        if name.starts_with('_') {
+        if name.starts_with('_') || self.type_label(py).as_deref() != Some("dict") {
             return Err(pyo3::exceptions::PyAttributeError::new_err(name));
         }
         Ok(RustVar {
