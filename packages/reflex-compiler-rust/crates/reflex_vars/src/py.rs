@@ -336,6 +336,36 @@ impl RustVar {
         ))
     }
 
+    /// Create a var from a value (matches `Var.create`): an existing Var passes
+    /// through unchanged, otherwise a literal is created. Delegates to
+    /// `RustLiteralVar.create`, which implements the same pass-through + literal
+    /// dispatch.
+    #[classmethod]
+    #[pyo3(signature = (value, _var_data = None))]
+    fn create(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        value: Bound<'_, PyAny>,
+        _var_data: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let lit_cls = RustLiteralVar::type_object_bound(py);
+        RustLiteralVar::create(&lit_cls, py, value, _var_data)
+    }
+
+    /// Decode the var as a Python value (matches `Var._decode`): JSON-parse the
+    /// JS expression, falling back to the raw expression string when it is not
+    /// valid JSON. `RustLiteralVar` overrides this to return its stored value.
+    fn _decode(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let json = py.import_bound("json")?;
+        match json.call_method1("loads", (&self.js_expr,)) {
+            Ok(v) => Ok(v.unbind()),
+            Err(e) if e.is_instance_of::<pyo3::exceptions::PyValueError>(py) => {
+                Ok(PyString::new_bound(py, &self.js_expr).into_any().unbind())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// String form == the JS expression (matches Python `Var.__str__`).
     fn __str__(&self) -> &str {
         &self.js_expr
@@ -1768,6 +1798,12 @@ impl RustLiteralVar {
     /// The original Python value this literal was created from.
     #[getter]
     fn _var_value(&self, py: Python<'_>) -> Py<PyAny> {
+        self.var_value.clone_ref(py)
+    }
+
+    /// Decode the literal as a Python value (matches `Var._decode` for the
+    /// `LiteralVar` branch): return the stored value directly.
+    fn _decode(&self, py: Python<'_>) -> Py<PyAny> {
         self.var_value.clone_ref(py)
     }
 

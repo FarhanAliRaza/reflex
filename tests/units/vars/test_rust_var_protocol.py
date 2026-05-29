@@ -20,7 +20,7 @@ import pytest
 from reflex_base.utils import imports
 from reflex_base.utils.exceptions import VarTypeError
 from reflex_base.vars.base import Var, VarData
-from reflex_compiler_rust._native import RustVar, RustVarData
+from reflex_compiler_rust._native import RustLiteralVar, RustVar, RustVarData
 
 _IMPORTS = {"$/foo": [imports.ImportVar(tag="bar")]}
 
@@ -131,3 +131,31 @@ def test_is_not_none() -> None:
 def test_is_none() -> None:
     """``is_none()`` negates ``is_not_none()``."""
     _assert_same(_py(stateful=True).is_none(), _rust(stateful=True).is_none())
+
+
+@pytest.mark.parametrize(
+    "js",
+    ["5", "state.count", '"hi"', "[1, 2]"],
+)
+def test_decode_raw(js: str) -> None:
+    """``_decode()`` JSON-parses the expr, falling back to the raw string."""
+    assert RustVar(js, int, None)._decode() == Var(_js_expr=js, _var_type=int)._decode()
+
+
+@pytest.mark.parametrize("value", [5, "hi", [1, 2], {"a": 1}, True, None])
+def test_decode_literal(value: object) -> None:
+    """``LiteralVar._decode()`` returns the stored value."""
+    assert RustLiteralVar.create(value)._decode() == value
+
+
+def test_create_passthrough() -> None:
+    """``Var.create(var)`` returns the same var object."""
+    v = _rust()
+    assert RustVar.create(v) is v
+
+
+def test_create_literal() -> None:
+    """``Var.create(value)`` builds a literal var."""
+    c = RustVar.create(5)
+    assert c._js_expr == "5"
+    assert c._decode() == 5
