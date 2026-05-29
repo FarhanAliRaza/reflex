@@ -133,6 +133,39 @@ def test_is_none() -> None:
     _assert_same(_py(stateful=True).is_none(), _rust(stateful=True).is_none())
 
 
+def test_bool_dunder_raises() -> None:
+    """Using a Var in a boolean context raises with the identical message."""
+    with pytest.raises(VarTypeError) as py_exc:
+        bool(_py())
+    with pytest.raises(VarTypeError) as rust_exc:
+        bool(_rust())
+    assert str(rust_exc.value) == str(py_exc.value)
+
+
+@pytest.mark.parametrize(
+    ("output", "current"),
+    [
+        (str, int),
+        (int, float),
+        (float, int),
+        (bool, int),
+        (list, int),
+        (dict, int),
+        (list[int], int),
+        (dict[str, int], int),
+        (int | None, int),
+        (int | str, float),
+        (None, int),
+    ],
+)
+def test_to_matches_oracle(output: object, current: type) -> None:
+    """``to()`` resolves the var_type the same way as the Python Var."""
+    _assert_same(
+        Var(_js_expr="x", _var_type=current).to(output),
+        RustVar("x", current, None).to(output),
+    )
+
+
 @pytest.mark.parametrize(
     "js",
     ["5", "state.count", '"hi"', "[1, 2]"],

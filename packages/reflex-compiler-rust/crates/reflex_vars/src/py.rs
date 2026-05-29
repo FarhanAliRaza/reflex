@@ -452,6 +452,19 @@ impl RustVar {
         }
     }
 
+    /// Using a Var in a boolean context is unsupported (matches `Var.__bool__`):
+    /// raises `VarTypeError` directing the user to `rx.cond` / bitwise operators.
+    fn __bool__(&self, py: Python<'_>) -> PyResult<bool> {
+        let repr: String = PyString::new_bound(py, &self.js_expr).repr()?.extract()?;
+        Err(var_type_error(
+            py,
+            &format!(
+                "Cannot convert Var {repr} to bool for use with `if`, `and`, `or`, and `not`. \
+                 Instead use `rx.cond` and bitwise operators `&` (and), `|` (or), `~` (invert)."
+            ),
+        ))
+    }
+
     /// String form == the JS expression (matches Python `Var.__str__`).
     fn __str__(&self) -> &str {
         &self.js_expr
@@ -678,14 +691,68 @@ impl RustVar {
     // --- casting ---
 
     /// Cast to another var type (`Var.to`). Keeps the JS expression and
-    /// var_data; only the var_type changes (matches `ToOperation`, which merges
-    /// var_data exactly once).
-    fn to(&self, output: Py<PyAny>) -> RustVar {
-        RustVar {
+    /// var_data (merged once, matching `ToOperation`); only the var_type
+    /// changes. Collapses the Python `_var_subclasses` dispatch for the unified
+    /// RustVar:
+    ///
+    /// * `output is None` -> `NoneType` (the `NoneVar` cast).
+    /// * a `Union`/`Optional` output with no explicit `var_type` -> unchanged
+    ///   (Python falls through to `return self`).
+    /// * an output that is a `Var` (RustVar) class -> keep the current var_type
+    ///   unless overridden (`var_type or current`, or `var_type` when current is
+    ///   `Any`).
+    /// * any other output (python type, parametrized generic, dataclass, `Any`)
+    ///   -> adopt `var_type or output` as the new var_type.
+    #[pyo3(signature = (output, var_type=None))]
+    fn to(
+        &self,
+        py: Python<'_>,
+        output: Bound<'_, PyAny>,
+        var_type: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<RustVar> {
+        let cast = |t: Py<PyAny>| RustVar {
             js_expr: self.js_expr.clone(),
-            var_type: output,
+            var_type: t,
             var_data: var_op_plain(&[&self.var_data]),
+        };
+        let typing = py.import_bound("typing")?;
+        // `output is None` -> NoneVar cast (var_type NoneType).
+        if output.is_none() {
+            let none_type = py.None().bind(py).get_type().into_any().unbind();
+            return Ok(cast(none_type));
         }
+        // An output that is a Var (RustVar) class keeps the current var_type
+        // (unless overridden), matching the `var_subclass` branch.
+        if let Ok(ty) = output.downcast::<PyType>() {
+            if ty.is_subclass_of::<RustVar>().unwrap_or(false) {
+                let current = self.var_type.bind(py);
+                let is_any = current.eq(typing.getattr("Any")?).unwrap_or(false);
+                let new_type = match (var_type, is_any) {
+                    (Some(vt), _) => vt.unbind(),
+                    (None, true) => typing.getattr("Any")?.unbind(),
+                    (None, false) => self.var_type.clone_ref(py),
+                };
+                return Ok(cast(new_type));
+            }
+        }
+        // A Union/Optional output without an explicit var_type leaves the var
+        // unchanged (Python returns `self`).
+        let origin = typing.call_method1("get_origin", (&output,))?;
+        let is_union = !origin.is_none()
+            && (origin.eq(typing.getattr("Union")?).unwrap_or(false)
+                || origin
+                    .eq(py.import_bound("types")?.getattr("UnionType")?)
+                    .unwrap_or(false));
+        if is_union && var_type.is_none() {
+            return Ok(RustVar {
+                js_expr: self.js_expr.clone(),
+                var_type: self.var_type.clone_ref(py),
+                var_data: self.var_data.clone(),
+            });
+        }
+        // Otherwise adopt `var_type or output` as the new type.
+        let new_type = var_type.map_or_else(|| output.clone().unbind(), |vt| vt.unbind());
+        Ok(cast(new_type))
     }
 
     // --- string methods (mirror StringVar in vars/sequence.py) ---
@@ -1891,6 +1958,20 @@ impl RustLiteralVar {
     /// `LiteralVar` branch): return the stored value directly.
     fn _decode(&self, py: Python<'_>) -> Py<PyAny> {
         self.var_value.clone_ref(py)
+    }
+
+    /// The aggregate var_data of a value without retaining the created var
+    /// (matches `LiteralVar._get_all_var_data_without_creating_var_dispatch`):
+    /// an existing Var returns its own var_data, otherwise a literal is created
+    /// transiently to read its var_data.
+    #[classmethod]
+    fn _get_all_var_data_without_creating_var_dispatch(
+        cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        value: Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        let var = RustLiteralVar::create(cls, py, value, None)?;
+        Ok(var.bind(py).call_method0("_get_all_var_data")?.unbind())
     }
 
     /// JSON form of the literal value (matches `LiteralVar.json` =
