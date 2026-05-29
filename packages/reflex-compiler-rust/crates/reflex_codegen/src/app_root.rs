@@ -67,6 +67,8 @@ mod tests {
         };
         let mut buf = CodeBuffer::new();
         emit_app_root(&mut buf, &manifest);
-        assert!(buf.as_str().contains("import \"@radix-ui/themes/styles.css\""));
+        assert!(buf
+            .as_str()
+            .contains("import \"@radix-ui/themes/styles.css\""));
     }
 }

@@ -150,7 +150,9 @@ fn read_u8(buf: &mut &[u8]) -> Result<u8> {
 #[inline]
 fn try_read_nil(buf: &mut &[u8]) -> Result<bool> {
     if buf.is_empty() {
-        return Err(ParseError::Msgpack("unexpected end while peeking nil".into()));
+        return Err(ParseError::Msgpack(
+            "unexpected end while peeking nil".into(),
+        ));
     }
     let m = Marker::from_u8(buf[0]);
     if matches!(m, Marker::Null) {
@@ -214,10 +216,7 @@ fn read_str_array_owned<'a>(arena: &'a Arena, buf: &mut &[u8]) -> Result<&'a [&'
 }
 
 #[inline]
-fn read_symbol_pair_array<'a>(
-    arena: &'a Arena,
-    buf: &mut &[u8],
-) -> Result<&'a [(Symbol, Symbol)]> {
+fn read_symbol_pair_array<'a>(arena: &'a Arena, buf: &mut &[u8]) -> Result<&'a [(Symbol, Symbol)]> {
     let n = read_array_len(buf)? as usize;
     let mut tmp: bumpalo::collections::Vec<(Symbol, Symbol)> =
         bumpalo::collections::Vec::with_capacity_in(n, arena.bump());

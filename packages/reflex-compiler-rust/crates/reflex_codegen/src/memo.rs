@@ -68,9 +68,7 @@ pub fn emit_memo_module(
     buf.write_str(" => {\n");
 
     if page.needs_ref {
-        buf.write_str(
-            "  const ref_root = useRef(null); refs[\"ref_root\"] = ref_root;\n",
-        );
+        buf.write_str("  const ref_root = useRef(null); refs[\"ref_root\"] = ref_root;\n");
     }
     for binding in page.state_bindings {
         let s = resolve_unchecked(*binding);
@@ -80,9 +78,7 @@ pub fn emit_memo_module(
         buf.write_str(s);
         buf.write_str(");\n");
     }
-    buf.write_str(
-        "  const [addEvents, connectErrors] = useContext(EventLoopContext);\n",
-    );
+    buf.write_str("  const [addEvents, connectErrors] = useContext(EventLoopContext);\n");
     if !pre_hooks.is_empty() {
         buf.write_str("  ");
         buf.write_str(pre_hooks);
@@ -203,10 +199,7 @@ mod tests {
 
     #[test]
     fn emits_one_reexport_per_entry() {
-        let reexports = [
-            ("Foo", "components/Foo"),
-            ("BarBaz", "components/BarBaz"),
-        ];
+        let reexports = [("Foo", "components/Foo"), ("BarBaz", "components/BarBaz")];
         assert_eq!(
             render(&reexports),
             "export { Foo } from \"components/Foo\";\nexport { BarBaz } from \"components/BarBaz\";\n"

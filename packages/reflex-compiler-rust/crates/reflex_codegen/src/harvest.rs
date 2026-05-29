@@ -90,10 +90,7 @@ pub fn collect_refs(snapshot: &Snapshot) -> Vec<Symbol> {
 /// Whether any node has a non-empty ref. Drives the page-level
 /// `const ref_root = useRef(null)` emission.
 pub fn page_needs_ref(snapshot: &Snapshot) -> bool {
-    snapshot
-        .nodes
-        .iter()
-        .any(|n| n.ref_name != Symbol::EMPTY)
+    snapshot.nodes.iter().any(|n| n.ref_name != Symbol::EMPTY)
 }
 
 #[cfg(test)]

@@ -148,8 +148,7 @@ mod tests {
 
     #[test]
     fn stateful_pages_with_routes() {
-        let out =
-            render(|w| emit_stateful_pages_json(&["index", "about", "blog/post-1"], w));
+        let out = render(|w| emit_stateful_pages_json(&["index", "about", "blog/post-1"], w));
         assert_eq!(out, r#"["index", "about", "blog/post-1"]"#);
     }
 

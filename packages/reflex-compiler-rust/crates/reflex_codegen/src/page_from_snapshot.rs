@@ -13,7 +13,7 @@ use reflex_intern::{intern, resolve_unchecked, Symbol};
 use reflex_ir::{NodeIdx, NodeKind, NodeSnapshot, Snapshot};
 
 use crate::buffer::CodeBuffer;
-use crate::harvest::{collect_imports, collect_custom_code, page_needs_ref};
+use crate::harvest::{collect_custom_code, collect_imports, page_needs_ref};
 use crate::hooks_emit::{render_hooks, render_hooks_for_subtree};
 
 /// Baseline runtime aliases that every page module needs. Mirrors
@@ -256,11 +256,7 @@ fn emit_memo_module_imports(buf: &mut CodeBuffer, snapshot: &Snapshot) {
     emit_combined_imports(buf, snapshot, MEMO_RUNTIME_IMPORTS);
 }
 
-fn emit_combined_imports(
-    buf: &mut CodeBuffer,
-    snapshot: &Snapshot,
-    runtime: &[(&str, &str)],
-) {
+fn emit_combined_imports(buf: &mut CodeBuffer, snapshot: &Snapshot, runtime: &[(&str, &str)]) {
     // Combine runtime + harvested per-node imports, then group by
     // module preserving first-seen order — same shape as
     // `page::emit_imports_grouped_by_module`.
@@ -430,11 +426,7 @@ fn emit_node(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx) {
     // synthetic `MemoizeWrapper` in its place. The original node stays
     // in the arena (the body-emit pass reads from it) but at the page
     // call site only the wrapper appears.
-    let emit_idx = snapshot
-        .wrap_redirects
-        .get(&idx)
-        .copied()
-        .unwrap_or(idx);
+    let emit_idx = snapshot.wrap_redirects.get(&idx).copied().unwrap_or(idx);
     let node = snapshot.node(emit_idx);
     match node.kind {
         NodeKind::Element => emit_element(buf, snapshot, emit_idx, node),
@@ -575,7 +567,12 @@ fn emit_element(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, node: &
 /// wins (it carries the post-Stage-6 useCallback identifier);
 /// rendered_props' `css` or `ref` key wins over `node.style` /
 /// `node.ref_name` because the explicit prop is what the user wrote.
-fn write_props_and_events(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, node: &NodeSnapshot) {
+fn write_props_and_events(
+    buf: &mut CodeBuffer,
+    snapshot: &Snapshot,
+    idx: NodeIdx,
+    node: &NodeSnapshot,
+) {
     let css_key = intern("css");
     let ref_key = intern("ref");
 
@@ -751,7 +748,6 @@ fn emit_memoize_wrapper(
     buf.write_str(")");
 }
 
-
 /// Keys that are valid JS identifiers emit unquoted; others get quoted.
 /// Mirrors `jsx::emit_prop_name` — names with underscores get
 /// snake→camel conversion (`class_name` → `className`,
@@ -876,10 +872,7 @@ mod tests {
         let snap = sb.finish();
         let mut b = buf();
         emit_jsx_from_snapshot(&mut b, &snap);
-        assert_eq!(
-            to_string(b),
-            "jsx(div, {css: ({ [\"color\"] : \"red\" })})"
-        );
+        assert_eq!(to_string(b), "jsx(div, {css: ({ [\"color\"] : \"red\" })})");
     }
 
     #[test]

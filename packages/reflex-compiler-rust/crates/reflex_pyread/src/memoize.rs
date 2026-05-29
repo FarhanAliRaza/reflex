@@ -48,10 +48,7 @@ pub fn should_memoize<'py>(
         }
     }
 
-    let tag = component
-        .getattr("tag")
-        .ok()
-        .filter(|v| !v.is_none());
+    let tag = component.getattr("tag").ok().filter(|v| !v.is_none());
     let is_cond_or_match = matches!(cls.as_str(), "Cond" | "Match");
     let is_structural_child = is_structural_memoization_child(&cls);
     if tag.is_none() && !is_cond_or_match && !is_structural_child {
@@ -220,10 +217,7 @@ fn component_subtree_is_reactive<'py>(
     }
 
     // Children.
-    let children = component
-        .getattr("children")
-        .ok()
-        .filter(|v| !v.is_none());
+    let children = component.getattr("children").ok().filter(|v| !v.is_none());
     if let Some(c) = children {
         for child_res in c.iter().map_err(|source| PyReadError::Attr {
             attr: "iter(children)",
@@ -294,10 +288,7 @@ fn bare_should_memoize<'py>(
     component: &Bound<'py, PyAny>,
     refs: &MemoRefs<'py>,
 ) -> Result<Option<bool>, PyReadError> {
-    let contents = component
-        .getattr("contents")
-        .ok()
-        .filter(|v| !v.is_none());
+    let contents = component.getattr("contents").ok().filter(|v| !v.is_none());
     let Some(contents) = contents else {
         return Ok(None);
     };
@@ -312,7 +303,9 @@ fn bare_should_memoize<'py>(
         return Ok(None);
     }
     let mut cache: HashMap<usize, bool> = HashMap::new();
-    Ok(Some(var_data_indicates_reactive(py, &contents, refs, &mut cache)?))
+    Ok(Some(var_data_indicates_reactive(
+        py, &contents, refs, &mut cache,
+    )?))
 }
 
 // ---- Helpers ---------------------------------------------------------------
@@ -337,12 +330,10 @@ fn read_disposition(component: &Bound<'_, PyAny>) -> Result<Disposition, PyReadE
             attr: "MemoizationMode.disposition",
             source,
         })?;
-    let value = disp
-        .getattr("value")
-        .map_err(|source| PyReadError::Attr {
-            attr: "MemoizationDisposition.value",
-            source,
-        })?;
+    let value = disp.getattr("value").map_err(|source| PyReadError::Attr {
+        attr: "MemoizationDisposition.value",
+        source,
+    })?;
     let s = py_str(&value)?;
     match s.as_str() {
         "stateful" => Ok(Disposition::Stateful),

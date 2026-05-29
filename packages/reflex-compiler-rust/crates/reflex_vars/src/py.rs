@@ -258,6 +258,84 @@ impl RustVar {
         }
     }
 
+    /// Convert to a string var (matches `Var.to_string`).
+    ///
+    /// `use_json=True` (default) wraps in `JSON.stringify`; `use_json=False`
+    /// uses the `Object.prototype.toString` arrow. Both render via the
+    /// `VarOperationCall` template `({func}({arg}))` and carry self's var_data
+    /// unchanged (the function var itself has no var_data, and the call merges
+    /// the single arg once).
+    #[pyo3(signature = (use_json=true))]
+    fn to_string(&self, py: Python<'_>, use_json: bool) -> RustVar {
+        let js_expr = if use_json {
+            format!("(JSON.stringify({}))", self.js_expr)
+        } else {
+            format!(
+                "(((__to_string) => __to_string.toString())({}))",
+                self.js_expr
+            )
+        };
+        RustVar {
+            js_expr,
+            var_type: PyString::type_object_bound(py).into_any().unbind(),
+            var_data: self.var_data.clone(),
+        }
+    }
+
+    /// The JavaScript `typeof` of this var (matches `Var.js_type`):
+    /// `(typeof({self}))`, a string var carrying self's var_data.
+    fn js_type(&self, py: Python<'_>) -> RustVar {
+        RustVar {
+            js_expr: format!("(typeof({}))", self.js_expr),
+            var_type: PyString::type_object_bound(py).into_any().unbind(),
+            var_data: self.var_data.clone(),
+        }
+    }
+
+    /// A `refs[...]` reference to this var (matches `Var._as_ref`).
+    ///
+    /// `refs[{json(str(self))}]` with only the `refs` import — self's var_data
+    /// is intentionally dropped (Python builds a fresh Var from `str(self)`).
+    fn _as_ref(&self, py: Python<'_>) -> PyResult<RustVar> {
+        let key: String = py
+            .import_bound("json")?
+            .call_method1("dumps", (&self.js_expr,))?
+            .extract()?;
+        let var_data = VarData {
+            imports: vec![("$/utils/state".to_owned(), vec![ImportVar::new("refs")])],
+            ..VarData::default()
+        };
+        Ok(RustVar {
+            js_expr: format!("refs[{key}]"),
+            var_type: PyString::type_object_bound(py).into_any().unbind(),
+            var_data: Some(var_data),
+        })
+    }
+
+    /// Vars are immutable, so deep-copying returns self (matches
+    /// `Var.__deepcopy__`). Needed because deepcopy of a Component copies its
+    /// vars.
+    fn __deepcopy__(slf: PyRef<'_, Self>, _memo: Bound<'_, PyAny>) -> Py<RustVar> {
+        slf.into()
+    }
+
+    /// Iterating a Var is unsupported (matches `Var.__iter__`).
+    fn __iter__(&self, py: Python<'_>) -> PyResult<()> {
+        let repr: String = PyString::new_bound(py, &self.js_expr).repr()?.extract()?;
+        Err(var_type_error(
+            py,
+            &format!("Cannot iterate over Var {repr}. Instead use `rx.foreach`."),
+        ))
+    }
+
+    /// `in` on a Var is unsupported (matches `Var.__contains__`).
+    fn __contains__(&self, py: Python<'_>, _item: Bound<'_, PyAny>) -> PyResult<()> {
+        Err(var_type_error(
+            py,
+            "'in' operator not supported for Var types, use Var.contains() instead.",
+        ))
+    }
+
     /// String form == the JS expression (matches Python `Var.__str__`).
     fn __str__(&self) -> &str {
         &self.js_expr
@@ -874,6 +952,22 @@ fn var_op_with_import(operand: &Option<VarData>, tag: &str) -> Option<VarData> {
 /// The aggregate var_data of a unary doubling op.
 fn unary_var_data(a: &Option<VarData>) -> Option<VarData> {
     var_op_doubling(&[a])
+}
+
+/// Build a `reflex_base.utils.exceptions.VarTypeError` PyErr with `msg`.
+/// Falls back to a plain `TypeError` if the class can't be imported (it is a
+/// `TypeError` subclass, so callers see the same type either way).
+fn var_type_error(py: Python<'_>, msg: &str) -> PyErr {
+    match py
+        .import_bound("reflex_base.utils.exceptions")
+        .and_then(|m| m.getattr("VarTypeError"))
+    {
+        Ok(cls) => PyErr::from_value_bound(
+            cls.call1((msg,))
+                .unwrap_or_else(|e| e.value_bound(py).clone().into_any()),
+        ),
+        Err(_) => pyo3::exceptions::PyTypeError::new_err(msg.to_owned()),
+    }
 }
 
 /// The state name for a `state` arg: the str itself, or the state class's
