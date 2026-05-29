@@ -148,3 +148,42 @@ def test_number_arithmetic_still_works() -> None:
 def test_var_create_scalar_is_rust() -> None:
     """The public ``Var.create`` also routes scalars to Rust."""
     assert isinstance(Var.create(5), RustLiteralVar)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [[1, 2, 3], ["a", "b"], [[1, 2], [3]], {"a": 1}, {"a": {"b": 1}}, [], {}],
+)
+def test_container_create_returns_rust_literal(value: object) -> None:
+    """Plain list/dict literals route to the Rust literal var."""
+    assert isinstance(LiteralVar.create(value), RustLiteralVar)
+
+
+def test_dict_json_format() -> None:
+    """Object json renders ``{k:v}`` (colon, no space) like LiteralObjectVar."""
+    assert LiteralVar.create({"a": 1, "b": 2}).json() == '{"a":1, "b":2}'
+
+
+def test_list_json_format() -> None:
+    """Array json renders ``[a, b]`` like LiteralArrayVar."""
+    assert LiteralVar.create([1, [2, 3]]).json() == "[1, [2, 3]]"
+
+
+def test_container_with_embedded_var_var_data() -> None:
+    """A container literal aggregates an embedded var's var_data."""
+    import reflex as rx
+
+    class _S(rx.State):
+        x: int = 0
+
+    var = LiteralVar.create([1, _S.x])
+    assert "x" in var._js_expr
+    assert var._get_all_var_data() is not None
+
+
+def test_container_element_type_inferred() -> None:
+    """List/dict var_type uses figure_out_type (Sequence[int], Mapping[str,int])."""
+    from collections.abc import Mapping, Sequence
+
+    assert LiteralVar.create([1, 2, 3])._var_type == Sequence[int]
+    assert LiteralVar.create({"a": 1})._var_type == Mapping[str, int]

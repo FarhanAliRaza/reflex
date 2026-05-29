@@ -1380,16 +1380,14 @@ class LiteralVar(Var[VAR_TYPE]):
                 return value
             return value._replace(merge_var_data=_var_data)
 
-        # Non-string scalars are produced by the Rust literal var (byte-identical
-        # rendering, var_type and json to the Python literal subclasses). Strings
-        # are nearly ready (f-string marker decode + adjacent-literal folding +
-        # __format__ subclass preservation all landed), but routing them needs
-        # RustLiteralVar to survive _replace/to/_var_set_state (literal-preserving
-        # transforms) — the next slice. Lists/dicts and exotic types
-        # (datetime/Color/range/serializer-backed/dataclasses) also stay on the
-        # Python dispatch below. Exact-type match keeps int subclasses (enums,
-        # numpy, …) on the precise Python dispatch.
-        if type(value) in (bool, int, float, str, type(None)):
+        # Scalars (incl. strings, with f-string marker decode + folding) and
+        # plain list/dict literals (with element-type inference, recursive json,
+        # and embedded-var var_data aggregation) are produced by the Rust literal
+        # var — byte-identical to the Python literal subclasses. Exotic types
+        # (datetime/Color/range/serializer-backed/dataclasses) and non-exact
+        # types (int/str subclasses, tuples, sets, custom Mappings) stay on the
+        # Python dispatch below.
+        if type(value) in (bool, int, float, str, type(None), list, dict):
             return RustLiteralVar.create(value, _var_data=_var_data)
 
         for literal_subclass, var_subclass in _var_literal_subclasses[::-1]:

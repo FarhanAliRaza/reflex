@@ -623,18 +623,22 @@ impl RustVar {
     // rendering + var_type).
 
     fn __add__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
-        match self.type_label(py).as_deref() {
-            Some("str") => self.str_concat(py, &other, false),
-            Some("list") => self.array_concat(py, &other),
+        // Dispatch on the receiver category (var_type may be a generic with no
+        // __name__): strings concat as strings, arrays concat as arrays, numbers
+        // add numerically.
+        match var_category(py, &self.var_type)?.as_str() {
+            "StringVar" | "ColorVar" => self.str_concat(py, &other, false),
+            "ArrayVar" => self.array_concat(py, &other),
             _ => self.arith(py, &other, "+", false),
         }
     }
 
     fn __radd__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
-        if self.is_str(py) {
-            return self.str_concat(py, &other, true);
+        match var_category(py, &self.var_type)?.as_str() {
+            "StringVar" | "ColorVar" => self.str_concat(py, &other, true),
+            "ArrayVar" => self.array_concat(py, &other),
+            _ => self.arith(py, &other, "+", true),
         }
-        self.arith(py, &other, "+", true)
     }
 
     fn __sub__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
@@ -671,14 +675,7 @@ impl RustVar {
     }
 
     fn __floordiv__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
-        if !is_number_operand(py, &other)? {
-            return Err(unsupported_operand_error(
-                py,
-                "//",
-                "NumberVar",
-                &operand_type_name(&other),
-            ));
-        }
+        check_numeric_binop(py, &self.var_type, &other, "//", false)?;
         let (ojs, ot, ovd) = operand_parts(py, &other)?;
         Ok(RustVar {
             js_expr: format!("Math.floor({} / {ojs})", self.js_expr),
@@ -877,8 +874,9 @@ impl RustVar {
         field: Option<Bound<'_, PyAny>>,
     ) -> PyResult<RustVar> {
         let bool_ty = || PyBool::type_object_bound(py).into_any().unbind();
-        // Object membership is a key check with no field form.
-        if self.type_label(py).as_deref() == Some("dict") {
+        // Object membership is a key check with no field form. Classify via the
+        // bridge (var_type may be a generic `Mapping[..]` with no __name__).
+        if var_category(py, &self.var_type)? == "ObjectVar" {
             let (njs, _nt, nvd) = operand_parts(py, &needle)?;
             return Ok(RustVar {
                 js_expr: format!("{}.hasOwnProperty({njs})", self.js_expr),
@@ -970,20 +968,65 @@ impl RustVar {
     }
 
     /// Join an array into a string: `{arr}.join({sep})`, str result, doubling.
+    /// A literal array of literal strings folds to a single string literal.
     #[pyo3(signature = (separator = None))]
-    fn join(&self, py: Python<'_>, separator: Option<Bound<'_, PyAny>>) -> PyResult<RustVar> {
-        let (sjs, svd) = match separator {
+    fn join(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        separator: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let (sjs, svd) = match &separator {
             Some(s) => {
-                let (js, _t, vd) = operand_parts(py, &s)?;
+                let (js, _t, vd) = operand_parts(py, s)?;
                 (js, vd)
             }
             None => ("\"\"".to_owned(), None),
         };
-        Ok(RustVar {
-            js_expr: format!("{}.join({sjs})", self.js_expr),
-            var_type: PyString::type_object_bound(py).into_any().unbind(),
-            var_data: var_op_doubling(&[&self.var_data, &svd]),
-        })
+        // Literal-fold: a LiteralArrayVar of all literal-string elements joined
+        // by a literal separator collapses to a single string literal (matches
+        // ArrayVar.join's optimization, which also drops element var_data).
+        if let Some(sep_str) = literal_string_value_of(py, separator.as_ref())? {
+            if let Ok(lit) = slf.downcast::<RustLiteralVar>() {
+                let value = lit.borrow().var_value.clone_ref(py);
+                let value = value.bind(py);
+                if value.is_instance_of::<PyList>()
+                    || value.is_instance_of::<pyo3::types::PyTuple>()
+                {
+                    let mut parts: Vec<String> = Vec::new();
+                    let mut all_literal = true;
+                    for elem in value.iter()? {
+                        match literal_string_value(py, &elem?)? {
+                            Some(s) => parts.push(s),
+                            None => {
+                                all_literal = false;
+                                break;
+                            }
+                        }
+                    }
+                    if all_literal {
+                        let joined = parts.join(&sep_str);
+                        let lit_cls = RustLiteralVar::type_object_bound(py);
+                        return RustLiteralVar::create(
+                            &lit_cls,
+                            py,
+                            PyString::new_bound(py, &joined).into_any(),
+                            None,
+                        );
+                    }
+                }
+            }
+        }
+        let base_js = slf.borrow().js_expr.clone();
+        let base_vd = slf.borrow().var_data.clone();
+        Ok(Py::new(
+            py,
+            RustVar {
+                js_expr: format!("{base_js}.join({sjs})"),
+                var_type: PyString::type_object_bound(py).into_any().unbind(),
+                var_data: var_op_doubling(&[&base_vd, &svd]),
+            },
+        )?
+        .into_any())
     }
 
     /// Object keys: `Object.keys({obj} ?? {})`, list result, doubling.
@@ -1080,6 +1123,16 @@ impl RustVar {
     /// result type is `a_type | b_type` (computed via Python's `|` so the
     /// rendered type matches exactly), doubling var_data.
     fn array_concat(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<RustVar> {
+        // Array concatenation requires an array operand (matches
+        // ArrayVar.__add__'s isinstance(other, ArrayVar) guard).
+        if !is_array_operand(py, other)? {
+            return Err(unsupported_operand_error(
+                py,
+                "+",
+                "ArrayVar",
+                &operand_type_name(other),
+            ));
+        }
         let (ojs, ot, ovd) = operand_parts(py, other)?;
         let var_type = self
             .var_type
@@ -1108,8 +1161,9 @@ impl RustVar {
         if self.is_str(py) {
             return self.str_mul(py, other);
         }
+        let self_cat = var_category(py, &self.var_type)?;
         // array * count -> repeat self by the count operand.
-        if var_category(py, &self.var_type)? == "ArrayVar" {
+        if self_cat == "ArrayVar" {
             let (cjs, cvd) = self.repeat_count_parts(py, other)?;
             return Ok(self.render_repeat(
                 &self.js_expr,
@@ -1119,8 +1173,10 @@ impl RustVar {
                 &cvd,
             ));
         }
-        // number * array -> repeat the array operand by self (the count).
-        if is_array_operand(py, other)? {
+        // number * array -> repeat the array operand by self (the count). Only a
+        // numeric receiver can be a count; otherwise fall through to arith, which
+        // raises for a non-numeric receiver.
+        if matches!(self_cat.as_str(), "NumberVar" | "BooleanVar") && is_array_operand(py, other)? {
             return self.repeat_array(py, other);
         }
         self.arith(py, other, "*", reflected)
@@ -1283,23 +1339,10 @@ impl RustVar {
         sym: &str,
         reflected: bool,
     ) -> PyResult<RustVar> {
-        // Arithmetic is a NumberVar operator: both the receiver and the operand
-        // must be numeric (a string/array/object receiver has no such operator
-        // in Python, and the operand must satisfy `isinstance(other,
-        // NUMBER_TYPES)`). `Any`-typed receivers are allowed (type unknown).
-        let receiver_ok = {
-            let cat = var_category(py, &self.var_type)?;
-            cat == "NumberVar" || cat == "BooleanVar" || cat == "Var"
-        };
-        if !receiver_ok || !is_number_operand(py, other)? {
-            let other_name = operand_type_name(other);
-            let (left, right) = if reflected {
-                (other_name.as_str(), "NumberVar")
-            } else {
-                ("NumberVar", other_name.as_str())
-            };
-            return Err(unsupported_operand_error(py, sym, left, right));
-        }
+        // Arithmetic is a NumberVar operator: both the receiver and operand must
+        // be numeric (a string/array/object receiver has no such operator in
+        // Python; `Any`-typed receivers are allowed).
+        check_numeric_binop(py, &self.var_type, other, sym, reflected)?;
         let (ojs, ot, ovd) = operand_parts(py, other)?;
         let (lhs, rhs) = if reflected {
             (ojs.as_str(), self.js_expr.as_str())
@@ -1348,6 +1391,33 @@ fn operand_parts(
     }
     let lit = rust_literal(py, value.clone())?;
     Ok((lit.js_expr, lit.var_type, lit.var_data))
+}
+
+/// Validate a numeric binary operator: both the receiver type and the operand
+/// must be numeric (or `Any`), else raise the operator's unsupported-operand
+/// error. Shared by `arith` and `__floordiv__` so a routed string/array RustVar
+/// receiver raises rather than rendering a nonsensical numeric expression.
+fn check_numeric_binop(
+    py: Python<'_>,
+    receiver_type: &Py<PyAny>,
+    other: &Bound<'_, PyAny>,
+    sym: &str,
+    reflected: bool,
+) -> PyResult<()> {
+    let receiver_ok = {
+        let cat = var_category(py, receiver_type)?;
+        cat == "NumberVar" || cat == "BooleanVar" || cat == "Var"
+    };
+    if !receiver_ok || !is_number_operand(py, other)? {
+        let other_name = operand_type_name(other);
+        let (left, right) = if reflected {
+            (other_name.as_str(), "NumberVar")
+        } else {
+            ("NumberVar", other_name.as_str())
+        };
+        return Err(unsupported_operand_error(py, sym, left, right));
+    }
+    Ok(())
 }
 
 /// The aggregate var_data of a "doubling" var_operation.
@@ -1497,6 +1567,38 @@ fn valid_repeat_count(
         }
     };
     Ok(is_number_var && (allow_float || !strict_float))
+}
+
+/// The literal string value of an element, if it is a `str` or a literal-string
+/// var (`LiteralStringVar` / a `RustLiteralVar` of `str` type) — used by the
+/// `join` literal-fold. `None` for any non-literal-string element.
+fn literal_string_value(py: Python<'_>, elem: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
+    if let Ok(s) = elem.extract::<String>() {
+        return Ok(Some(s));
+    }
+    // A literal-string var (Python LiteralStringVar or a str-typed RustLiteralVar,
+    // recognized via the isinstance bridge) carries its value in _var_value.
+    let string_lit = py
+        .import_bound("reflex_base.vars.sequence")?
+        .getattr("LiteralStringVar")?;
+    if elem.is_instance(&string_lit)? {
+        if let Ok(s) = elem.getattr("_var_value")?.extract::<String>() {
+            return Ok(Some(s));
+        }
+    }
+    Ok(None)
+}
+
+/// The literal string value of an optional separator (defaulting `None` to the
+/// empty string, as `join()` does); `None` if a non-literal separator.
+fn literal_string_value_of(
+    py: Python<'_>,
+    sep: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<String>> {
+    match sep {
+        None => Ok(Some(String::new())),
+        Some(s) => literal_string_value(py, s),
+    }
 }
 
 /// Whether `value` is an array operand (a `list`/`tuple`, or an `ArrayVar` —
@@ -1713,6 +1815,11 @@ fn render_js_string(s: &str) -> String {
 /// Returns:
 ///     The JS source for the value.
 fn render_literal_js(value: &Bound<'_, PyAny>) -> PyResult<String> {
+    // A Var element (e.g. a state var inside a literal list/dict) renders as its
+    // JS expression — matches `str(LiteralVar.create(element))`.
+    if value.hasattr("_js_expr")? && value.hasattr("_var_type")? {
+        return Ok(value.getattr("_js_expr")?.str()?.to_string());
+    }
     if value.is_none() {
         return Ok("null".to_owned());
     }
@@ -1742,7 +1849,13 @@ fn render_literal_js(value: &Bound<'_, PyAny>) -> PyResult<String> {
         return Ok(value.str()?.to_string());
     }
     if value.is_instance_of::<PyString>() {
-        return Ok(render_js_string(&value.extract::<String>()?));
+        // A string carrying f-string markers (e.g. a dict/list value built from
+        // an f-string) decodes to its concat expression, not a quoted literal.
+        let s = value.extract::<String>()?;
+        if s.contains(VAR_OPENING_TAG) {
+            return Ok(rust_create_string(value.py(), s).js_expr);
+        }
+        return Ok(render_js_string(&s));
     }
     if let Ok(list) = value.downcast::<PyList>() {
         let items: PyResult<Vec<String>> = list.iter().map(|v| render_literal_js(&v)).collect();
@@ -1763,14 +1876,15 @@ fn render_literal_js(value: &Bound<'_, PyAny>) -> PyResult<String> {
             format!("({{ {} }})", pairs.join(", "))
         });
     }
-    let type_name = value
-        .get_type()
-        .name()
-        .map(|n| n.to_string())
-        .unwrap_or_else(|_| "?".to_owned());
-    Err(pyo3::exceptions::PyTypeError::new_err(format!(
-        "rust_literal: unsupported literal type {type_name}"
-    )))
+    // Exotic nested values (enums, Color, serializer-backed types, dataclasses,
+    // tuples, …) defer to the Python LiteralVar.create dispatch and render via
+    // its js_expr — so a list/dict of any element type renders faithfully.
+    let py = value.py();
+    let created = py
+        .import_bound("reflex_base.vars.base")?
+        .getattr("LiteralVar")?
+        .call_method1("create", (value,))?;
+    Ok(created.getattr("_js_expr")?.str()?.to_string())
 }
 
 /// The `_var_type` object for a literal value (matches `figure_out_type` for
@@ -1825,8 +1939,64 @@ pub fn rust_literal(py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<RustVar
     Ok(RustVar {
         js_expr: render_literal_js(&value)?,
         var_type: literal_var_type(py, &value)?,
-        var_data: None,
+        // A container literal aggregates the var_data of any embedded vars
+        // (matches LiteralArrayVar / LiteralObjectVar merging each element's
+        // _get_all_var_data_without_creating_var_dispatch).
+        var_data: collect_container_var_data(py, &value)?,
     })
+}
+
+/// Aggregate the var_data of vars embedded in a literal `list`/`dict` (recursing
+/// through nested containers), a plain merge of each element's
+/// `_get_all_var_data_without_creating_var_dispatch`. Returns `None` for scalars
+/// and pure (var-free) containers.
+fn collect_container_var_data(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Option<VarData>> {
+    let mut parts: Vec<VarData> = Vec::new();
+    let mut push = |elem: &Bound<'_, PyAny>, parts: &mut Vec<VarData>| -> PyResult<()> {
+        if let Some(vd) = element_dispatch_var_data(py, elem)? {
+            parts.push(vd);
+        }
+        Ok(())
+    };
+    if let Ok(dict) = value.downcast::<PyDict>() {
+        for (k, v) in dict.iter() {
+            push(&k, &mut parts)?;
+            push(&v, &mut parts)?;
+        }
+    } else if value.is_instance_of::<PyList>() || value.is_instance_of::<pyo3::types::PyTuple>() {
+        for elem in value.iter()? {
+            push(&elem?, &mut parts)?;
+        }
+    } else {
+        return Ok(None);
+    }
+    Ok(VarData::merge(parts.iter().map(Some)).ok().flatten())
+}
+
+/// The var_data of one literal element (matches
+/// `LiteralVar._get_all_var_data_without_creating_var_dispatch`): a Var's own
+/// var_data, a nested container's aggregate, else `None`.
+fn element_dispatch_var_data(py: Python<'_>, elem: &Bound<'_, PyAny>) -> PyResult<Option<VarData>> {
+    if elem.hasattr("_js_expr")? && elem.hasattr("_var_type")? {
+        return convert_var_data(&elem.call_method0("_get_all_var_data")?);
+    }
+    if elem.downcast::<PyDict>().is_ok()
+        || elem.is_instance_of::<PyList>()
+        || elem.is_instance_of::<pyo3::types::PyTuple>()
+    {
+        return collect_container_var_data(py, elem);
+    }
+    // Exotic scalars (Color, serializer-backed, …) defer to the Python dispatch
+    // so their var_data (e.g. Color imports) is captured.
+    let dispatched = py
+        .import_bound("reflex_base.vars.base")?
+        .getattr("LiteralVar")?
+        .getattr("_get_all_var_data_without_creating_var_dispatch")?
+        .call1((elem,))?;
+    convert_var_data(&dispatched)
 }
 
 /// Build a raw `RustVar` from an explicit JS expression and var type.
