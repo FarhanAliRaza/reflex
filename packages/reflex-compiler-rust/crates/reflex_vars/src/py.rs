@@ -198,13 +198,15 @@ impl RustVar {
             .unwrap_or_default()
     }
 
-    /// A copy with no var_data (matches `Var._without_data`).
-    fn _without_data(&self, py: Python<'_>) -> RustVar {
-        RustVar {
-            js_expr: self.js_expr.clone(),
-            var_type: self.var_type.clone_ref(py),
-            var_data: None,
-        }
+    /// A copy with no var_data (matches `Var._without_data`). Preserves a
+    /// `RustLiteralVar`'s concrete class and value (Python `dataclasses.replace`
+    /// keeps the class).
+    fn _without_data(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let (js_expr, var_type) = {
+            let b = slf.borrow();
+            (b.js_expr.clone(), b.var_type.clone_ref(py))
+        };
+        rebuild_like(slf, py, js_expr, var_type, None)
     }
 
     /// Return this var as its guessed typed form (matches `Var.guess_type`).
@@ -220,12 +222,12 @@ impl RustVar {
     /// var_data. Unsupported `_var_is_local` / `_var_is_string` kwargs raise.
     #[pyo3(signature = (_var_type=None, merge_var_data=None, **kwargs))]
     fn _replace(
-        &self,
+        slf: &Bound<'_, Self>,
         py: Python<'_>,
         _var_type: Option<Py<PyAny>>,
         merge_var_data: Option<Bound<'_, PyAny>>,
         kwargs: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<RustVar> {
+    ) -> PyResult<Py<PyAny>> {
         for bad in [
             "_var_is_local",
             "_var_is_string",
@@ -241,11 +243,12 @@ impl RustVar {
                 }
             }
         }
-        let var_type = _var_type.unwrap_or_else(|| self.var_type.clone_ref(py));
+        let b = slf.borrow();
+        let var_type = _var_type.unwrap_or_else(|| b.var_type.clone_ref(py));
         let kw_var_data = kwargs.and_then(|k| k.get_item("_var_data").ok().flatten());
         let base_vd: Option<VarData> = match kw_var_data {
             Some(vd) => convert_var_data(&vd)?,
-            None => self.var_data.clone(),
+            None => b.var_data.clone(),
         };
         let mvd: Option<VarData> = match merge_var_data {
             Some(m) => convert_var_data(&m)?,
@@ -256,13 +259,10 @@ impl RustVar {
             .flatten();
         let js_expr = match kwargs.and_then(|k| k.get_item("_js_expr").ok().flatten()) {
             Some(j) => j.extract()?,
-            None => self.js_expr.clone(),
+            None => b.js_expr.clone(),
         };
-        Ok(RustVar {
-            js_expr,
-            var_type,
-            var_data,
-        })
+        drop(b);
+        rebuild_like(slf, py, js_expr, var_type, var_data)
     }
 
     /// Bind this var to a state (matches `Var._var_set_state`): renders
@@ -1338,6 +1338,40 @@ fn var_type_error(py: Python<'_>, msg: &str) -> PyErr {
         ),
         Err(_) => pyo3::exceptions::PyTypeError::new_err(msg.to_owned()),
     }
+}
+
+/// Rebuild a var with new base fields, preserving the concrete class.
+///
+/// When `slf` is a `RustLiteralVar`, the result is a `RustLiteralVar` carrying
+/// the same `_var_value` (matches Python `dataclasses.replace`, which keeps the
+/// class — so a literal stays a literal through `_replace` / `_without_data`).
+/// Otherwise a plain `RustVar` is built.
+fn rebuild_like(
+    slf: &Bound<'_, RustVar>,
+    py: Python<'_>,
+    js_expr: String,
+    var_type: Py<PyAny>,
+    var_data: Option<VarData>,
+) -> PyResult<Py<PyAny>> {
+    if let Ok(lit) = slf.downcast::<RustLiteralVar>() {
+        let var_value = lit.borrow().var_value.clone_ref(py);
+        let init = pyo3::PyClassInitializer::from(RustVar {
+            js_expr,
+            var_type,
+            var_data,
+        })
+        .add_subclass(RustLiteralVar { var_value });
+        return Ok(Py::new(py, init)?.into_any());
+    }
+    Ok(Py::new(
+        py,
+        RustVar {
+            js_expr,
+            var_type,
+            var_data,
+        },
+    )?
+    .into_any())
 }
 
 /// Whether `value` is a numeric operand (matches `isinstance(value,
