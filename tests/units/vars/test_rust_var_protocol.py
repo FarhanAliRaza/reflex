@@ -159,3 +159,39 @@ def test_create_literal() -> None:
     c = RustVar.create(5)
     assert c._js_expr == "5"
     assert c._decode() == 5
+
+
+def test_get_setter_name_for_name() -> None:
+    """``_get_setter_name_for_name`` prefixes with ``set_``."""
+    assert RustVar._get_setter_name_for_name("count") == Var._get_setter_name_for_name(
+        "count"
+    )
+
+
+@pytest.mark.parametrize("var_type", [int, float, str])
+def test_get_setter_metadata(var_type: type) -> None:
+    """``_get_setter`` returns a function with the same qualname/annotations/sig."""
+    import inspect
+
+    py_setter = Var(_js_expr="state.v", _var_type=var_type)._get_setter("v")
+    rust_setter = RustVar("state.v", var_type, None)._get_setter("v")
+    assert rust_setter.__qualname__ == py_setter.__qualname__
+    assert rust_setter.__name__ == py_setter.__name__
+    assert rust_setter.__annotations__ == py_setter.__annotations__
+    assert str(inspect.signature(rust_setter)) == str(inspect.signature(py_setter))
+
+
+@pytest.mark.parametrize(
+    ("var_type", "value", "expected"),
+    [(int, "42", 42), (float, "1.5", 1.5), (str, 42, 42)],
+)
+def test_get_setter_behavior(var_type: type, value: object, expected: object) -> None:
+    """The setter coerces numeric values and sets the attribute."""
+
+    class _S:
+        pass
+
+    py_obj, rust_obj = _S(), _S()
+    Var(_js_expr="state.v", _var_type=var_type)._get_setter("v")(py_obj, value)
+    RustVar("state.v", var_type, None)._get_setter("v")(rust_obj, value)
+    assert rust_obj.v == py_obj.v == expected

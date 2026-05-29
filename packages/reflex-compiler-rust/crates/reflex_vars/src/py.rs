@@ -336,6 +336,28 @@ impl RustVar {
         ))
     }
 
+    /// The setter-function-name for a var name (matches
+    /// `Var._get_setter_name_for_name`): `set_<name>`.
+    #[staticmethod]
+    fn _get_setter_name_for_name(py: Python<'_>, name: &str) -> PyResult<String> {
+        let prefix: String = py
+            .import_bound("reflex_base.constants")?
+            .getattr("SETTER_PREFIX")?
+            .extract()?;
+        Ok(format!("{prefix}{name}"))
+    }
+
+    /// The var's setter function (matches `Var._get_setter`): a real Python
+    /// callable that mutates state. Built by the standalone Python factory so it
+    /// carries the `__qualname__` / `__annotations__` / signature the event
+    /// machinery reads.
+    fn _get_setter(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
+        py.import_bound("reflex_base.vars._setter")?
+            .getattr("make_setter")?
+            .call1((self.var_type.bind(py), name, &self.js_expr))
+            .map(|f| f.unbind())
+    }
+
     /// Create a var from a value (matches `Var.create`): an existing Var passes
     /// through unchanged, otherwise a literal is created. Delegates to
     /// `RustLiteralVar.create`, which implements the same pass-through + literal
