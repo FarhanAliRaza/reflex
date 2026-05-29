@@ -1105,6 +1105,63 @@ impl PyVarData {
             .map(|inner| PyVarData { inner }))
     }
 
+    /// Build the var_data for a state field — the reactive leaf's
+    /// `useContext` hook + StateContexts/useContext imports. Drop-in for
+    /// `VarData.from_state`.
+    #[staticmethod]
+    #[pyo3(signature = (state, field_name = String::new()))]
+    fn from_state(state: Bound<'_, PyAny>, field_name: String) -> PyResult<PyVarData> {
+        let state_name = match state.extract::<String>() {
+            Ok(s) => s,
+            Err(_) => state.call_method0("get_full_name")?.extract()?,
+        };
+        let mangled = state_name.replace('.', "__");
+        let hook = format!("const {mangled} = useContext(StateContexts.{mangled})");
+        Ok(PyVarData {
+            inner: VarData {
+                state: state_name,
+                field_name,
+                imports: vec![
+                    (
+                        "$/utils/context".to_owned(),
+                        vec![ImportVar::new("StateContexts")],
+                    ),
+                    ("react".to_owned(), vec![ImportVar::new("useContext")]),
+                ],
+                hooks: vec![hook],
+                deps: Vec::new(),
+                position: None,
+                components: Vec::new(),
+            },
+        })
+    }
+
+    /// Imports as a mutable dict `{lib: [ImportVar, ...]}` (drop-in for
+    /// `old_school_imports`).
+    fn old_school_imports(&self) -> Vec<(String, Vec<PyImportVar>)> {
+        self.imports()
+    }
+
+    #[getter]
+    fn position(&self, py: Python<'_>) -> Py<PyAny> {
+        py.None()
+    }
+
+    #[getter]
+    fn components(&self) -> Vec<PyObject> {
+        Vec::new()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "VarData(state={:?}, field_name={:?}, hooks={} imports={})",
+            self.inner.state,
+            self.inner.field_name,
+            self.inner.hooks.len(),
+            self.inner.imports.len()
+        )
+    }
+
     /// Truthiness — `False` when every field is empty (matches `__bool__`).
     fn __bool__(&self) -> bool {
         !self.inner.is_empty()
