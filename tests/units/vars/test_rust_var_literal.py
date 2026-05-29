@@ -123,6 +123,38 @@ OPERATOR_CASES = {
 }
 
 
+# --- string-method + casting slice ---
+# String methods compose on the same doubling var_op primitive Python uses
+# (length = split().length(); mul = (split() * n).join()), so the import
+# multiplicity (2/4/8/16) falls out by construction. Casting keeps js_expr +
+# var_data and only changes var_type.
+def _name() -> object:
+    """A Rust str leaf mirroring ``_GoldenState.name`` (with var_data).
+
+    Returns:
+        A RustVar equivalent to ``_GoldenState.name``.
+    """
+    return _native.rust_from_python_var(_GoldenState.name)
+
+
+STRING_CASES = {
+    "str_add": lambda: _name() + "!",
+    "str_radd": lambda: "hello " + _name(),
+    "str_mul": lambda: _name() * 2,
+    "str_lower": lambda: _name().lower(),
+    "str_upper": lambda: _name().upper(),
+    "str_capitalize": lambda: _name().capitalize(),
+    "str_length": lambda: _name().length(),
+    "str_contains": lambda: _name().contains("a"),
+    "str_startswith": lambda: _name().startswith("a"),
+    "str_split": lambda: _name().split(","),
+    "str_getitem": lambda: _name()[0],
+    "to_str": lambda: _num().to(str),
+    "to_int": lambda: _native.rust_raw_var("x", object).to(int),
+    "to_bool": lambda: _native.rust_raw_var("x", object).to(bool),
+}
+
+
 @pytest.mark.parametrize("key", sorted(OPERATOR_CASES))
 def test_rust_operator_matches_golden(key: str, golden: dict) -> None:
     """A Rust operator reproduces the golden record byte-for-byte.
@@ -131,6 +163,12 @@ def test_rust_operator_matches_golden(key: str, golden: dict) -> None:
     merge / import multiplicity is validated alongside the rendering.
     """
     assert _record(OPERATOR_CASES[key]()) == golden[key]
+
+
+@pytest.mark.parametrize("key", sorted(STRING_CASES))
+def test_rust_string_and_cast_matches_golden(key: str, golden: dict) -> None:
+    """A Rust string method / cast reproduces the golden record byte-for-byte."""
+    assert _record(STRING_CASES[key]()) == golden[key]
 
 
 def test_seeded_leaf_matches_golden(golden: dict) -> None:

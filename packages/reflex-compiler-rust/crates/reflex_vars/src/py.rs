@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use pyo3::basic::CompareOp;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyFloat, PyInt, PyString};
+use pyo3::types::{PyBool, PyFloat, PyInt, PyList, PyString};
 use pyo3::PyTypeInfo;
 
 use crate::var::Var;
@@ -82,10 +82,16 @@ impl RustVar {
     // rendering + var_type).
 
     fn __add__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        if self.is_str(py) {
+            return self.str_concat(py, &other, false);
+        }
         self.arith(py, &other, "+", false)
     }
 
     fn __radd__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        if self.is_str(py) {
+            return self.str_concat(py, &other, true);
+        }
         self.arith(py, &other, "+", true)
     }
 
@@ -98,10 +104,16 @@ impl RustVar {
     }
 
     fn __mul__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        if self.is_str(py) {
+            return self.str_mul(py, &other);
+        }
         self.arith(py, &other, "*", false)
     }
 
     fn __rmul__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        if self.is_str(py) {
+            return self.str_mul(py, &other);
+        }
         self.arith(py, &other, "*", true)
     }
 
@@ -198,9 +210,160 @@ impl RustVar {
             var_data: binary_var_data(&self.var_data, &ovd),
         })
     }
+
+    // --- casting ---
+
+    /// Cast to another var type (`Var.to`). Keeps the JS expression and
+    /// var_data; only the var_type changes (matches `ToOperation`, which merges
+    /// var_data exactly once).
+    fn to(&self, output: Py<PyAny>) -> RustVar {
+        RustVar {
+            js_expr: self.js_expr.clone(),
+            var_type: output,
+            var_data: var_op_plain(&[&self.var_data]),
+        }
+    }
+
+    // --- string methods (mirror StringVar in vars/sequence.py) ---
+    // These assume a string receiver; the typed Python facade dispatches by
+    // type, which the cutover preserves via the type-tagged var_type.
+
+    fn lower(&self, py: Python<'_>) -> RustVar {
+        self.str_unary_op(py, |s| format!("{s}.toLowerCase()"))
+    }
+
+    fn upper(&self, py: Python<'_>) -> RustVar {
+        self.str_unary_op(py, |s| format!("{s}.toUpperCase()"))
+    }
+
+    fn capitalize(&self, py: Python<'_>) -> RustVar {
+        self.str_unary_op(py, |s| {
+            format!("(((s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase())({s}))")
+        })
+    }
+
+    fn contains(&self, py: Python<'_>, needle: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        // str.includes — for the string receiver. bool result, doubling.
+        let (njs, _nt, nvd) = operand_parts(py, &needle)?;
+        Ok(RustVar {
+            js_expr: format!("{}.includes({njs})", self.js_expr),
+            var_type: PyBool::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_doubling(&[&self.var_data, &nvd]),
+        })
+    }
+
+    fn startswith(&self, py: Python<'_>, prefix: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let (pjs, _pt, pvd) = operand_parts(py, &prefix)?;
+        Ok(RustVar {
+            js_expr: format!("{}.startsWith({pjs})", self.js_expr),
+            var_type: PyBool::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_doubling(&[&self.var_data, &pvd]),
+        })
+    }
+
+    /// Split into an array. `string_split_operation`: `{s}.split({sep})`.
+    #[pyo3(signature = (separator = None))]
+    fn split(&self, py: Python<'_>, separator: Option<Bound<'_, PyAny>>) -> PyResult<RustVar> {
+        self.str_split(py, separator.as_ref())
+    }
+
+    /// String length is `split("").length` — two stacked doubling ops, so the
+    /// var_data multiplies twice (the corpus `str_length` carries 8 imports).
+    fn length(&self, py: Python<'_>) -> PyResult<RustVar> {
+        let split = self.str_split(py, None)?;
+        Ok(RustVar {
+            js_expr: format!("{}.length", split.js_expr),
+            var_type: PyInt::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_doubling(&[&split.var_data]),
+        })
+    }
+
+    fn __getitem__(&self, py: Python<'_>, index: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        // String item: `{s}?.at?.({i})` via `{string}` (doubling).
+        let (ijs, _it, ivd) = operand_parts(py, &index)?;
+        Ok(RustVar {
+            js_expr: format!("{}?.at?.({ijs})", self.js_expr),
+            var_type: PyString::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_doubling(&[&self.var_data, &ivd]),
+        })
+    }
 }
 
 impl RustVar {
+    /// Whether this var's type is the Python `str` builtin.
+    fn is_str(&self, py: Python<'_>) -> bool {
+        self.var_type
+            .bind(py)
+            .is(&PyString::type_object_bound(py).into_any())
+    }
+
+    /// Build a unary string→string op `f(self)` with doubling var_data.
+    fn str_unary_op(&self, py: Python<'_>, render: impl Fn(&str) -> String) -> RustVar {
+        RustVar {
+            js_expr: render(&self.js_expr),
+            var_type: PyString::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_doubling(&[&self.var_data]),
+        }
+    }
+
+    /// `string_split_operation`: `{s}.split({sep})`, list result, doubling.
+    /// A `None` separator defaults to the empty string (`split("")`).
+    fn str_split(&self, py: Python<'_>, separator: Option<&Bound<'_, PyAny>>) -> PyResult<RustVar> {
+        let (sjs, svd) = match separator {
+            Some(s) => {
+                let (js, _t, vd) = operand_parts(py, s)?;
+                (js, vd)
+            }
+            None => ("\"\"".to_owned(), None),
+        };
+        Ok(RustVar {
+            js_expr: format!("{}.split({sjs})", self.js_expr),
+            var_type: PyList::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_doubling(&[&self.var_data, &svd]),
+        })
+    }
+
+    /// String concatenation (`ConcatVarOperation`): `({a}+{b})`, str, plain
+    /// (single merge — no doubling, so the corpus `str_add` carries 2 imports).
+    fn str_concat(
+        &self,
+        py: Python<'_>,
+        other: &Bound<'_, PyAny>,
+        reflected: bool,
+    ) -> PyResult<RustVar> {
+        let (ojs, _ot, ovd) = operand_parts(py, other)?;
+        let (a, b) = if reflected {
+            (ojs.as_str(), self.js_expr.as_str())
+        } else {
+            (self.js_expr.as_str(), ojs.as_str())
+        };
+        Ok(RustVar {
+            js_expr: format!("({a}+{b})"),
+            var_type: PyString::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_plain(&[&self.var_data, &ovd]),
+        })
+    }
+
+    /// String repeat: `(self.split() * n).join("")` — three stacked doubling
+    /// ops (split, repeat, join), so var_data multiplies three times (the
+    /// corpus `str_mul` carries 16 imports).
+    fn str_mul(&self, py: Python<'_>, n: &Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let split = self.str_split(py, None)?;
+        let (njs, _nt, nvd) = operand_parts(py, n)?;
+        let repeat = RustVar {
+            js_expr: format!(
+                "Array.from({{ length: {njs} }}).flatMap(() => {})",
+                split.js_expr
+            ),
+            var_type: PyList::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_doubling(&[&split.var_data, &nvd]),
+        };
+        Ok(RustVar {
+            js_expr: format!("{}.join(\"\")", repeat.js_expr),
+            var_type: PyString::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_doubling(&[&repeat.var_data]),
+        })
+    }
     /// Build a binary arithmetic op `(lhs sym rhs)`, result type unionized.
     ///
     /// `reflected` swaps operand order (the `__r*__` reflected dunders), so
@@ -254,22 +417,44 @@ fn operand_parts(
     Ok((lit.js_expr, lit.var_type, lit.var_data))
 }
 
-/// The aggregate var_data of a binary operation.
+/// The aggregate var_data of a "doubling" var_operation.
 ///
-/// Reproduces Python's double-merge: `own = merge(a, b)` then the result is
-/// `merge(own, a, b)`. Since imports concatenate, each operand's imports appear
-/// twice — matching the multiplicity the Python Var produces.
-fn binary_var_data(a: &Option<VarData>, b: &Option<VarData>) -> Option<VarData> {
-    let own = VarData::merge([a.as_ref(), b.as_ref()]).ok().flatten();
-    VarData::merge([own.as_ref(), a.as_ref(), b.as_ref()])
+/// Reproduces Python's `CustomVarOperation._cached_get_all_var_data`: every
+/// operand appears once as a stored arg, plus once more inside `_return`
+/// (because the JS template embeds it via `{x}`/`__format__`, which carries the
+/// operand's var_data). So `get_all = merge(*args, merge(*args))`. Since
+/// imports concatenate, each operand's imports appear twice — the 2/4/8/16
+/// multiplicity the Python Var produces, and it stacks across composed ops.
+fn var_op_doubling(args: &[&Option<VarData>]) -> Option<VarData> {
+    let own = VarData::merge(args.iter().map(|a| a.as_ref()))
+        .ok()
+        .flatten();
+    let mut parts: Vec<Option<&VarData>> = args.iter().map(|a| a.as_ref()).collect();
+    parts.push(own.as_ref());
+    VarData::merge(parts).ok().flatten()
+}
+
+/// The aggregate var_data of a "plain" operation — a single merge of operands,
+/// no doubling.
+///
+/// Used where the JS template references operands via `{x!s}` (no embedded
+/// var_data, e.g. `array_item`), and by `ToOperation` casts and
+/// `ConcatVarOperation` (string `+` / f-strings), which merge their inputs
+/// exactly once.
+fn var_op_plain(args: &[&Option<VarData>]) -> Option<VarData> {
+    VarData::merge(args.iter().map(|a| a.as_ref()))
         .ok()
         .flatten()
 }
 
-/// The aggregate var_data of a unary operation (`merge(merge(a), a)`).
+/// The aggregate var_data of a binary doubling op (both operands embedded).
+fn binary_var_data(a: &Option<VarData>, b: &Option<VarData>) -> Option<VarData> {
+    var_op_doubling(&[a, b])
+}
+
+/// The aggregate var_data of a unary doubling op.
 fn unary_var_data(a: &Option<VarData>) -> Option<VarData> {
-    let own = VarData::merge([a.as_ref()]).ok().flatten();
-    VarData::merge([own.as_ref(), a.as_ref()]).ok().flatten()
+    var_op_doubling(&[a])
 }
 
 /// Combine two number var-types into the result type of an arithmetic op.
