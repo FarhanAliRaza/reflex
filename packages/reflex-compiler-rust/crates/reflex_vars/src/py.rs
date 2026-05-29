@@ -358,6 +358,70 @@ impl RustVar {
             .map(|f| f.unbind())
     }
 
+    /// Create an integer range array var (matches `Var.range` / `ArrayVar.range`
+    /// / `array_range_operation`).
+    ///
+    /// `range(stop)` -> `[0, stop)`; `range(start, stop[, step])`. Each endpoint
+    /// must be an `int` or a `RustVar` (the unified numeric var), else a
+    /// `VarTypeError` is raised with all three operand type names. Renders the
+    /// `Array.from(...)` template; var_data is the plain merge of the
+    /// start/stop/step operands.
+    #[classmethod]
+    #[pyo3(signature = (first_endpoint, second_endpoint=None, step=None))]
+    fn range(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        first_endpoint: Bound<'_, PyAny>,
+        second_endpoint: Option<Bound<'_, PyAny>>,
+        step: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<RustVar> {
+        let is_endpoint =
+            |o: &Bound<'_, PyAny>| o.is_instance_of::<PyInt>() || o.downcast::<RustVar>().is_ok();
+        let valid = is_endpoint(&first_endpoint)
+            && second_endpoint.as_ref().map_or(true, &is_endpoint)
+            && step.as_ref().map_or(true, &is_endpoint);
+        if !valid {
+            let name = |o: Option<&Bound<'_, PyAny>>| {
+                o.map_or_else(
+                    || "NoneType".to_owned(),
+                    |b| {
+                        b.get_type()
+                            .name()
+                            .map(|s| s.to_string())
+                            .unwrap_or_default()
+                    },
+                )
+            };
+            return Err(var_type_error(
+                py,
+                &format!(
+                    "Unsupported Operand type(s) for range: {}, {}, {}",
+                    name(Some(&first_endpoint)),
+                    name(second_endpoint.as_ref()),
+                    name(step.as_ref()),
+                ),
+            ));
+        }
+        // range(stop) -> [0, stop); range(start, stop) -> [start, stop).
+        let (start, stop) = match second_endpoint {
+            None => (0i64.into_py(py).into_bound(py), first_endpoint),
+            Some(end) => (first_endpoint, end),
+        };
+        let step = step.unwrap_or_else(|| 1i64.into_py(py).into_bound(py));
+        let (start_js, _, start_vd) = operand_parts(py, &start)?;
+        let (stop_js, _, stop_vd) = operand_parts(py, &stop)?;
+        let (step_js, _, step_vd) = operand_parts(py, &step)?;
+        let js_expr = format!(
+            "Array.from({{ length: Math.ceil(({stop_js} - {start_js}) / {step_js}) }}, (_, i) => {start_js} + i * {step_js})"
+        );
+        let var_type = py.eval_bound("list[int]", None, None)?.into_any().unbind();
+        Ok(RustVar {
+            js_expr,
+            var_type,
+            var_data: var_op_plain(&[&start_vd, &stop_vd, &step_vd]),
+        })
+    }
+
     /// Create a var from a value (matches `Var.create`): an existing Var passes
     /// through unchanged, otherwise a literal is created. Delegates to
     /// `RustLiteralVar.create`, which implements the same pass-through + literal

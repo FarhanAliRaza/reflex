@@ -161,6 +161,41 @@ def test_create_literal() -> None:
     assert c._decode() == 5
 
 
+@pytest.mark.parametrize("args", [(5,), (2, 5), (1, 10, 2), (0, 100, 5)])
+def test_range_int(args: tuple) -> None:
+    """``Var.range`` with int endpoints renders the Array.from template."""
+    py_var = Var.range(*args)
+    rust_var = RustVar.range(*args)
+    assert rust_var._js_expr == py_var._js_expr
+    assert rust_var._var_type == py_var._var_type
+    assert rust_var._get_all_var_data() == py_var._get_all_var_data()
+
+
+def test_range_with_var() -> None:
+    """``Var.range`` with a numeric var endpoint keeps its var_data (single)."""
+    py_n = Var(
+        _js_expr="st.n",
+        _var_type=int,
+        _var_data=VarData(state="s", field_name="n", imports=_IMPORTS),
+    ).guess_type()
+    rust_n = RustVar(
+        "st.n", int, RustVarData(state="s", field_name="n", imports=_IMPORTS)
+    )
+    py_var = Var.range(py_n, 10)
+    rust_var = RustVar.range(rust_n, 10)
+    assert rust_var._js_expr == py_var._js_expr
+    assert rust_var._get_all_var_data() == py_var._get_all_var_data()
+
+
+def test_range_rejects_non_numeric() -> None:
+    """``Var.range`` raises ``VarTypeError`` with the same message for bad args."""
+    with pytest.raises(VarTypeError) as py_exc:
+        Var.range("x")
+    with pytest.raises(VarTypeError) as rust_exc:
+        RustVar.range("x")
+    assert str(rust_exc.value) == str(py_exc.value)
+
+
 def test_get_setter_name_for_name() -> None:
     """``_get_setter_name_for_name`` prefixes with ``set_``."""
     assert RustVar._get_setter_name_for_name("count") == Var._get_setter_name_for_name(
