@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use pyo3::basic::CompareOp;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyFloat, PyInt, PyList, PyString};
+use pyo3::types::{PyBool, PyFloat, PyInt, PyList, PyString, PyType};
 use pyo3::PyTypeInfo;
 
 use crate::var::Var;
@@ -1432,6 +1432,75 @@ impl PyImportVar {
     }
 }
 
+/// Rust-backed `LiteralVar` — a `Var` (RustVar) that also carries the original
+/// Python value it was built from. Mirrors `LiteralVar(Var)`: it **extends**
+/// `RustVar` (inheriting `_js_expr` / `_var_type` / `_get_all_var_data` / every
+/// operator) and adds `_var_value` plus the `create` dispatch.
+#[pyclass(
+    extends = RustVar,
+    frozen,
+    name = "RustLiteralVar",
+    module = "reflex_compiler_rust._native"
+)]
+pub struct RustLiteralVar {
+    var_value: Py<PyAny>,
+}
+
+#[pymethods]
+impl RustLiteralVar {
+    /// The original Python value this literal was created from.
+    #[getter]
+    fn _var_value(&self, py: Python<'_>) -> Py<PyAny> {
+        self.var_value.clone_ref(py)
+    }
+
+    /// `LiteralVar.create(value, _var_data=None)` — entirely in Rust.
+    ///
+    /// An existing Var passes through unchanged; a marker-encoded string
+    /// decodes into a concat; every other scalar / list / dict becomes a
+    /// literal. `_var_data` is merged into the result. Exotic types
+    /// (EventChain, serializer-backed, dataclasses) remain on the Python
+    /// dispatch and are layered in separately.
+    ///
+    /// Args:
+    ///     _cls: The class object (unused).
+    ///     py: The GIL token.
+    ///     value: The value to wrap.
+    ///     _var_data: Extra var_data to merge in.
+    ///
+    /// Returns:
+    ///     The value itself if already a Var, else a new `RustLiteralVar`.
+    #[classmethod]
+    #[pyo3(signature = (value, _var_data = None))]
+    fn create(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        value: Bound<'_, PyAny>,
+        _var_data: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        // An existing Var is returned as-is (matches `LiteralVar.create(Var)`).
+        if value.hasattr("_js_expr")? && value.hasattr("_var_type")? {
+            return Ok(value.unbind());
+        }
+        // Underlying RustVar: marker string -> concat, else scalar/list/dict.
+        let mut inner = match value.extract::<String>() {
+            Ok(s) if s.contains(VAR_OPENING_TAG) => rust_create_string(py, s),
+            _ => rust_literal(py, value.clone())?,
+        };
+        if let Some(vd) = _var_data {
+            if let Some(extra) = convert_var_data(&vd)? {
+                inner.var_data = VarData::merge([inner.var_data.as_ref(), Some(&extra)])
+                    .ok()
+                    .flatten();
+            }
+        }
+        let init = pyo3::PyClassInitializer::from(inner).add_subclass(RustLiteralVar {
+            var_value: value.unbind(),
+        });
+        Ok(Py::new(py, init)?.into_any())
+    }
+}
+
 /// One segment of a decoded marker string: a literal chunk or a referenced var.
 enum StrPart {
     Lit(String),
@@ -1776,6 +1845,7 @@ pub fn rust_assemble_event_chain_bundle(
 ///     `Ok(())` on success.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustVar>()?;
+    m.add_class::<RustLiteralVar>()?;
     m.add_class::<PyVarData>()?;
     m.add_class::<PyImportVar>()?;
     m.add_function(wrap_pyfunction!(rust_literal, m)?)?;
