@@ -1272,9 +1272,15 @@ impl RustVar {
         sym: &str,
         reflected: bool,
     ) -> PyResult<RustVar> {
-        // Numeric var operations require a numeric operand (matches the
-        // NumberVar operators' `isinstance(other, NUMBER_TYPES)` guard).
-        if !is_number_operand(py, other)? {
+        // Arithmetic is a NumberVar operator: both the receiver and the operand
+        // must be numeric (a string/array/object receiver has no such operator
+        // in Python, and the operand must satisfy `isinstance(other,
+        // NUMBER_TYPES)`). `Any`-typed receivers are allowed (type unknown).
+        let receiver_ok = {
+            let cat = var_category(py, &self.var_type)?;
+            cat == "NumberVar" || cat == "BooleanVar" || cat == "Var"
+        };
+        if !receiver_ok || !is_number_operand(py, other)? {
             let other_name = operand_type_name(other);
             let (left, right) = if reflected {
                 (other_name.as_str(), "NumberVar")
