@@ -58,6 +58,21 @@ def medium_page():
     )
 
 
+def static_page():
+    """Same shape, no Vars/events/foreach — isolates the Python component-
+    object build cost (the floor a Rust-Var system cannot touch)."""
+    return rx.vstack(
+        rx.heading("Bench"),
+        *(
+            rx.hstack(rx.text(f"Row {i} count=0"), rx.button(f"Btn {i}"))
+            for i in range(15)
+        ),
+        rx.text("a"),
+        rx.text("b"),
+        rx.text("c"),
+    )
+
+
 def _median_us(samples: list[int]) -> float:
     samples.sort()
     return samples[len(samples) // 2] / 1000.0
@@ -102,6 +117,25 @@ def main() -> int:
         sess.compile_page_from_arena(gather_arena(c), "Index", "/", compute_close=True)
         cache_hit.append(time.perf_counter_ns() - t)
     sess.set_emit_cache_enabled(False)
+
+    # Full-pipeline breakdown: where a Rust-Var rewrite would (and wouldn't)
+    # help. Construction = building the page (Vars + components + f-strings);
+    # static construction isolates the component-object floor.
+    construct, static = [], []
+    for _ in range(n):
+        t = time.perf_counter_ns()
+        medium_page()
+        construct.append(time.perf_counter_ns() - t)
+        t = time.perf_counter_ns()
+        static_page()
+        static.append(time.perf_counter_ns() - t)
+    c_all, c_static = _median_us(construct), _median_us(static)
+    g_total = _median_us(gather_total)
+    print("--- full pipeline (construct + compile) ---")
+    print(f"  component-object build (floor)    {c_static:8.1f} us  (Python; Rust-Var-immune)")
+    print(f"  var/event/foreach build           {c_all - c_static:8.1f} us  (Rust-Var attacks this)")
+    print(f"  compile (gather tail)             {g_total:8.1f} us  (Rust tail: parallel + Salsa)")
+    print(f"  FULL pipeline                     {c_all + g_total:8.1f} us\n")
 
     f, g, ch = _median_us(freeze), _median_us(gather_total), _median_us(cache_hit)
     print(f"FREEZE path                         median = {f:8.1f} us")
