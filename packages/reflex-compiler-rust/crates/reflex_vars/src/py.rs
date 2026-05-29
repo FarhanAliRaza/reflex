@@ -1590,6 +1590,139 @@ fn decode_marker_parts(value: &str) -> Vec<StrPart> {
     parts
 }
 
+/// Render one event arg/action value to JS (mirrors `_render_event_value`).
+///
+/// A Var contributes its cached `_js_expr`; `True`/`False` map to
+/// `true`/`false`; any other literal goes through the literal renderer (with a
+/// fallback to Python `LiteralVar.create` for exotic types).
+fn render_event_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<String> {
+    if let Ok(js) = value.getattr("_js_expr") {
+        return Ok(js.str()?.to_string());
+    }
+    if value.is_instance_of::<PyBool>() {
+        return Ok(if value.extract::<bool>()? {
+            "true"
+        } else {
+            "false"
+        }
+        .to_owned());
+    }
+    if let Ok(s) = render_literal_js(value) {
+        return Ok(s);
+    }
+    // Exotic value (custom serializer etc.) — defer to the Python literal path.
+    let lv = py.import_bound("reflex.vars")?.getattr("LiteralVar")?;
+    Ok(lv
+        .call_method1("create", (value,))?
+        .getattr("_js_expr")?
+        .str()?
+        .to_string())
+}
+
+/// Render an emit-style JS object literal `({ ["k"] : v, ... })` (mirrors
+/// `_js_object`): empty -> `({  })`.
+fn js_object(pairs: &[(String, String)]) -> String {
+    if pairs.is_empty() {
+        return "({  })".to_owned();
+    }
+    let inner: Vec<String> = pairs
+        .iter()
+        .map(|(k, v)| format!("[\"{k}\"] : {v}"))
+        .collect();
+    format!("({{ {} }})", inner.join(", "))
+}
+
+/// The ReflexEvent name for a handler (mirrors `_event_handler_name`):
+/// `state_full_name.fn_name` for state handlers, else `fn.__qualname__`.
+fn event_handler_name(handler: &Bound<'_, PyAny>) -> PyResult<String> {
+    if let Ok(sfn) = handler.getattr("state_full_name") {
+        let sfn: String = sfn.extract().unwrap_or_default();
+        if !sfn.is_empty() {
+            let fn_name: String = handler.getattr("fn")?.getattr("__name__")?.extract()?;
+            return Ok(format!("{sfn}.{fn_name}"));
+        }
+    }
+    handler.getattr("fn")?.getattr("__qualname__")?.extract()
+}
+
+/// Lambda arg names for a trigger's `args_spec` (`e` -> `_e`), via
+/// `inspect.signature` (mirrors `_arg_names`).
+fn arg_names(py: Python<'_>, args_spec: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    let sig = py
+        .import_bound("inspect")?
+        .call_method1("signature", (args_spec,))?;
+    let mut names = Vec::new();
+    for key in sig.getattr("parameters")?.call_method0("keys")?.iter()? {
+        names.push(format!("_{}", key?.extract::<String>()?));
+    }
+    Ok(names)
+}
+
+/// Assemble an `EventChain`'s JS, byte-identical to
+/// `LiteralVar.create(chain)._js_expr` (mirrors `_assemble_event_chain`).
+///
+/// Reads the raw chain pieces (handler names, each arg's cached `_js_expr`,
+/// event_actions, arg-names) and string-assembles the
+/// `(_e) => addEvents([ReflexEvent(...)], [_e], …)` form entirely in Rust.
+///
+/// Args:
+///     py: The GIL token.
+///     chain: The `EventChain`.
+///
+/// Returns:
+///     The rendered event-chain JS.
+#[pyfunction]
+pub fn rust_assemble_event_chain(py: Python<'_>, chain: Bound<'_, PyAny>) -> PyResult<String> {
+    let names = arg_names(py, &chain.getattr("args_spec")?)?;
+    let args_csv = names.join(", ");
+
+    let mut chain_ea_pairs = Vec::new();
+    for (k, v) in chain
+        .getattr("event_actions")?
+        .downcast::<pyo3::types::PyDict>()?
+        .iter()
+    {
+        chain_ea_pairs.push((k.extract::<String>()?, render_event_value(py, &v)?));
+    }
+    let chain_ea = js_object(&chain_ea_pairs);
+
+    let mut reis: Vec<String> = Vec::new();
+    for es in chain.getattr("events")?.iter()? {
+        let es = es?;
+        let name = event_handler_name(&es.getattr("handler")?)?;
+        let mut arg_pairs = Vec::new();
+        for a in es.getattr("args")?.iter()? {
+            let a = a?;
+            let key: String = a.get_item(0)?.getattr("_js_expr")?.str()?.to_string();
+            arg_pairs.push((key, render_event_value(py, &a.get_item(1)?)?));
+        }
+        let mut ea_pairs = Vec::new();
+        for (k, v) in es
+            .getattr("event_actions")?
+            .downcast::<pyo3::types::PyDict>()?
+            .iter()
+        {
+            ea_pairs.push((k.extract::<String>()?, render_event_value(py, &v)?));
+        }
+        reis.push(format!(
+            "(ReflexEvent(\"{name}\", {}, {}))",
+            js_object(&arg_pairs),
+            js_object(&ea_pairs)
+        ));
+    }
+
+    let body = if reis.len() == 1 {
+        format!("(addEvents([{}], [{args_csv}], {chain_ea}))", reis[0])
+    } else {
+        let inner: String = reis
+            .iter()
+            .map(|r| format!("(addEvents([{r}], [{args_csv}], {chain_ea}));"))
+            .collect();
+        format!("{{{inner}}}")
+    };
+    Ok(format!("(({args_csv}) => {body})"))
+}
+
 /// Register the Var bindings into the `_native` module.
 ///
 /// Args:
@@ -1605,5 +1738,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rust_raw_var, m)?)?;
     m.add_function(wrap_pyfunction!(rust_from_python_var, m)?)?;
     m.add_function(wrap_pyfunction!(rust_create_string, m)?)?;
+    m.add_function(wrap_pyfunction!(rust_assemble_event_chain, m)?)?;
     Ok(())
 }
