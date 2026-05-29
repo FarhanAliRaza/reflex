@@ -1948,7 +1948,7 @@ pub fn rust_assemble_event_chain(py: Python<'_>, chain: Bound<'_, PyAny>) -> PyR
         // with an ALWAYS-empty 3rd arg (chain actions go in the wrapper).
         if !es.hasattr("handler")? {
             let func = es.getattr("_js_expr")?.str()?.to_string();
-            statements.push(format!("({func}({call_args}))"));
+            statements.push(render_function_event(&func, &call_args));
             continue;
         }
         let name = event_handler_name(&es.getattr("handler")?)?;
@@ -2015,6 +2015,90 @@ fn assemble_chain_js(
             .collect()
     };
     finalize_chain(&arrow_args, &statements, chain_ea, &call_args)
+}
+
+/// Whether an expression begins with an inline arrow function (`x => …`,
+/// `(…) => …`, optionally `async`). Mirrors `_starts_with_arrow_function`.
+fn starts_with_arrow_function(expr: &str) -> bool {
+    if !expr.contains("=>") {
+        return false;
+    }
+    let mut expr = expr.trim_start();
+    if let Some(rem) = expr.strip_prefix("async") {
+        if rem.starts_with(char::is_whitespace) {
+            expr = rem.trim_start();
+        }
+    }
+    let Some(first) = expr.chars().next() else {
+        return false;
+    };
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    if first.is_ascii_alphabetic() || first == '_' || first == '$' {
+        let end = expr.find(|c: char| !ident(c)).unwrap_or(expr.len());
+        return expr[end..].trim_start().starts_with("=>");
+    }
+    if !expr.starts_with('(') {
+        return false;
+    }
+    let mut depth = 0i32;
+    let mut sd: Option<char> = None;
+    let mut esc = false;
+    for (i, ch) in expr.char_indices() {
+        if let Some(d) = sd {
+            if esc {
+                esc = false;
+            } else if ch == '\\' {
+                esc = true;
+            } else if ch == d {
+                sd = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => sd = Some(ch),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return expr[i + ch.len_utf8()..].trim_start().starts_with("=>");
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Whether `text` is wrapped in a single matching pair of parens (`((a))` /
+/// `(a)` -> true; `(a) + (b)` -> false). Mirrors `format.is_wrapped(_, "(")`.
+fn is_wrapped_parens(text: &str) -> bool {
+    if !(text.starts_with('(') && text.ends_with(')')) {
+        return false;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut depth = 0i32;
+    for &ch in &chars[..chars.len() - 1] {
+        if ch == '(' {
+            depth += 1;
+        } else if ch == ')' {
+            depth -= 1;
+        }
+        if depth == 0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Render a FunctionVar event's call `(func(args))`, wrapping an inline arrow
+/// `func` in parens first (matches `VarOperationCall._cached_var_name`).
+fn render_function_event(func: &str, call_args: &str) -> String {
+    let func_part = if starts_with_arrow_function(func) && !is_wrapped_parens(func) {
+        format!("({func})")
+    } else {
+        func.to_owned()
+    };
+    format!("({func_part}({call_args}))")
 }
 
 /// Argument forms for an event-chain trigger from its lambda arg names:
