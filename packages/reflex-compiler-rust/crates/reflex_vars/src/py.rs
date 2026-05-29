@@ -26,7 +26,7 @@ use pyo3::types::{PyBool, PyFloat, PyInt, PyList, PyString};
 use pyo3::PyTypeInfo;
 
 use crate::var::Var;
-use crate::var_data::{ImportVar, VarData};
+use crate::var_data::{normalize_import_lib, ImportVar, VarData};
 
 /// f-string marker tags — must match `REFLEX_VAR_OPENING_TAG` /
 /// `REFLEX_VAR_CLOSING_TAG` (constants/base.py) so a RustVar can be formatted
@@ -73,6 +73,45 @@ pub struct RustVar {
 
 #[pymethods]
 impl RustVar {
+    /// Construct a `Var` from a JS expression, type, and optional var_data —
+    /// the drop-in for the Python `Var(_js_expr=, _var_type=, _var_data=)`
+    /// dataclass constructor.
+    ///
+    /// Inline `<reflex.Var>` markers in `_js_expr` are decoded (tags stripped,
+    /// the referenced vars' var_data merged in), matching `Var.__post_init__`'s
+    /// call to `_decode_var_immutable`.
+    #[new]
+    #[pyo3(signature = (_js_expr, _var_type = None, _var_data = None))]
+    fn new(
+        py: Python<'_>,
+        _js_expr: String,
+        _var_type: Option<Py<PyAny>>,
+        _var_data: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<RustVar> {
+        let mut var_data = match _var_data {
+            Some(vd) => convert_var_data(&vd)?,
+            None => None,
+        };
+        let js_expr = if _js_expr.contains(VAR_OPENING_TAG) {
+            let (clean, embedded) = decode_markers_inline(&_js_expr);
+            var_data = VarData::merge([var_data.as_ref(), embedded.as_ref()])
+                .ok()
+                .flatten();
+            clean
+        } else {
+            _js_expr
+        };
+        let var_type = match _var_type {
+            Some(t) if !t.bind(py).is_none() => t,
+            _ => py.import_bound("typing")?.getattr("Any")?.unbind(),
+        };
+        Ok(RustVar {
+            js_expr,
+            var_type,
+            var_data,
+        })
+    }
+
     /// The finalized JS expression (matches the Python `_js_expr` field).
     #[getter]
     fn _js_expr(&self) -> &str {
@@ -882,6 +921,99 @@ fn convert_var_data(obj: &Bound<'_, PyAny>) -> PyResult<Option<VarData>> {
     }))
 }
 
+/// Parse the polymorphic `imports` constructor arg into the Rust shape.
+///
+/// Accepts `None`, a parsed tuple `((lib, (ImportVar, ...)), ...)`, or a dict
+/// `{lib: [ImportVar|str, ...]}` (mirrors `parse_imports`): internal libs are
+/// `$`-prefixed, and bare string tags become `ImportVar`s.
+fn parse_imports_arg(
+    imports: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Vec<(String, Vec<ImportVar>)>> {
+    let Some(obj) = imports else {
+        return Ok(Vec::new());
+    };
+    if obj.is_none() {
+        return Ok(Vec::new());
+    }
+    let mut out: Vec<(String, Vec<ImportVar>)> = Vec::new();
+    // dict {lib: [vars]} or parsed tuple ((lib, (vars,)), ...) — both iterate as
+    // (lib, vars) pairs when a dict is turned into .items(); detect dict first.
+    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> =
+        if let Ok(dict) = obj.downcast::<pyo3::types::PyDict>() {
+            dict.iter().collect()
+        } else {
+            let mut v = Vec::new();
+            for pair in obj.iter()? {
+                let pair = pair?;
+                v.push((pair.get_item(0)?, pair.get_item(1)?));
+            }
+            v
+        };
+    for (lib, vars) in pairs {
+        let lib = normalize_import_lib(&lib.extract::<String>()?);
+        let mut ivs = Vec::new();
+        for item in vars.iter()? {
+            let item = item?;
+            ivs.push(if let Ok(s) = item.extract::<String>() {
+                ImportVar::new(s)
+            } else {
+                convert_import_var(&item)?
+            });
+        }
+        match out.iter().position(|(m, _)| *m == lib) {
+            Some(i) => out[i].1.extend(ivs),
+            None => out.push((lib, ivs)),
+        }
+    }
+    Ok(out)
+}
+
+/// Parse the polymorphic `hooks` arg (str / list / dict) into an ordered,
+/// deduped `Vec<String>` (matches `dict.fromkeys(hooks)`).
+fn parse_hooks_arg(hooks: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<String>> {
+    let Some(obj) = hooks else {
+        return Ok(Vec::new());
+    };
+    if obj.is_none() {
+        return Ok(Vec::new());
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Ok(s) = obj.extract::<String>() {
+        out.push(s);
+        return Ok(out);
+    }
+    // dict iterates keys; list/tuple iterate values — both are hook strings.
+    let iter = if let Ok(dict) = obj.downcast::<pyo3::types::PyDict>() {
+        dict.keys().into_any()
+    } else {
+        obj.clone()
+    };
+    for h in iter.iter()? {
+        let h: String = h?.extract()?;
+        if seen.insert(h.clone()) {
+            out.push(h);
+        }
+    }
+    Ok(out)
+}
+
+/// Parse the `deps` arg (list of vars) into bare-expression `Var`s.
+fn parse_deps_arg(deps: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<Arc<Var>>> {
+    let Some(obj) = deps else {
+        return Ok(Vec::new());
+    };
+    if obj.is_none() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for d in obj.iter()? {
+        let js: String = d?.getattr("_js_expr")?.extract()?;
+        out.push(Arc::new(Var::new(js)));
+    }
+    Ok(out)
+}
+
 /// Convert a Python `ImportVar` into the Rust struct.
 ///
 /// Args:
@@ -919,6 +1051,81 @@ pub struct PyVarData {
 
 #[pymethods]
 impl PyVarData {
+    /// Drop-in for the Python `VarData(state, field_name, imports, hooks, deps,
+    /// position, components)` constructor. Accepts the polymorphic `imports`
+    /// (dict or parsed tuple) and `hooks` (str / list / dict) forms, applying
+    /// `$`-prefix normalization to internal libs (mirrors `parse_imports`).
+    #[new]
+    #[pyo3(signature = (
+        state = String::new(),
+        field_name = String::new(),
+        imports = None,
+        hooks = None,
+        deps = None,
+        position = None,
+        components = None,
+    ))]
+    fn new(
+        state: String,
+        field_name: String,
+        imports: Option<Bound<'_, PyAny>>,
+        hooks: Option<Bound<'_, PyAny>>,
+        deps: Option<Bound<'_, PyAny>>,
+        position: Option<Bound<'_, PyAny>>,
+        components: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<PyVarData> {
+        let _ = (position, components);
+        Ok(PyVarData {
+            inner: VarData {
+                state,
+                field_name,
+                imports: parse_imports_arg(imports.as_ref())?,
+                hooks: parse_hooks_arg(hooks.as_ref())?,
+                deps: parse_deps_arg(deps.as_ref())?,
+                position: None,
+                components: Vec::new(),
+            },
+        })
+    }
+
+    /// Merge any number of `VarData` (or `None`) into one — the drop-in for the
+    /// Python `VarData.merge(*all)` staticmethod.
+    #[staticmethod]
+    #[pyo3(signature = (*all))]
+    fn merge(all: Vec<Bound<'_, PyAny>>) -> PyResult<Option<PyVarData>> {
+        let mut datas: Vec<VarData> = Vec::new();
+        for obj in &all {
+            if let Some(vd) = convert_var_data(obj)? {
+                datas.push(vd);
+            }
+        }
+        Ok(VarData::merge(datas.iter().map(Some))
+            .ok()
+            .flatten()
+            .map(|inner| PyVarData { inner }))
+    }
+
+    /// Truthiness — `False` when every field is empty (matches `__bool__`).
+    fn __bool__(&self) -> bool {
+        !self.inner.is_empty()
+    }
+
+    fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.inner.state.hash(&mut h);
+        self.inner.field_name.hash(&mut h);
+        self.inner.hooks.hash(&mut h);
+        h.finish()
+    }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        other
+            .downcast::<PyVarData>()
+            .map(|o| o.borrow().inner == self.inner)
+            .unwrap_or(false)
+    }
+
     #[getter]
     fn state(&self) -> &str {
         &self.inner.state
@@ -980,6 +1187,37 @@ pub struct PyImportVar {
 
 #[pymethods]
 impl PyImportVar {
+    /// Drop-in for the Python `ImportVar(tag, is_default, alias, install,
+    /// render, package_path)` constructor.
+    #[new]
+    #[pyo3(signature = (
+        tag = None,
+        is_default = false,
+        alias = None,
+        install = true,
+        render = true,
+        package_path = "/".to_owned(),
+    ))]
+    fn new(
+        tag: Option<String>,
+        is_default: bool,
+        alias: Option<String>,
+        install: bool,
+        render: bool,
+        package_path: String,
+    ) -> PyImportVar {
+        PyImportVar {
+            inner: ImportVar {
+                tag,
+                is_default,
+                alias,
+                install,
+                render,
+                package_path,
+            },
+        }
+    }
+
     #[getter]
     fn tag(&self) -> Option<String> {
         self.inner.tag.clone()
@@ -1087,6 +1325,46 @@ pub fn rust_create_string(py: Python<'_>, value: String) -> RustVar {
 
 /// A stable `None` var_data to borrow for literal parts in the concat merge.
 static NONE_VAR_DATA: Option<VarData> = None;
+
+/// Decode `<reflex.Var>` markers in place: strip the tags (keeping the inline
+/// js_expr that follows each) and merge the referenced vars' var_data.
+///
+/// Mirrors `_decode_var_immutable` (base.py): unlike `rust_create_string`
+/// (which splits into a concat), this just removes the tags and aggregates the
+/// embedded var_data — the form `Var.__post_init__` applies to a raw js_expr.
+///
+/// Returns the cleaned js_expr and the merged var_data of all referenced vars.
+fn decode_markers_inline(value: &str) -> (String, Option<VarData>) {
+    let reg = var_registry().lock().ok();
+    let mut out = String::with_capacity(value.len());
+    let mut datas: Vec<VarData> = Vec::new();
+    let mut rest = value;
+    loop {
+        match rest.find(VAR_OPENING_TAG) {
+            None => {
+                out.push_str(rest);
+                break;
+            }
+            Some(open) => {
+                out.push_str(&rest[..open]);
+                let after_open = &rest[open + VAR_OPENING_TAG.len()..];
+                let Some(close) = after_open.find(VAR_CLOSING_TAG) else {
+                    out.push_str(&rest[open..]);
+                    break;
+                };
+                let id: i64 = after_open[..close].parse().unwrap_or(-1);
+                if let Some(Some((_js, Some(data)))) = reg.as_ref().map(|r| r.get(&id)) {
+                    datas.push(data.clone());
+                }
+                // Drop the tag; keep everything after the closing tag (the
+                // inline js_expr stays in place).
+                rest = &after_open[close + VAR_CLOSING_TAG.len()..];
+            }
+        }
+    }
+    let merged = VarData::merge(datas.iter().map(Some)).ok().flatten();
+    (out, merged)
+}
 
 /// Decode a marker string into literal / var parts.
 ///

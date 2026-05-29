@@ -102,7 +102,7 @@ pub struct VarData {
 /// A lib whose path starts with one of the internal roots (`/utils/`,
 /// `/components/`, `/styles/`, `/public/`) is rewritten to `$<lib>`; everything
 /// else (npm packages, already-`$`-prefixed paths) is returned unchanged.
-fn normalize_import_lib(lib: &str) -> String {
+pub(crate) fn normalize_import_lib(lib: &str) -> String {
     const INTERNAL_ROOTS: [&str; 4] = ["/utils/", "/components/", "/styles/", "/public/"];
     if INTERNAL_ROOTS.iter().any(|p| lib.starts_with(p)) {
         format!("${lib}")
