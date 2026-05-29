@@ -357,6 +357,7 @@ class BaseComponent(metaclass=BaseComponentMeta):
             "_vars_cache",
             "_imports_cache",
             "_hooks_internal_cache",
+            "_added_hooks_cache",
             "_var_module_code_cache",
             "_get_component_prop_property",
         ):
@@ -2060,6 +2061,10 @@ class Component(BaseComponent, ABC):
         Returns:
             The deduplicated hooks and imports added by the component and parent components.
         """
+        cached = self.__dict__.get("_added_hooks_cache")
+        if cached is not None:
+            return cached
+
         code = {}
 
         def extract_var_hooks(hook: Var):
@@ -2082,6 +2087,7 @@ class Component(BaseComponent, ABC):
                 else:
                     code[hook] = None
 
+        self._added_hooks_cache = code
         return code
 
     def _get_hooks(self) -> str | None:
