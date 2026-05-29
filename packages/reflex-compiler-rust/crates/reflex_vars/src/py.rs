@@ -646,23 +646,11 @@ impl RustVar {
     }
 
     fn __mul__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
-        if self.is_str(py) {
-            return self.str_mul(py, &other);
-        }
-        if is_array_operand(py, &other)? {
-            return self.repeat_array(py, &other);
-        }
-        self.arith(py, &other, "*", false)
+        self.mul_impl(py, &other, false)
     }
 
     fn __rmul__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
-        if self.is_str(py) {
-            return self.str_mul(py, &other);
-        }
-        if is_array_operand(py, &other)? {
-            return self.repeat_array(py, &other);
-        }
-        self.arith(py, &other, "*", true)
+        self.mul_impl(py, &other, true)
     }
 
     fn __truediv__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
@@ -1106,11 +1094,76 @@ impl RustVar {
         })
     }
 
-    /// Repeat an array `count` times (`repeat_array_operation`, reached via
-    /// `number * array` / `array * number`): `self` is the count, `array` the
-    /// operand. Renders `Array.from({ length: {count} }).flatMap(() => {array})`
-    /// with the array's type and doubling var_data. A strict-float count raises
-    /// (matches `ArrayVar.__mul__`).
+    /// Dispatch `*` (matches the NumberVar/StringVar/ArrayVar `__mul__` family):
+    /// a string receiver repeats by a count; an array receiver repeats itself by
+    /// the count operand; a number receiver times an array operand repeats that
+    /// array; otherwise numeric multiplication. `reflected` only affects the
+    /// numeric render order (`__rmul__`).
+    fn mul_impl(
+        &self,
+        py: Python<'_>,
+        other: &Bound<'_, PyAny>,
+        reflected: bool,
+    ) -> PyResult<RustVar> {
+        if self.is_str(py) {
+            return self.str_mul(py, other);
+        }
+        // array * count -> repeat self by the count operand.
+        if var_category(py, &self.var_type)? == "ArrayVar" {
+            let (cjs, cvd) = self.repeat_count_parts(py, other)?;
+            return Ok(self.render_repeat(
+                &self.js_expr,
+                self.var_type.clone_ref(py),
+                &self.var_data,
+                &cjs,
+                &cvd,
+            ));
+        }
+        // number * array -> repeat the array operand by self (the count).
+        if is_array_operand(py, other)? {
+            return self.repeat_array(py, other);
+        }
+        self.arith(py, other, "*", reflected)
+    }
+
+    /// Validate + extract a repeat count operand `(js, var_data)`, raising `*`
+    /// when it is not a valid (non-strict-float) numeric multiplier.
+    fn repeat_count_parts(
+        &self,
+        py: Python<'_>,
+        count: &Bound<'_, PyAny>,
+    ) -> PyResult<(String, Option<VarData>)> {
+        if !valid_repeat_count(py, count, false)? {
+            return Err(unsupported_operand_error(
+                py,
+                "*",
+                "ArrayVar",
+                &operand_type_name(count),
+            ));
+        }
+        let (cjs, _ct, cvd) = operand_parts(py, count)?;
+        Ok((cjs, cvd))
+    }
+
+    /// Render `Array.from({ length: {count} }).flatMap(() => {array})` with the
+    /// array's type and doubling var_data (`repeat_array_operation`).
+    fn render_repeat(
+        &self,
+        array_js: &str,
+        array_type: Py<PyAny>,
+        array_vd: &Option<VarData>,
+        count_js: &str,
+        count_vd: &Option<VarData>,
+    ) -> RustVar {
+        RustVar {
+            js_expr: format!("Array.from({{ length: {count_js} }}).flatMap(() => {array_js})"),
+            var_type: array_type,
+            var_data: var_op_doubling(&[array_vd, count_vd]),
+        }
+    }
+
+    /// Repeat an array `count` times where `self` is the count (number) and
+    /// `array` the operand (`number * array`). A strict-float count raises.
     fn repeat_array(&self, py: Python<'_>, array: &Bound<'_, PyAny>) -> PyResult<RustVar> {
         if self._is_strict_float(py) {
             return Err(unsupported_operand_error(
@@ -1182,6 +1235,16 @@ impl RustVar {
     /// ops (split, repeat, join), so var_data multiplies three times (the
     /// corpus `str_mul` carries 16 imports).
     fn str_mul(&self, py: Python<'_>, n: &Bound<'_, PyAny>) -> PyResult<RustVar> {
+        // String repeat requires an int / NumberVar count (floats allowed,
+        // matching StringVar.__mul__'s isinstance(other, (NumberVar, int))).
+        if !valid_repeat_count(py, n, true)? {
+            return Err(unsupported_operand_error(
+                py,
+                "*",
+                "StringVar",
+                &operand_type_name(n),
+            ));
+        }
         let split = self.str_split(py, None)?;
         let (njs, _nt, nvd) = operand_parts(py, n)?;
         let repeat = RustVar {
@@ -1382,6 +1445,41 @@ fn is_number_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool>
         .import_bound("reflex_base.vars.number")?
         .getattr("NUMBER_TYPES")?;
     value.is_instance(&number_types)
+}
+
+/// Whether `count` is a valid repeat multiplier (matches the `*` operators'
+/// `isinstance(other, (NumberVar, int))` guard): a raw `int`/`bool`, or a
+/// numeric var. Array repeat additionally rejects a strict-`float` count
+/// (`allow_float=false`); string repeat allows any numeric var.
+fn valid_repeat_count(
+    py: Python<'_>,
+    count: &Bound<'_, PyAny>,
+    allow_float: bool,
+) -> PyResult<bool> {
+    if count.is_instance_of::<PyInt>() {
+        return Ok(true);
+    }
+    let (is_number_var, strict_float) = if let Ok(rv) = count.downcast::<RustVar>() {
+        let b = rv.borrow();
+        let cat = var_category(py, &b.var_type)?;
+        (
+            cat == "NumberVar" || cat == "BooleanVar",
+            b._is_strict_float(py),
+        )
+    } else {
+        let number_var = py
+            .import_bound("reflex_base.vars.number")?
+            .getattr("NumberVar")?;
+        if count.is_instance(&number_var)? {
+            (
+                true,
+                count.call_method0("_is_strict_float")?.extract::<bool>()?,
+            )
+        } else {
+            (false, false)
+        }
+    };
+    Ok(is_number_var && (allow_float || !strict_float))
 }
 
 /// Whether `value` is an array operand (a `list`/`tuple`, or an `ArrayVar` —
