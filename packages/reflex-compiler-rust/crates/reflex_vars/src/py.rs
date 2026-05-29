@@ -93,7 +93,7 @@ impl RustVar {
             None => None,
         };
         let js_expr = if _js_expr.contains(VAR_OPENING_TAG) {
-            let (clean, embedded) = decode_markers_inline(&_js_expr);
+            let (clean, embedded) = decode_markers_inline(py, &_js_expr);
             var_data = VarData::merge([var_data.as_ref(), embedded.as_ref()])
                 .ok()
                 .flatten();
@@ -2476,7 +2476,7 @@ pub fn rust_create_string(py: Python<'_>, value: String) -> RustVar {
         };
     }
 
-    let parts = decode_marker_parts(&value);
+    let parts = decode_marker_parts(py, &value);
     let filtered: Vec<StrPart> = parts
         .into_iter()
         .filter(|p| !matches!(p, StrPart::Lit(s) if s.is_empty()))
@@ -2522,6 +2522,36 @@ pub fn rust_create_string(py: Python<'_>, value: String) -> RustVar {
 /// A stable `None` var_data to borrow for literal parts in the concat merge.
 static NONE_VAR_DATA: Option<VarData> = None;
 
+/// Resolve an f-string marker id to its `(js_expr, var_data)`.
+///
+/// The Rust registry holds RustVar markers (counter ids); a Python `Var`'s
+/// `__format__` registers only into the shared `_global_vars` dict (keyed by
+/// `hash`). Try the Rust registry first, then fall back to `_global_vars` so a
+/// Python var embedded in an f-string decodes with its js_expr and var_data.
+fn lookup_marker(
+    py: Python<'_>,
+    reg: Option<&HashMap<i64, RegisteredVar>>,
+    id: i64,
+) -> Option<(String, Option<VarData>)> {
+    if let Some((js, data)) = reg.and_then(|r| r.get(&id).cloned()) {
+        return Some((js, data));
+    }
+    let obj = py
+        .import_bound("reflex_base.vars.base")
+        .ok()?
+        .getattr("_global_vars")
+        .ok()?
+        .get_item(id)
+        .ok()?;
+    let js: String = obj.getattr("_js_expr").ok()?.str().ok()?.extract().ok()?;
+    let data = obj
+        .call_method0("_get_all_var_data")
+        .ok()
+        .and_then(|vd| convert_var_data(&vd).ok())
+        .flatten();
+    Some((js, data))
+}
+
 /// Decode `<reflex.Var>` markers in place: strip the tags (keeping the inline
 /// js_expr that follows each) and merge the referenced vars' var_data.
 ///
@@ -2530,7 +2560,7 @@ static NONE_VAR_DATA: Option<VarData> = None;
 /// embedded var_data — the form `Var.__post_init__` applies to a raw js_expr.
 ///
 /// Returns the cleaned js_expr and the merged var_data of all referenced vars.
-fn decode_markers_inline(value: &str) -> (String, Option<VarData>) {
+fn decode_markers_inline(py: Python<'_>, value: &str) -> (String, Option<VarData>) {
     let reg = var_registry().lock().ok();
     let mut out = String::with_capacity(value.len());
     let mut datas: Vec<VarData> = Vec::new();
@@ -2549,8 +2579,8 @@ fn decode_markers_inline(value: &str) -> (String, Option<VarData>) {
                     break;
                 };
                 let id: i64 = after_open[..close].parse().unwrap_or(-1);
-                if let Some(Some((_js, Some(data)))) = reg.as_ref().map(|r| r.get(&id)) {
-                    datas.push(data.clone());
+                if let Some((_js, Some(data))) = lookup_marker(py, reg.as_deref(), id) {
+                    datas.push(data);
                 }
                 // Drop the tag; keep everything after the closing tag (the
                 // inline js_expr stays in place).
@@ -2567,7 +2597,7 @@ fn decode_markers_inline(value: &str) -> (String, Option<VarData>) {
 /// Replicates Python's `LiteralStringVar.create` scan: each
 /// `<reflex.Var>{id}</reflex.Var>` is replaced by the registered var, and the
 /// var's js_expr (which `__format__` appended after the closing tag) is skipped.
-fn decode_marker_parts(value: &str) -> Vec<StrPart> {
+fn decode_marker_parts(py: Python<'_>, value: &str) -> Vec<StrPart> {
     let mut parts = Vec::new();
     let mut rest = value;
     let reg = var_registry().lock().ok();
@@ -2589,10 +2619,7 @@ fn decode_marker_parts(value: &str) -> Vec<StrPart> {
                     break;
                 };
                 let id: i64 = after_open[..close].parse().unwrap_or(-1);
-                let (js, data) = reg
-                    .as_ref()
-                    .and_then(|r| r.get(&id).cloned())
-                    .unwrap_or_default();
+                let (js, data) = lookup_marker(py, reg.as_deref(), id).unwrap_or_default();
                 parts.push(StrPart::Var(js.clone(), data));
                 // Skip the closing tag and the js_expr that follows it.
                 let after_close = &after_open[close + VAR_CLOSING_TAG.len()..];
