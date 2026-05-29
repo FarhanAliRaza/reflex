@@ -358,6 +358,31 @@ impl RustVar {
         }
     }
 
+    /// Call this function var with args (matches `FunctionVar.call` /
+    /// `VarOperationCall`): `({func}({arg, ...}))`, arrow-function receivers are
+    /// parenthesized; the result type is the callable's return type; var_data is
+    /// the plain merge of the function and each argument.
+    #[pyo3(signature = (*args))]
+    fn call(&self, py: Python<'_>, args: &Bound<'_, pyo3::types::PyTuple>) -> PyResult<RustVar> {
+        let mut func_expr = self.js_expr.clone();
+        if starts_with_arrow_function(&func_expr) && !is_wrapped_parens(&func_expr) {
+            func_expr = format!("({func_expr})");
+        }
+        let mut arg_js: Vec<String> = Vec::new();
+        let mut datas: Vec<Option<VarData>> = vec![self.var_data.clone()];
+        for arg in args.iter() {
+            let (js, _t, vd) = operand_parts(py, &arg)?;
+            arg_js.push(js);
+            datas.push(vd);
+        }
+        let refs: Vec<&Option<VarData>> = datas.iter().collect();
+        Ok(RustVar {
+            js_expr: format!("({func_expr}({}))", arg_js.join(", ")),
+            var_type: func_return_type(py, &self.var_type),
+            var_data: var_op_plain(&refs),
+        })
+    }
+
     /// A `refs[...]` reference to this var (matches `Var._as_ref`).
     ///
     /// `refs[{json(str(self))}]` with only the `refs` import — self's var_data
@@ -1859,6 +1884,24 @@ fn object_attr_type(
         ));
     }
     Ok(attribute_type.unbind())
+}
+
+/// The return type of a callable var-type (`ReflexCallable[P, R]` ->
+/// `R = __args__[1]`); `Any` when the type has no args (matches
+/// `VarOperationCall.create`).
+fn func_return_type(py: Python<'_>, var_type: &Py<PyAny>) -> Py<PyAny> {
+    var_type
+        .bind(py)
+        .getattr("__args__")
+        .ok()
+        .and_then(|args| args.get_item(1).ok())
+        .map(|t| t.unbind())
+        .unwrap_or_else(|| {
+            py.import_bound("typing")
+                .and_then(|m| m.getattr("Any"))
+                .map(|a| a.unbind())
+                .unwrap_or_else(|_| py.None())
+        })
 }
 
 /// The Mapping value type of an object var (`ObjectVar._value_type` =
