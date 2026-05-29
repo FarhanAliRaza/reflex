@@ -1312,6 +1312,10 @@ impl RustVar {
     /// object resolves as attribute access (field type). Invalid index types
     /// raise the `[]` unsupported-operand error.
     fn __getitem__(&self, py: Python<'_>, index: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        // A slice indexes an array (matches ArrayVar.__getitem__ -> ArraySliceOperation).
+        if let Ok(slice) = index.downcast::<pyo3::types::PySlice>() {
+            return self.slice_op(py, slice);
+        }
         let category = var_category(py, &self.var_type)?;
         if category == "ObjectVar" {
             let str_key = is_string_operand(py, &index)?;
@@ -1538,6 +1542,76 @@ impl RustVar {
             ),
             var_type: at,
             var_data: var_op_doubling(&[&avd, &self.var_data]),
+        })
+    }
+
+    /// Array/string slice (`ArraySliceOperation`): renders `.slice(...)` with a
+    /// `.filter(i % step === 0)` for stepped slices, reversing for a negative
+    /// step and a ternary for a variable step. Keeps the array's type.
+    fn slice_op(
+        &self,
+        py: Python<'_>,
+        slice: &Bound<'_, pyo3::types::PySlice>,
+    ) -> PyResult<RustVar> {
+        let start = slice.getattr("start")?;
+        let stop = slice.getattr("stop")?;
+        let step = slice.getattr("step")?;
+        // Render a bound as its JS, or `undefined` when None.
+        let bound_js = |b: &Bound<'_, PyAny>| -> PyResult<(String, Option<VarData>)> {
+            if b.is_none() {
+                Ok(("undefined".to_owned(), None))
+            } else {
+                let (js, _t, vd) = operand_parts(py, b)?;
+                Ok((js, vd))
+            }
+        };
+        // A bound + 1 (int folds; var/None handled per ArraySliceOperation).
+        let plus_one = |b: &Bound<'_, PyAny>, none_default: &str| -> PyResult<String> {
+            if b.is_none() {
+                Ok(none_default.to_owned())
+            } else if let Ok(i) = b.extract::<i64>() {
+                Ok((i + 1).to_string())
+            } else {
+                let (js, _t, _vd) = operand_parts(py, b)?;
+                Ok(format!("({js} + 1)"))
+            }
+        };
+        let (start_js, start_vd) = bound_js(&start)?;
+        let (stop_js, stop_vd) = bound_js(&stop)?;
+        let var_data = var_op_plain(&[&self.var_data, &start_vd, &stop_vd]);
+        let array = &self.js_expr;
+        let js_expr = if step.is_none() {
+            format!("{array}.slice({start_js}, {stop_js})")
+        } else if let Ok(s) = step.extract::<i64>() {
+            if s == 0 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "slice step cannot be zero",
+                ));
+            }
+            if s < 0 {
+                // self[end+1 : start+1].reverse()[::-step]
+                let actual_start = plus_one(&stop, "0")?;
+                let actual_end = plus_one(&start, &format!("{array}.length"))?;
+                format!(
+                    "{array}.slice({actual_start}, {actual_end}).slice().reverse().slice(undefined, undefined).filter((_, i) => i % {} === 0)",
+                    -s
+                )
+            } else {
+                format!("{array}.slice({start_js}, {stop_js}).filter((_, i) => i % {s} === 0)")
+            }
+        } else {
+            // Variable step: positive vs negative ternary.
+            let (step_js, _t, _vd) = operand_parts(py, &step)?;
+            let actual_start = plus_one(&stop, "0")?;
+            let actual_end = plus_one(&start, &format!("{array}.length"))?;
+            format!(
+                "{step_js} > 0 ? {array}.slice({start_js}, {stop_js}).filter((_, i) => i % {step_js} === 0) : {array}.slice({actual_start}, {actual_end}).reverse().filter((_, i) => i % -({step_js}) === 0)"
+            )
+        };
+        Ok(RustVar {
+            js_expr,
+            var_type: self.var_type.clone_ref(py),
+            var_data,
         })
     }
 
