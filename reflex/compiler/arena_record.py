@@ -25,11 +25,17 @@ freeze walk is asserted by ``test_arena_gather.py`` via the
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from reflex_base.components.component import Component
 from reflex_base.utils.format import format_library_name, to_camel_case
 from reflex_base.vars.base import LiteralVar, Var
+
+# Cache args_spec -> arg-name list ("_e", …). args_spec functions are
+# shared per trigger kind (one pointer_event_spec, one value spec, …), so
+# this collapses the per-chain inspect.signature to one call per spec.
+_ARG_NAMES_CACHE: dict[int, list[str]] = {}
 
 # NodeKind discriminants (mirror reflex_ir::snapshot::kinds::NodeKind).
 _KIND_ELEMENT = 0
@@ -330,13 +336,128 @@ def _gather_rendered_props(
     return pairs, vars_used
 
 
+def _render_event_value(value: Any) -> str:
+    """Render one event arg / action value to JS.
+
+    Args are pre-built Vars whose ``_js_expr`` is cached (cheap); booleans
+    map to ``true``/``false``; anything else falls back to ``LiteralVar``.
+
+    Args:
+        value: the arg/action value (Var, bool, or literal).
+
+    Returns:
+        The JS expression string.
+    """
+    if isinstance(value, Var):
+        return str(value._js_expr)
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return str(LiteralVar.create(value)._js_expr)
+
+
+def _js_object(pairs: list[tuple[str, str]]) -> str:
+    """Render an emit-style JS object literal.
+
+    Args:
+        pairs: ``(key, value_js)`` entries.
+
+    Returns:
+        ``({  })`` when empty, else ``({ ["k"] : v, … })``.
+    """
+    if not pairs:
+        return "({  })"
+    inner = ", ".join(f'["{k}"] : {v}' for k, v in pairs)
+    return "({ " + inner + " })"
+
+
+def _event_handler_name(handler: Any) -> str:
+    """The ReflexEvent name, mirroring ``reflex_base.event``.
+
+    State handlers → ``state_full_name.fn_name``; client/special handlers →
+    ``fn.__qualname__`` (e.g. ``_redirect`` / ``_call_function``).
+
+    Args:
+        handler: the ``EventHandler``.
+
+    Returns:
+        The event name string.
+    """
+    if getattr(handler, "state_full_name", ""):
+        return f"{handler.state_full_name}.{handler.fn.__name__}"
+    return str(handler.fn.__qualname__)
+
+
+def _arg_names(args_spec: Any) -> list[str]:
+    """Lambda arg names for a trigger's ``args_spec`` (``e`` → ``_e``).
+
+    Cached per spec function (one ``inspect.signature`` per spec).
+
+    Args:
+        args_spec: the trigger's argument-spec function.
+
+    Returns:
+        The ``_``-prefixed arg names.
+    """
+    key = id(args_spec)
+    cached = _ARG_NAMES_CACHE.get(key)
+    if cached is None:
+        cached = ["_" + p for p in inspect.signature(args_spec).parameters]
+        _ARG_NAMES_CACHE[key] = cached
+    return cached
+
+
+def _assemble_event_chain(chain: Any) -> str:
+    """Assemble an event chain's JS, byte-identical to
+    ``LiteralVar.create(chain)._js_expr`` but ~16x cheaper.
+
+    Avoids ``LiteralVar.create(chain)`` (the dominant gather cost, ~110us):
+    reads the raw chain pieces (handler names, each arg's cached
+    ``_js_expr``, ``event_actions``, arg-names) and string-assembles the
+    ``(_e) => addEvents([ReflexEvent(...)], [_e], …)`` form. Validated
+    byte-identical across the full event grammar by
+    ``test_event_render.py``.
+
+    Args:
+        chain: the ``EventChain``.
+
+    Returns:
+        The rendered event-chain JS.
+    """
+    arg_names = _arg_names(chain.args_spec)
+    args_csv = ", ".join(arg_names)
+    chain_ea = _js_object(
+        [(k, _render_event_value(v)) for k, v in chain.event_actions.items()]
+    )
+    reis = []
+    for es in chain.events:
+        name = _event_handler_name(es.handler)
+        args_obj = _js_object(
+            [(a[0]._js_expr, _render_event_value(a[1])) for a in es.args]
+        )
+        ea_obj = _js_object(
+            [(k, _render_event_value(v)) for k, v in es.event_actions.items()]
+        )
+        reis.append(f'(ReflexEvent("{name}", {args_obj}, {ea_obj}))')
+    if len(reis) == 1:
+        body = f"(addEvents([{reis[0]}], [{args_csv}], {chain_ea}))"
+    else:
+        inner = "".join(
+            f"(addEvents([{r}], [{args_csv}], {chain_ea}));" for r in reis
+        )
+        body = "{" + inner + "}"
+    return f"(({args_csv}) => {body})"
+
+
 def _gather_event_callbacks(component: Component) -> list[tuple[str, str]]:
     """Gather event-trigger callbacks, mirroring ``read_event_callbacks``.
 
     Trigger names stay snake-cased (emit camelizes them); on_mount /
-    on_unmount become hooks, not JSX props, so are skipped. Values render
-    via ``LiteralVar.create(chain)._js_expr``. Event handlers do not
-    register ``var_data`` entries in freeze.
+    on_unmount become hooks, not JSX props, so are skipped. Each chain is
+    assembled by :func:`_assemble_event_chain` (the cheap raw-read path,
+    byte-identical to ``LiteralVar.create(chain)._js_expr``). Event handlers
+    do not register ``var_data`` entries in freeze.
 
     Args:
         component: the component to read event triggers from.
@@ -351,7 +472,7 @@ def _gather_event_callbacks(component: Component) -> list[tuple[str, str]]:
     for trigger, handler in triggers.items():
         if trigger in ("on_mount", "on_unmount"):
             continue
-        expr = _js_expr_of(handler)
+        expr = _assemble_event_chain(handler)
         if expr:
             out.append((str(trigger), expr))
     return out

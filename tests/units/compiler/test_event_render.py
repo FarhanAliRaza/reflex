@@ -1,20 +1,17 @@
-"""Byte-parity spec for the Rust event-chain renderer (PR D-events-rust).
+"""Byte-parity spec for the cheap event-chain assembler.
 
-Event-chain rendering (``LiteralVar.create(chain)._js_expr``) is the gather
-path's dominant cost — ~109us per chain, recomputed every compile, vs ~0.2us
-to read the raw struct. The plan is to extract the raw chain in Python
-cheaply and render the JS in Rust.
+Event-chain rendering via ``LiteralVar.create(chain)._js_expr`` is the
+gather path's dominant cost (~110us/chain — it builds a composed Var graph)
+even though the raw pieces are ~0.2us to read. ``_assemble_event_chain``
+reads those raw pieces (handler name, each arg's cached ``_js_expr``,
+``event_actions``, arg-names) and string-assembles the JS in ~7us — 16x
+faster.
 
-This suite pins the contract for that Rust renderer across the full event
-surface, so a partial implementation can't pass: every case asserts
-``CompilerSession.render_event_chain_js(component, trigger)`` is
-**byte-identical** to the Python ``LiteralVar.create(chain)._js_expr``.
-
-It FAILS today (the Rust renderer is a stub returning "") and goes green
-only when the renderer handles every shape below: no-args, literal &
-reactive & multi args, event_actions (stop_propagation / prevent_default),
-multi-handler block form, varied arg-specs (pointer / value / form / key),
-chained handlers, and the special events (set / redirect / console_log /
+This suite pins that assembler across the full event grammar: every case
+asserts it is **byte-identical** to ``LiteralVar.create(chain)._js_expr`` —
+no-args, literal & reactive & expr & multi args, event_actions
+(stop_propagation / prevent_default), multi-handler block form, value/blur
+arg-specs, lambda, and special events (set / redirect / console_log /
 call_script / noop).
 """
 
@@ -24,7 +21,7 @@ import pytest
 from reflex_base.vars.base import LiteralVar
 
 import reflex as rx
-from reflex.compiler.session import CompilerSession
+from reflex.compiler.arena_record import _assemble_event_chain
 
 
 class _EvState(rx.State):
@@ -42,11 +39,6 @@ class _EvState(rx.State):
 
     def set_name(self, v: str) -> None:
         self.name = v
-
-
-@pytest.fixture(scope="module")
-def sess() -> CompilerSession:
-    return CompilerSession()
 
 
 def _expected(component, trigger: str) -> str:
@@ -125,19 +117,14 @@ _CASES = {
 }
 
 
-@pytest.mark.xfail(
-    reason="Rust event-chain renderer not yet implemented (stub returns ''); "
-    "this suite drives it to completion — remove xfail once all shapes pass",
-    strict=False,
-)
 @pytest.mark.parametrize("name", list(_CASES))
-def test_rust_event_render_matches_python(sess: CompilerSession, name: str) -> None:
+def test_assembled_event_render_matches_python(name: str) -> None:
     factory, trigger = _CASES[name]
     component = factory()
     expected = _expected(component, trigger)
-    got = sess.render_event_chain_js(component, trigger)
+    got = _assemble_event_chain(component.event_triggers[trigger])
     assert got == expected, (
-        f"event[{name}] Rust render differs from Python:\n"
+        f"event[{name}] assembled render differs from Python:\n"
         f"  expected: {expected}\n"
         f"  got:      {got}"
     )

@@ -6,12 +6,11 @@ than the Rust freeze walk. This test encodes that goal as a *relative*
 median comparison (relative, so it cancels out absolute machine speed and
 container load): the gather path must come in at or below the freeze path.
 
-It FAILS today on purpose — the current gather implementation renders
-values to JS in Python (event chains, var exprs, ``_get_imports``), so it
-pays the same heavy cost as freeze plus dict-build + Rust-rebuild overhead.
-It should PASS once that rendering moves to Rust (the raw-bundle /
-render-in-Rust refactor), at which point Python only does cheap native
-attribute reads.
+It passes now that ``_assemble_event_chain`` replaced the per-chain
+``LiteralVar.create(chain)._js_expr`` render (~110us → ~7us, byte-identical):
+the gather walk does cheap raw reads, so the path runs ~1.4-1.5x faster
+than freeze on the bench page. It guards against regressing back below
+freeze.
 
 Run alone: ``pytest tests/units/compiler/test_gather_perf.py``.
 """
@@ -78,11 +77,6 @@ def _bench(n: int = 80) -> tuple[int, int]:
 
 
 @pytest.mark.benchmark
-@pytest.mark.xfail(
-    reason="gather currently renders values in Python, so it is ~as slow as "
-    "freeze; flips to PASS once rendering moves to Rust (raw-bundle refactor)",
-    strict=False,
-)
 def test_gather_path_beats_freeze() -> None:
     """The gather path's median compile must be <= the freeze path's.
 

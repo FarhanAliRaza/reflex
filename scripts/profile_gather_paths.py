@@ -16,10 +16,10 @@ moving the heavy value-rendering off the Python side into Rust. This script
 prints a PASS/FAIL verdict against that goal plus a cProfile breakdown of
 ``gather_arena`` so you can see which work still lives in Python.
 
-This is the executable spec the raw-bundle / render-in-Rust implementation
-is driven against: today it FAILS (gather renders in Python, so it is ~as
-slow as / slightly slower than freeze); it should PASS once rendering moves
-to Rust.
+This was the executable spec the event-render fix was driven against. It
+now PASSES (~1.4-1.5x): ``_assemble_event_chain`` replaced the per-chain
+``LiteralVar.create(chain)._js_expr`` (~110us → ~7us, byte-identical), so
+``gather()`` does cheap raw reads and the path beats freeze.
 """
 
 from __future__ import annotations

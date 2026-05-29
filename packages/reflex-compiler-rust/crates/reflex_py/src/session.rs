@@ -95,22 +95,6 @@ impl CompilerSession {
         self.emit_cache_enabled.set(enabled);
     }
 
-    /// Render a component's event-trigger chain to JS entirely in Rust,
-    /// from raw data extracted cheaply over PyO3 (no
-    /// `LiteralVar.create(chain)._js_expr` — that Python render is ~109us
-    /// per chain and is the gather path's dominant cost). Must be
-    /// byte-identical to the Python render. STUB: returns "" until the
-    /// Rust event renderer (PR D-events-rust) lands — driven by
-    /// `test_event_render_rust.py`.
-    fn render_event_chain_js<'py>(
-        &self,
-        _py: Python<'py>,
-        _component: &Bound<'py, PyAny>,
-        _trigger: &str,
-    ) -> PyResult<String> {
-        Ok(String::new())
-    }
-
     /// B: direct-from-Rust `get_props` invocations this session. Lets
     /// tests distinguish Rust-controlled calls from Python-internal
     /// ones (e.g. `_get_imports` → `_get_vars` → `get_props`) that
