@@ -263,3 +263,28 @@ def test_get_setter_behavior(var_type: type, value: object, expected: object) ->
     Var(_js_expr="state.v", _var_type=var_type)._get_setter("v")(py_obj, value)
     RustVar("state.v", var_type, None)._get_setter("v")(rust_obj, value)
     assert rust_obj.v == py_obj.v == expected
+
+
+def test_string_methods_match_oracle() -> None:
+    """title/strip/reversed/endswith/replace match the Python StringVar."""
+    py = Var(_js_expr="s.t", _var_type=str).guess_type()
+    rust = RustVar("s.t", str, None)
+    assert str(rust.title()) == str(py.title())
+    assert str(rust.strip()) == str(py.strip())
+    assert str(rust.reversed()) == str(py.reversed())
+    assert str(rust.endswith("x")) == str(py.endswith("x"))
+    assert str(rust.replace("a", "b")) == str(py.replace("a", "b"))
+
+
+def test_number_methods_match_oracle() -> None:
+    """floor/ceil/trunc/round match the Python NumberVar."""
+    import math
+
+    py = Var(_js_expr="s.n", _var_type=int).guess_type()
+    rust = RustVar("s.n", int, None)
+    assert str(math.floor(rust)) == str(math.floor(py))
+    assert str(math.ceil(rust)) == str(math.ceil(py))
+    assert str(math.trunc(rust)) == str(math.trunc(py))
+    assert str(round(rust)) == str(round(py))
+    assert str(round(rust, 2)) == str(round(py, 2))
+    assert round(rust, 2)._var_type is float

@@ -700,6 +700,68 @@ impl RustVar {
         }
     }
 
+    /// `number_floor_operation`: `Math.floor({self})`, int, unary doubling.
+    fn __floor__(&self, py: Python<'_>) -> RustVar {
+        self.math_unary(py, "floor")
+    }
+
+    /// `number_ceil_operation`: `Math.ceil({self})`, int, unary doubling.
+    fn __ceil__(&self, py: Python<'_>) -> RustVar {
+        self.math_unary(py, "ceil")
+    }
+
+    /// `number_trunc_operation`: `Math.trunc({self})`, int, unary doubling.
+    fn __trunc__(&self, py: Python<'_>) -> RustVar {
+        self.math_unary(py, "trunc")
+    }
+
+    /// `number_round_operation`: `Math.round({self})` (int) when rounding to 0
+    /// digits, else `(+{self}.toFixed({ndigits}))` (float). Doubling over
+    /// self / ndigits.
+    #[pyo3(signature = (ndigits=None))]
+    fn __round__(&self, py: Python<'_>, ndigits: Option<Bound<'_, PyAny>>) -> PyResult<RustVar> {
+        let zero = match &ndigits {
+            None => true,
+            Some(n) => {
+                if let Ok(i) = n.extract::<i64>() {
+                    i == 0
+                } else if let Ok(rv) = n.downcast::<RustLiteralVar>() {
+                    rv.borrow()
+                        .var_value
+                        .bind(py)
+                        .extract::<i64>()
+                        .map(|i| i == 0)
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            }
+        };
+        let (njs, nvd) = match &ndigits {
+            Some(n) => {
+                let (js, _t, vd) = operand_parts(py, n)?;
+                (js, vd)
+            }
+            None => ("0".to_owned(), None),
+        };
+        let (js_expr, var_type) = if zero {
+            (
+                format!("Math.round({})", self.js_expr),
+                PyInt::type_object_bound(py).into_any().unbind(),
+            )
+        } else {
+            (
+                format!("(+{}.toFixed({njs}))", self.js_expr),
+                PyFloat::type_object_bound(py).into_any().unbind(),
+            )
+        };
+        Ok(RustVar {
+            js_expr,
+            var_type,
+            var_data: var_op_doubling(&[&self.var_data, &nvd]),
+        })
+    }
+
     fn __invert__(&self, py: Python<'_>) -> RustVar {
         RustVar {
             js_expr: format!("!({})", self.js_expr),
@@ -934,6 +996,61 @@ impl RustVar {
             js_expr: format!("{}.startsWith({pjs})", self.js_expr),
             var_type: PyBool::type_object_bound(py).into_any().unbind(),
             var_data: var_op_doubling(&[&self.var_data, &pvd]),
+        })
+    }
+
+    /// `string_ends_with_operation`: `{s}.endsWith({suffix})`, bool, doubling.
+    /// The suffix must be a string (matches `StringVar.endswith`).
+    fn endswith(&self, py: Python<'_>, suffix: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        if !is_string_operand(py, &suffix)? {
+            return Err(unsupported_operand_error(
+                py,
+                "endswith",
+                "StringVar",
+                &operand_type_name(&suffix),
+            ));
+        }
+        let (sjs, _st, svd) = operand_parts(py, &suffix)?;
+        Ok(RustVar {
+            js_expr: format!("{}.endsWith({sjs})", self.js_expr),
+            var_type: PyBool::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_doubling(&[&self.var_data, &svd]),
+        })
+    }
+
+    /// `string_title_operation`: title-case each space-separated word.
+    fn title(&self, py: Python<'_>) -> RustVar {
+        self.str_unary_op(py, |s| {
+            format!("{s}.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ')")
+        })
+    }
+
+    /// `string_strip_operation`: `{s}.trim()`, str, doubling.
+    fn strip(&self, py: Python<'_>) -> RustVar {
+        self.str_unary_op(py, |s| format!("{s}.trim()"))
+    }
+
+    /// Reverse a string (`StringVar.reversed` = `split().reverse().join()`).
+    fn reversed(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let split = Bound::new(py, slf.borrow().str_split(py, None)?)?;
+        let reversed = Bound::new(py, split.borrow().reverse(py))?;
+        RustVar::join(&reversed, py, None)
+    }
+
+    /// `string_replace_operation`: `{s}.replaceAll({search}, {new})`, str,
+    /// doubling over self / search / new.
+    fn replace(
+        &self,
+        py: Python<'_>,
+        search_value: Bound<'_, PyAny>,
+        new_value: Bound<'_, PyAny>,
+    ) -> PyResult<RustVar> {
+        let (search_js, _t1, search_vd) = operand_parts(py, &search_value)?;
+        let (new_js, _t2, new_vd) = operand_parts(py, &new_value)?;
+        Ok(RustVar {
+            js_expr: format!("{}.replaceAll({search_js}, {new_js})", self.js_expr),
+            var_type: PyString::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_doubling(&[&self.var_data, &search_vd, &new_vd]),
         })
     }
 
@@ -1257,6 +1374,15 @@ impl RustVar {
             var_type: at,
             var_data: var_op_doubling(&[&avd, &self.var_data]),
         })
+    }
+
+    /// Build a unary `Math.{fn}(self)` number op (int result, doubling var_data).
+    fn math_unary(&self, py: Python<'_>, func: &str) -> RustVar {
+        RustVar {
+            js_expr: format!("Math.{func}({})", self.js_expr),
+            var_type: PyInt::type_object_bound(py).into_any().unbind(),
+            var_data: unary_var_data(&self.var_data),
+        }
     }
 
     /// Build a unary string→string op `f(self)` with doubling var_data.
