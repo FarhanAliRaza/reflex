@@ -16,7 +16,9 @@
 // macro-generated wrappers under pyo3 0.22, not on any explicit cast we write.
 #![allow(clippy::useless_conversion)]
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use pyo3::basic::CompareOp;
 use pyo3::prelude::*;
@@ -25,6 +27,26 @@ use pyo3::PyTypeInfo;
 
 use crate::var::Var;
 use crate::var_data::{ImportVar, VarData};
+
+/// f-string marker tags — must match `REFLEX_VAR_OPENING_TAG` /
+/// `REFLEX_VAR_CLOSING_TAG` (constants/base.py) so a RustVar can be formatted
+/// into a Python f-string and decoded by either side during the transition.
+const VAR_OPENING_TAG: &str = "<reflex.Var>";
+const VAR_CLOSING_TAG: &str = "</reflex.Var>";
+
+/// A registered var's recoverable state: its js_expr and aggregate var_data.
+type RegisteredVar = (String, Option<VarData>);
+
+/// Registry backing the f-string marker protocol: `__format__` stashes a var's
+/// `(js_expr, var_data)` under a unique id and emits a marker carrying that id;
+/// `rust_create_string` looks it back up while decoding. Mirrors Python's
+/// `_global_vars` dict (here keyed by a counter rather than `hash`).
+fn var_registry() -> &'static Mutex<HashMap<i64, RegisteredVar>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<i64, RegisteredVar>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+static VAR_COUNTER: AtomicI64 = AtomicI64::new(1);
 
 /// A Rust-backed `Var`: a finalized JS expression, its Python `_var_type`, and
 /// its aggregate `VarData`.
@@ -73,6 +95,17 @@ impl RustVar {
     /// String form == the JS expression (matches Python `Var.__str__`).
     fn __str__(&self) -> &str {
         &self.js_expr
+    }
+
+    /// Format into an f-string fragment (matches `Var.__format__`): register
+    /// this var under a fresh id and emit `<reflex.Var>{id}</reflex.Var>{js}`.
+    /// `rust_create_string` (or Python's `LiteralVar.create`) decodes it back.
+    fn __format__(&self, _format_spec: &str) -> String {
+        let id = VAR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut reg) = var_registry().lock() {
+            reg.insert(id, (self.js_expr.clone(), self.var_data.clone()));
+        }
+        format!("{VAR_OPENING_TAG}{id}{VAR_CLOSING_TAG}{}", self.js_expr)
     }
 
     // --- number operators ---
@@ -930,6 +963,124 @@ impl PyImportVar {
     }
 }
 
+/// One segment of a decoded marker string: a literal chunk or a referenced var.
+enum StrPart {
+    Lit(String),
+    Var(String, Option<VarData>),
+}
+
+/// Build a string var from a (possibly marker-encoded) f-string value.
+///
+/// Mirrors `LiteralStringVar.create`: a plain string becomes a string literal;
+/// a marker-encoded string is decoded into alternating literal chunks and
+/// referenced vars (looked up in the registry) and assembled into a
+/// `ConcatVarOperation` — `(p0+p1+...)` with literals rendered as JS strings
+/// and vars as their js_expr. var_data is a single (plain) merge of the parts.
+///
+/// Args:
+///     py: The GIL token.
+///     value: The raw f-string value (with embedded `<reflex.Var>` markers).
+///
+/// Returns:
+///     A `RustVar` of type `str`.
+#[pyfunction]
+pub fn rust_create_string(py: Python<'_>, value: String) -> RustVar {
+    let str_ty = PyString::type_object_bound(py).into_any().unbind();
+    if !value.contains(VAR_OPENING_TAG) {
+        return RustVar {
+            js_expr: render_js_string(&value),
+            var_type: str_ty,
+            var_data: None,
+        };
+    }
+
+    let parts = decode_marker_parts(&value);
+    let filtered: Vec<StrPart> = parts
+        .into_iter()
+        .filter(|p| !matches!(p, StrPart::Lit(s) if s.is_empty()))
+        .collect();
+
+    // Single var → that var (as a string); single literal → string literal.
+    if filtered.len() == 1 {
+        return match &filtered[0] {
+            StrPart::Lit(s) => RustVar {
+                js_expr: render_js_string(s),
+                var_type: str_ty,
+                var_data: None,
+            },
+            StrPart::Var(js, data) => RustVar {
+                js_expr: js.clone(),
+                var_type: str_ty,
+                var_data: var_op_plain(&[data]),
+            },
+        };
+    }
+
+    let rendered: Vec<String> = filtered
+        .iter()
+        .map(|p| match p {
+            StrPart::Lit(s) => render_js_string(s),
+            StrPart::Var(js, _) => js.clone(),
+        })
+        .collect();
+    let datas: Vec<&Option<VarData>> = filtered
+        .iter()
+        .map(|p| match p {
+            StrPart::Lit(_) => &NONE_VAR_DATA,
+            StrPart::Var(_, data) => data,
+        })
+        .collect();
+    RustVar {
+        js_expr: format!("({})", rendered.join("+")),
+        var_type: str_ty,
+        var_data: var_op_plain(&datas),
+    }
+}
+
+/// A stable `None` var_data to borrow for literal parts in the concat merge.
+static NONE_VAR_DATA: Option<VarData> = None;
+
+/// Decode a marker string into literal / var parts.
+///
+/// Replicates Python's `LiteralStringVar.create` scan: each
+/// `<reflex.Var>{id}</reflex.Var>` is replaced by the registered var, and the
+/// var's js_expr (which `__format__` appended after the closing tag) is skipped.
+fn decode_marker_parts(value: &str) -> Vec<StrPart> {
+    let mut parts = Vec::new();
+    let mut rest = value;
+    let reg = var_registry().lock().ok();
+    loop {
+        match rest.find(VAR_OPENING_TAG) {
+            None => {
+                if !rest.is_empty() {
+                    parts.push(StrPart::Lit(rest.to_owned()));
+                }
+                break;
+            }
+            Some(open) => {
+                if open > 0 {
+                    parts.push(StrPart::Lit(rest[..open].to_owned()));
+                }
+                let after_open = &rest[open + VAR_OPENING_TAG.len()..];
+                let Some(close) = after_open.find(VAR_CLOSING_TAG) else {
+                    parts.push(StrPart::Lit(rest.to_owned()));
+                    break;
+                };
+                let id: i64 = after_open[..close].parse().unwrap_or(-1);
+                let (js, data) = reg
+                    .as_ref()
+                    .and_then(|r| r.get(&id).cloned())
+                    .unwrap_or_default();
+                parts.push(StrPart::Var(js.clone(), data));
+                // Skip the closing tag and the js_expr that follows it.
+                let after_close = &after_open[close + VAR_CLOSING_TAG.len()..];
+                rest = after_close.strip_prefix(js.as_str()).unwrap_or(after_close);
+            }
+        }
+    }
+    parts
+}
+
 /// Register the Var bindings into the `_native` module.
 ///
 /// Args:
@@ -944,5 +1095,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rust_literal, m)?)?;
     m.add_function(wrap_pyfunction!(rust_raw_var, m)?)?;
     m.add_function(wrap_pyfunction!(rust_from_python_var, m)?)?;
+    m.add_function(wrap_pyfunction!(rust_create_string, m)?)?;
     Ok(())
 }

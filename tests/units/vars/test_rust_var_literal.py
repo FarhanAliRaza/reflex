@@ -228,6 +228,23 @@ def test_rust_container_matches_golden(key: str, golden: dict) -> None:
     assert _record(CONTAINER_CASES[key]()) == golden[key]
 
 
+# --- f-string marker protocol slice ---
+# A RustVar formatted into a Python f-string emits a <reflex.Var> marker (and
+# registers itself); rust_create_string decodes the assembled string back into
+# a ConcatVarOperation. This exercises both directions of the protocol.
+FSTRING_CASES = {
+    "fstr_simple": lambda: _native.rust_create_string(f"v={_num()}"),
+    "fstr_multi": lambda: _native.rust_create_string(f"{_name()}={_num()}"),
+    "fstr_nested_op": lambda: _native.rust_create_string(f"sum={_num() + 1}"),
+}
+
+
+@pytest.mark.parametrize("key", sorted(FSTRING_CASES))
+def test_rust_fstring_matches_golden(key: str, golden: dict) -> None:
+    """A Rust f-string (format -> marker -> decode) matches the golden record."""
+    assert _record(FSTRING_CASES[key]()) == golden[key]
+
+
 LEAF_CASES = {
     "state_int": lambda: _GoldenState.count,
     "state_float": lambda: _GoldenState.ratio,
