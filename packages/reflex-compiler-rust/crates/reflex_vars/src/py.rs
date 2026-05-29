@@ -207,6 +207,36 @@ impl RustVar {
         })
     }
 
+    /// Convert to a boolean var: `isTrue({self})` (matches `Var.bool` /
+    /// `boolify`). var_data is the doubling op merge plus the `isTrue` import.
+    fn bool(&self, py: Python<'_>) -> RustVar {
+        RustVar {
+            js_expr: format!("isTrue({})", self.js_expr),
+            var_type: PyBool::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_with_import(&self.var_data, "isTrue"),
+        }
+    }
+
+    /// `isNotNullOrUndefined({self})` (matches `Var.is_not_none`).
+    fn is_not_none(&self, py: Python<'_>) -> RustVar {
+        RustVar {
+            js_expr: format!("isNotNullOrUndefined({})", self.js_expr),
+            var_type: PyBool::type_object_bound(py).into_any().unbind(),
+            var_data: var_op_with_import(&self.var_data, "isNotNullOrUndefined"),
+        }
+    }
+
+    /// `!(isNotNullOrUndefined({self}))` (matches `Var.is_none` =
+    /// `~is_not_none_operation(self)`).
+    fn is_none(&self, py: Python<'_>) -> RustVar {
+        let inner = self.is_not_none(py);
+        RustVar {
+            js_expr: format!("!({})", inner.js_expr),
+            var_type: PyBool::type_object_bound(py).into_any().unbind(),
+            var_data: unary_var_data(&inner.var_data),
+        }
+    }
+
     /// String form == the JS expression (matches Python `Var.__str__`).
     fn __str__(&self) -> &str {
         &self.js_expr
@@ -804,6 +834,20 @@ fn var_op_plain(args: &[&Option<VarData>]) -> Option<VarData> {
 /// The aggregate var_data of a binary doubling op (both operands embedded).
 fn binary_var_data(a: &Option<VarData>, b: &Option<VarData>) -> Option<VarData> {
     var_op_doubling(&[a, b])
+}
+
+/// var_data for a single-arg var_operation whose `_return` carries an extra
+/// `$/utils/state` import (e.g. `isTrue`, `isNotNullOrUndefined`): the operand
+/// appears as the stored arg, and again inside `_return` *after* the import —
+/// so the merge order is `[self, import, self]` (matches the Python op).
+fn var_op_with_import(operand: &Option<VarData>, tag: &str) -> Option<VarData> {
+    let import_vd = VarData {
+        imports: vec![("$/utils/state".to_owned(), vec![ImportVar::new(tag)])],
+        ..VarData::default()
+    };
+    VarData::merge([operand.as_ref(), Some(&import_vd), operand.as_ref()])
+        .ok()
+        .flatten()
 }
 
 /// The aggregate var_data of a unary doubling op.
