@@ -1155,22 +1155,61 @@ impl RustVar {
         .into_any())
     }
 
-    /// Object keys: `Object.keys({obj} ?? {})`, list result, doubling.
+    /// Object keys: `Object.keys({obj} ?? {})`, `list[str]`, doubling.
     fn keys(&self, py: Python<'_>) -> RustVar {
         RustVar {
             js_expr: format!("Object.keys({} ?? {{}})", self.js_expr),
-            var_type: PyList::type_object_bound(py).into_any().unbind(),
+            var_type: list_of(py, PyString::type_object_bound(py).into_any().unbind()),
             var_data: var_op_doubling(&[&self.var_data]),
         }
     }
 
-    /// Object values: `Object.values({obj} ?? {})`, list result, doubling.
+    /// Object values: `Object.values({obj} ?? {})`, `list[value_type]`, doubling.
     fn values(&self, py: Python<'_>) -> RustVar {
         RustVar {
             js_expr: format!("Object.values({} ?? {{}})", self.js_expr),
-            var_type: PyList::type_object_bound(py).into_any().unbind(),
+            var_type: list_of(py, determine_value_type(py, &self.var_type)),
             var_data: var_op_doubling(&[&self.var_data]),
         }
+    }
+
+    /// Object entries: `Object.entries({obj} ?? {})`,
+    /// `list[tuple[str, value_type]]`, doubling.
+    fn entries(&self, py: Python<'_>) -> PyResult<RustVar> {
+        let value_type = determine_value_type(py, &self.var_type);
+        let str_ty = PyString::type_object_bound(py).into_any().unbind();
+        let tuple_ty = pyo3::types::PyTuple::type_object_bound(py)
+            .get_item((str_ty, value_type))?
+            .unbind();
+        Ok(RustVar {
+            js_expr: format!("Object.entries({} ?? {{}})", self.js_expr),
+            var_type: list_of(py, tuple_ty),
+            var_data: var_op_doubling(&[&self.var_data]),
+        })
+    }
+
+    /// Merge two objects: `({...{self}, ...{other}})`
+    /// (`object_merge_operation`), object result, doubling. Result type is the
+    /// union of both objects' key/value types.
+    fn merge(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let (ojs, ot, ovd) = operand_parts(py, &other)?;
+        let var_type = merged_mapping_type(py, &self.var_type, &ot);
+        Ok(RustVar {
+            js_expr: format!("({{...{}, ...{ojs}}})", self.js_expr),
+            var_type,
+            var_data: var_op_doubling(&[&self.var_data, &ovd]),
+        })
+    }
+
+    /// Pluck a field from each array element: `{arr}.map(e=>e?.[{field}])`
+    /// (`array_pluck_operation`), keeps the array's own type, doubling.
+    fn pluck(&self, py: Python<'_>, field: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let (fjs, _ft, fvd) = operand_parts(py, &field)?;
+        Ok(RustVar {
+            js_expr: format!("{}.map(e=>e?.[{fjs}])", self.js_expr),
+            var_type: self.var_type.clone_ref(py),
+            var_data: var_op_doubling(&[&self.var_data, &fvd]),
+        })
     }
 
     /// Item access dispatches by receiver type: a string uses
@@ -1178,13 +1217,15 @@ impl RustVar {
     /// (element type, plain), an object uses `{o}?.[{k}]` (value type, plain).
     fn __getitem__(&self, py: Python<'_>, index: Bound<'_, PyAny>) -> PyResult<RustVar> {
         let (ijs, _it, ivd) = operand_parts(py, &index)?;
-        match self.type_label(py).as_deref() {
-            Some("str") => Ok(RustVar {
+        // Dispatch by the receiver category (var_type may be a generic with no
+        // __name__): strings/arrays index with `?.at?.()`, objects with `?.[]`.
+        match var_category(py, &self.var_type)?.as_str() {
+            "StringVar" | "ColorVar" => Ok(RustVar {
                 js_expr: format!("{}?.at?.({ijs})", self.js_expr),
                 var_type: PyString::type_object_bound(py).into_any().unbind(),
                 var_data: var_op_doubling(&[&self.var_data, &ivd]),
             }),
-            Some("dict") => Ok(RustVar {
+            "ObjectVar" => Ok(RustVar {
                 js_expr: format!("{}?.[{ijs}]", self.js_expr),
                 var_type: self.value_type(py, 1),
                 var_data: var_op_plain(&[&self.var_data, &ivd]),
@@ -1818,6 +1859,49 @@ fn object_attr_type(
         ));
     }
     Ok(attribute_type.unbind())
+}
+
+/// The Mapping value type of an object var (`ObjectVar._value_type` =
+/// `_determine_value_type(var_type)`), e.g. `int` for `Mapping[str, int]`.
+fn determine_value_type(py: Python<'_>, var_type: &Py<PyAny>) -> Py<PyAny> {
+    py.import_bound("reflex_base.vars.object")
+        .and_then(|m| m.getattr("_determine_value_type"))
+        .and_then(|f| f.call1((var_type.bind(py),)))
+        .map(|t| t.unbind())
+        .unwrap_or_else(|_| var_type.clone_ref(py))
+}
+
+/// Build `list[elem]` (falls back to bare `list` on error).
+fn list_of(py: Python<'_>, elem: Py<PyAny>) -> Py<PyAny> {
+    PyList::type_object_bound(py)
+        .get_item(elem)
+        .map(|t| t.unbind())
+        .unwrap_or_else(|_| PyList::type_object_bound(py).into_any().unbind())
+}
+
+/// The result type of merging two mapping objects:
+/// `Mapping[key_a | key_b, val_a | val_b]` (matches `object_merge_operation`).
+/// Falls back to the left type if the types are not subscriptable mappings.
+fn merged_mapping_type(py: Python<'_>, a: &Py<PyAny>, b: &Py<PyAny>) -> Py<PyAny> {
+    let build = || -> PyResult<Py<PyAny>> {
+        let any = py.import_bound("typing")?.getattr("Any")?;
+        let arg = |t: &Py<PyAny>, idx: usize| -> Py<PyAny> {
+            t.bind(py)
+                .getattr("__args__")
+                .ok()
+                .and_then(|args| args.get_item(idx).ok())
+                .map(|x| x.unbind())
+                .unwrap_or_else(|| any.clone().unbind())
+        };
+        let unionize = py
+            .import_bound("reflex_base.vars.base")?
+            .getattr("unionize")?;
+        let key = unionize.call1((arg(a, 0), arg(b, 0)))?;
+        let val = unionize.call1((arg(a, 1), arg(b, 1)))?;
+        let mapping = py.import_bound("collections.abc")?.getattr("Mapping")?;
+        Ok(mapping.get_item((key, val))?.unbind())
+    };
+    build().unwrap_or_else(|_| a.clone_ref(py))
 }
 
 /// Build a `reflex_base.utils.exceptions.VarAttributeError` (falls back to a
