@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use pyo3::basic::CompareOp;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyFloat, PyInt, PyList, PyString, PyType};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyType};
 use pyo3::PyTypeInfo;
 
 use crate::var::Var;
@@ -129,6 +129,82 @@ impl RustVar {
     /// `_get_all_var_data()`.
     fn _get_all_var_data(&self) -> Option<PyVarData> {
         self.var_data.clone().map(|vd| PyVarData { inner: vd })
+    }
+
+    /// The enclosing state name (matches `Var._var_state`).
+    #[getter]
+    fn _var_state(&self) -> String {
+        self.var_data
+            .as_ref()
+            .map(|vd| vd.state.clone())
+            .unwrap_or_default()
+    }
+
+    /// A copy with no var_data (matches `Var._without_data`).
+    fn _without_data(&self, py: Python<'_>) -> RustVar {
+        RustVar {
+            js_expr: self.js_expr.clone(),
+            var_type: self.var_type.clone_ref(py),
+            var_data: None,
+        }
+    }
+
+    /// Return this var as its guessed typed form (matches `Var.guess_type`).
+    /// RustVar dispatches every operator/method off its `_var_type` tag, so it
+    /// is already "typed" — guessing is identity (no separate typed class to
+    /// convert to).
+    fn guess_type(slf: PyRef<'_, Self>) -> Py<RustVar> {
+        slf.into()
+    }
+
+    /// Return a new var with replaced type / var_data / js_expr (matches
+    /// `Var._replace`). `merge_var_data` is merged onto the (possibly replaced)
+    /// var_data. Unsupported `_var_is_local` / `_var_is_string` kwargs raise.
+    #[pyo3(signature = (_var_type=None, merge_var_data=None, **kwargs))]
+    fn _replace(
+        &self,
+        py: Python<'_>,
+        _var_type: Option<Py<PyAny>>,
+        merge_var_data: Option<Bound<'_, PyAny>>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<RustVar> {
+        for bad in [
+            "_var_is_local",
+            "_var_is_string",
+            "_var_full_name_needs_state_prefix",
+        ] {
+            if let Some(k) = kwargs {
+                if let Ok(Some(v)) = k.get_item(bad) {
+                    if v.is_truthy().unwrap_or(false) {
+                        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                            "The {bad} argument is not supported for Var."
+                        )));
+                    }
+                }
+            }
+        }
+        let var_type = _var_type.unwrap_or_else(|| self.var_type.clone_ref(py));
+        let kw_var_data = kwargs.and_then(|k| k.get_item("_var_data").ok().flatten());
+        let base_vd: Option<VarData> = match kw_var_data {
+            Some(vd) => convert_var_data(&vd)?,
+            None => self.var_data.clone(),
+        };
+        let mvd: Option<VarData> = match merge_var_data {
+            Some(m) => convert_var_data(&m)?,
+            None => None,
+        };
+        let var_data = VarData::merge([base_vd.as_ref(), mvd.as_ref()])
+            .ok()
+            .flatten();
+        let js_expr = match kwargs.and_then(|k| k.get_item("_js_expr").ok().flatten()) {
+            Some(j) => j.extract()?,
+            None => self.js_expr.clone(),
+        };
+        Ok(RustVar {
+            js_expr,
+            var_type,
+            var_data,
+        })
     }
 
     /// String form == the JS expression (matches Python `Var.__str__`).
