@@ -826,7 +826,8 @@ impl RustVar {
             }
         }
         // A Union/Optional output without an explicit var_type leaves the var
-        // unchanged (Python returns `self`).
+        // unchanged (Python returns `self`) UNLESS its members are object-able
+        // (e.g. `Foo | Bar` of dataclasses → an ObjectVar of that union type).
         let origin = typing.call_method1("get_origin", (&output,))?;
         let is_union = !origin.is_none()
             && (origin.eq(typing.getattr("Union")?).unwrap_or(false)
@@ -834,11 +835,19 @@ impl RustVar {
                     .eq(py.import_bound("types")?.getattr("UnionType")?)
                     .unwrap_or(false));
         if is_union && var_type.is_none() {
-            return Ok(RustVar {
-                js_expr: self.js_expr.clone(),
-                var_type: self.var_type.clone_ref(py),
-                var_data: self.var_data.clone(),
-            });
+            let object_able = py
+                .import_bound("reflex_base.vars.base")?
+                .getattr("can_use_in_object_var")?
+                .call1((&output,))?
+                .is_truthy()
+                .unwrap_or(false);
+            if !object_able {
+                return Ok(RustVar {
+                    js_expr: self.js_expr.clone(),
+                    var_type: self.var_type.clone_ref(py),
+                    var_data: self.var_data.clone(),
+                });
+            }
         }
         // Otherwise adopt `var_type or output` as the new type.
         let new_type = var_type.map_or_else(|| output.clone().unbind(), |vt| vt.unbind());
@@ -1077,12 +1086,22 @@ impl RustVar {
     /// so a missing Var-protocol method surfaces cleanly instead of becoming a
     /// bogus item access.
     fn __getattr__(&self, py: Python<'_>, name: String) -> PyResult<RustVar> {
-        if name.starts_with('_') || self.type_label(py).as_deref() != Some("dict") {
+        // Private/internal names never resolve as object items (also keeps
+        // Python's attribute probes failing cleanly).
+        if name.starts_with('_') {
             return Err(pyo3::exceptions::PyAttributeError::new_err(name));
         }
+        // Attribute access is an ObjectVar operation: `{self}?.["name"]`. The
+        // result type is the mapping's value type, or — for a TypedDict / Base /
+        // dataclass / Union object — the field's annotated type (matches
+        // ObjectVar.__getattr__). Non-object receivers have no attribute access.
+        if var_category(py, &self.var_type)? != "ObjectVar" {
+            return Err(pyo3::exceptions::PyAttributeError::new_err(name));
+        }
+        let var_type = object_attr_type(py, &self.var_type, &name, &self.js_expr)?;
         Ok(RustVar {
             js_expr: format!("{}?.[{}]", self.js_expr, render_js_string(&name)),
-            var_type: self.value_type(py, 1),
+            var_type,
             var_data: var_op_plain(&[&self.var_data]),
         })
     }
@@ -1623,6 +1642,71 @@ fn is_string_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool>
         .import_bound("reflex_base.vars.sequence")?
         .getattr("StringVar")?;
     value.is_instance(&string_var)
+}
+
+/// The result type of an object attribute access (matches the type half of
+/// `ObjectVar.__getattr__`).
+///
+/// For a `Mapping` object the result is the mapping's value type; for a
+/// `TypedDict` / `Base` / dataclass / `Union` object it is the field's annotated
+/// type (`get_attribute_access_type`), raising `VarAttributeError` when the
+/// attribute is unknown.
+fn object_attr_type(
+    py: Python<'_>,
+    var_type: &Py<PyAny>,
+    name: &str,
+    js_expr: &str,
+) -> PyResult<Py<PyAny>> {
+    let types_mod = py.import_bound("reflex_base.utils.types")?;
+    let typing = py.import_bound("typing")?;
+    let resolved = types_mod.call_method1("value_inside_optional", (var_type.bind(py),))?;
+    let origin = typing.call_method1("get_origin", (&resolved,))?;
+    let fixed = if origin.is_none() {
+        resolved.clone()
+    } else {
+        origin.clone()
+    };
+    let mapping = py.import_bound("collections.abc")?.getattr("Mapping")?;
+    let is_mapping = fixed
+        .downcast::<PyType>()
+        .map(|t| t.is_subclass(&mapping).unwrap_or(false))
+        .unwrap_or(false);
+    if is_mapping {
+        // Mapping value type = var_type.__args__[1] (fall back to the var_type).
+        return Ok(resolved
+            .getattr("__args__")
+            .ok()
+            .and_then(|args| args.get_item(1).ok())
+            .map(|t| t.unbind())
+            .unwrap_or_else(|| var_type.clone_ref(py)));
+    }
+    let attribute_type =
+        types_mod.call_method1("get_attribute_access_type", (var_type.bind(py), name))?;
+    if attribute_type.is_none() {
+        return Err(var_attribute_error(
+            py,
+            &format!(
+                "The State var `{js_expr}` of type {} has no attribute '{name}' or may have been annotated wrongly.",
+                var_type.bind(py).str()?
+            ),
+        ));
+    }
+    Ok(attribute_type.unbind())
+}
+
+/// Build a `reflex_base.utils.exceptions.VarAttributeError` (falls back to a
+/// plain `AttributeError`).
+fn var_attribute_error(py: Python<'_>, msg: &str) -> PyErr {
+    match py
+        .import_bound("reflex_base.utils.exceptions")
+        .and_then(|m| m.getattr("VarAttributeError"))
+    {
+        Ok(cls) => PyErr::from_value_bound(
+            cls.call1((msg,))
+                .unwrap_or_else(|e| e.value_bound(py).clone().into_any()),
+        ),
+        Err(_) => pyo3::exceptions::PyAttributeError::new_err(msg.to_owned()),
+    }
 }
 
 /// The typed-`Var` category name for a `var_type` (e.g. `"NumberVar"`,
