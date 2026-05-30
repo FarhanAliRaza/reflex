@@ -46,18 +46,16 @@ from reflex_base.utils import console, format, imports, types
 from reflex_base.utils.imports import ImportDict, ImportVar, ParsedImportDict
 from reflex_base.vars import VarData
 from reflex_base.vars.base import (
+    ArgsFunctionOperation,
     CachedVarOperation,
+    FunctionStringVar,
+    FunctionVar,
     LiteralVar,
     ObjectVar,
     StringVar,
     Var,
     cached_property_no_lock,
     ternary_operation,
-)
-from reflex_base.vars.function import (
-    ArgsFunctionOperation,
-    FunctionStringVar,
-    FunctionVar,
 )
 
 if TYPE_CHECKING:

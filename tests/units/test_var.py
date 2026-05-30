@@ -18,9 +18,12 @@ from reflex_base.utils.imports import ImportVar
 from reflex_base.utils.types import get_default_value_for_type
 from reflex_base.vars import VarData
 from reflex_base.vars.base import (
+    ArgsFunctionOperation,
     ArrayVar,
     ComputedVar,
     ConcatVarOperation,
+    DestructuredArg,
+    FunctionStringVar,
     LiteralStringVar,
     LiteralVar,
     NumberVar,
@@ -29,11 +32,6 @@ from reflex_base.vars.base import (
     computed_var,
     var_operation,
     var_operation_return,
-)
-from reflex_base.vars.function import (
-    ArgsFunctionOperation,
-    DestructuredArg,
-    FunctionStringVar,
 )
 
 import reflex as rx

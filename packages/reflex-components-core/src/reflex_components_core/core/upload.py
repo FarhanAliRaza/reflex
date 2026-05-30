@@ -34,12 +34,12 @@ from reflex_base.utils.imports import ImportVar
 from reflex_base.vars import VarData
 from reflex_base.vars.base import (
     ArrayVar,
+    FunctionVar,
     LiteralVar,
     ObjectVar,
     Var,
     get_unique_variable_name,
 )
-from reflex_base.vars.function import FunctionVar
 from reflex_components_sonner.toast import toast
 
 from reflex_components_core.base.fragment import Fragment

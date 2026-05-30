@@ -18,8 +18,7 @@ from reflex_base.event import (
 from reflex_base.style import Style
 from reflex_base.utils import format
 from reflex_base.utils.serializers import serialize_figure
-from reflex_base.vars.base import LiteralVar, ObjectVar, Var
-from reflex_base.vars.function import FunctionStringVar
+from reflex_base.vars.base import FunctionStringVar, LiteralVar, ObjectVar, Var
 
 pytest.importorskip("pydantic")
 

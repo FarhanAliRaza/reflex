@@ -47,20 +47,18 @@ from reflex_base.utils.types import (
 )
 from reflex_base.vars import VarData
 from reflex_base.vars.base import (
-    LiteralVar,
-    ObjectVar,
-    Var,
-    cached_property_no_lock,
-    ternary_operation,
-)
-from reflex_base.vars.function import (
     ArgsFunctionOperation,
     ArgsFunctionOperationBuilder,
     BuilderFunctionVar,
     FunctionArgs,
     FunctionStringVar,
     FunctionVar,
+    LiteralVar,
+    ObjectVar,
+    Var,
     VarOperationCall,
+    cached_property_no_lock,
+    ternary_operation,
 )
 
 if TYPE_CHECKING:

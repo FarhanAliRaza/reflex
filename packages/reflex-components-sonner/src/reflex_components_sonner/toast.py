@@ -14,8 +14,7 @@ from reflex_base.utils import format
 from reflex_base.utils.imports import ImportVar
 from reflex_base.utils.serializers import serializer
 from reflex_base.vars import VarData
-from reflex_base.vars.base import LiteralVar, Var, ternary_operation
-from reflex_base.vars.function import FunctionVar
+from reflex_base.vars.base import FunctionVar, LiteralVar, Var, ternary_operation
 from reflex_components_lucide.icon import Icon
 
 LiteralPosition = Literal[
