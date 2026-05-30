@@ -2371,7 +2371,6 @@ class ComputedVar(Var[RETURN_TYPE]):
                 field_name,
                 var_data=VarData.from_state(state_where_defined, self._name),
                 result_var_type=self._var_type,
-                existing_var=self,
             )
 
         if not self._cache:
@@ -3163,7 +3162,6 @@ def dispatch(
     field_name: str,
     var_data: VarData,
     result_var_type: GenericType,
-    existing_var: Var | None = None,
 ) -> Var:
     """Dispatch a Var to the appropriate transformation function.
 
@@ -3171,7 +3169,6 @@ def dispatch(
         field_name: The name of the field.
         var_data: The VarData associated with the Var.
         result_var_type: The type of the Var.
-        existing_var: The existing Var to transform. Optional.
 
     Returns:
         The transformed Var.
@@ -3219,28 +3216,14 @@ def dispatch(
 
         fn_return_type = fn_return_generic_args[0]
 
-        var = (
-            Var(
-                field_name,
-                _var_data=var_data,
-                _var_type=fn_return_type,
-            ).guess_type()
-            if existing_var is None
-            else existing_var._replace(
-                _var_type=fn_return_type,
-                _var_data=var_data,
-                _js_expr=field_name,
-            ).guess_type()
-        )
+        var = Var(
+            field_name,
+            _var_data=var_data,
+            _var_type=fn_return_type,
+        ).guess_type()
 
         return fn(var)
 
-    if existing_var is not None:
-        return existing_var._replace(
-            _js_expr=field_name,
-            _var_data=var_data,
-            _var_type=result_var_type,
-        ).guess_type()
     return Var(
         field_name,
         _var_data=var_data,
