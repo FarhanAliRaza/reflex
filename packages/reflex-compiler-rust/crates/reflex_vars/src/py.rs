@@ -547,7 +547,7 @@ impl RustVar {
         _var_data: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let lit_cls = RustLiteralVar::type_object_bound(py);
-        RustLiteralVar::create(&lit_cls, py, value, _var_data)
+        RustLiteralVar::create(&lit_cls, py, value, None, _var_data)
     }
 
     /// Decode the var as a Python value (matches `Var._decode`): JSON-parse the
@@ -1305,6 +1305,7 @@ impl RustVar {
                             &lit_cls,
                             py,
                             PyString::new_bound(py, &joined).into_any(),
+                            None,
                             None,
                         );
                     }
@@ -3309,7 +3310,7 @@ impl RustLiteralVar {
         py: Python<'_>,
         value: Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        let var = RustLiteralVar::create(cls, py, value, None)?;
+        let var = RustLiteralVar::create(cls, py, value, None, None)?;
         Ok(var.bind(py).call_method0("_get_all_var_data")?.unbind())
     }
 
@@ -3342,11 +3343,12 @@ impl RustLiteralVar {
     /// Returns:
     ///     The value itself if already a Var, else a new `RustLiteralVar`.
     #[classmethod]
-    #[pyo3(signature = (value, _var_data = None))]
+    #[pyo3(signature = (value, _var_type = None, _var_data = None))]
     fn create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         value: Bound<'_, PyAny>,
+        _var_type: Option<Bound<'_, PyAny>>,
         _var_data: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         // An existing Var is returned as-is (matches `LiteralVar.create(Var)`).
@@ -3357,11 +3359,18 @@ impl RustLiteralVar {
             Some(vd) => convert_var_data(&vd)?,
             None => None,
         };
+        let var_type_override = _var_type.map(|t| t.unbind());
         let merge_extra = |mut inner: RustVar| -> RustVar {
             if let Some(extra) = &extra {
                 inner.var_data = VarData::merge([inner.var_data.as_ref(), Some(extra)])
                     .ok()
                     .flatten();
+            }
+            // An explicit `_var_type` overrides the inferred literal type (the
+            // serializer / dataclass paths keep the original Python type, matching
+            // LiteralObjectVar/LiteralStringVar.create(..., _var_type=type(value))).
+            if let Some(t) = &var_type_override {
+                inner.var_type = t.clone_ref(py);
             }
             inner
         };

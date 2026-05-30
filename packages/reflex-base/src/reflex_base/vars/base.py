@@ -1482,20 +1482,16 @@ class LiteralVar(Var[VAR_TYPE]):
 
         serialized_value = serializers.serialize(value)
         if serialized_value is not None:
-            if isinstance(serialized_value, Mapping):
-                return LiteralObjectVar.create(
+            if isinstance(serialized_value, (Mapping, str)):
+                return RustLiteralVar.create(
                     serialized_value,
                     _var_type=type(value),
                     _var_data=_var_data,
                 )
-            if isinstance(serialized_value, str):
-                return LiteralStringVar.create(
-                    serialized_value, _var_type=type(value), _var_data=_var_data
-                )
             return LiteralVar.create(serialized_value, _var_data=_var_data)
 
         if dataclasses.is_dataclass(value) and not isinstance(value, type):
-            return LiteralObjectVar.create(
+            return RustLiteralVar.create(
                 {
                     k.name: (None if callable(v := getattr(value, k.name)) else v)
                     for k in dataclasses.fields(value)
