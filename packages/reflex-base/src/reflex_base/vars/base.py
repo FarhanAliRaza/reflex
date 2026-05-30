@@ -1458,6 +1458,8 @@ class LiteralVar(Var[VAR_TYPE]):
             tuple,
             set,
             Decimal,
+            datetime.datetime,
+            datetime.date,
         ):
             return RustLiteralVar.create(value, _var_data=_var_data)
 

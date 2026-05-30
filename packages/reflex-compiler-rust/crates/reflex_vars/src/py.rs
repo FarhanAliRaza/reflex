@@ -2524,6 +2524,12 @@ fn render_literal_js(value: &Bound<'_, PyAny>) -> PyResult<String> {
     if value.is_instance(&decimal_cls)? {
         return Ok(value.str()?.to_string());
     }
+    // A `datetime.date` / `datetime.datetime` renders as its `str()` wrapped in
+    // raw double quotes (matches LiteralDatetimeVar.create: `f'"{value!s}"'`).
+    let date_cls = py.import_bound("datetime")?.getattr("date")?;
+    if value.is_instance(&date_cls)? {
+        return Ok(format!("\"{}\"", value.str()?));
+    }
     // Lists, tuples and sets all render as JS arrays (iterating preserves the
     // Python object's order, so a set matches its own iteration).
     if value.is_instance_of::<PyList>()
@@ -2582,6 +2588,12 @@ fn literal_var_type(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyA
     let decimal_cls = py.import_bound("decimal")?.getattr("Decimal")?;
     if value.is_instance(&decimal_cls)? {
         return Ok(decimal_cls.unbind());
+    }
+    // A `datetime.date` / `datetime.datetime` keeps its own concrete type
+    // (matches LiteralDatetimeVar's `_var_type=type(value)`).
+    let date_cls = py.import_bound("datetime")?.getattr("date")?;
+    if value.is_instance(&date_cls)? {
+        return Ok(value.get_type().into_any().unbind());
     }
     // Containers carry an inferred element type (Sequence[int], Mapping[str,
     // int], …); defer to Python's figure_out_type for byte-parity with the
