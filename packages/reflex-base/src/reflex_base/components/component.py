@@ -17,7 +17,7 @@ from hashlib import md5
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast, get_args, get_origin
 
-from reflex_compiler_rust._native import RustImportVar, RustVar
+from reflex_compiler_rust._native import RustImportVar, Var as RustVar
 from rich.markup import escape
 from typing_extensions import dataclass_transform
 

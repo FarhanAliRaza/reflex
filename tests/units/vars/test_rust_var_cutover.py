@@ -17,7 +17,7 @@ import operator
 import pytest
 from reflex_base.utils.exceptions import PrimitiveUnserializableToJSONError
 from reflex_base.vars.base import LiteralVar, Var
-from reflex_compiler_rust._native import RustLiteralVar
+from reflex_compiler_rust._native import LiteralVar as RustLiteralVar
 
 
 @pytest.mark.parametrize(

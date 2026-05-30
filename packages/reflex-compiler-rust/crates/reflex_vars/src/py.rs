@@ -62,7 +62,7 @@ static VAR_COUNTER: AtomicI64 = AtomicI64::new(1);
 #[pyclass(
     subclass,
     frozen,
-    name = "RustVar",
+    name = "Var",
     module = "reflex_compiler_rust._native"
 )]
 pub struct RustVar {
@@ -3297,7 +3297,7 @@ impl PyImportVar {
     extends = RustVar,
     subclass,
     frozen,
-    name = "RustLiteralVar",
+    name = "LiteralVar",
     module = "reflex_compiler_rust._native"
 )]
 pub struct RustLiteralVar {

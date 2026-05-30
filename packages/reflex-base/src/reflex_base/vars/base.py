@@ -107,7 +107,7 @@ _var_literal_subclasses: list[tuple[type[LiteralVar], VarSubclassEntry]] = []
 
 
 # VarData is now the Rust-backed RustVarData (hard cutover, no Python impl).
-from reflex_compiler_rust._native import RustLiteralVar, RustVar  # noqa: E402
+from reflex_compiler_rust._native import LiteralVar as RustLiteralVar, Var as RustVar  # noqa: E402
 from reflex_compiler_rust._native import RustVarData as VarData
 
 

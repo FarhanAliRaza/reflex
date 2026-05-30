@@ -20,7 +20,7 @@ import pytest
 from reflex_base.utils import imports
 from reflex_base.utils.exceptions import VarTypeError
 from reflex_base.vars.base import Var, VarData
-from reflex_compiler_rust._native import RustLiteralVar, RustVar, RustVarData
+from reflex_compiler_rust._native import LiteralVar as RustLiteralVar, RustVarData, Var as RustVar
 
 _IMPORTS = {"$/foo": [imports.ImportVar(tag="bar")]}
 

@@ -29,7 +29,7 @@ from reflex_base.vars.base import (
     var_isinstance,
 )
 from reflex_base.vars.datetime import DateTimeVar
-from reflex_compiler_rust._native import RustLiteralVar, RustVar
+from reflex_compiler_rust._native import LiteralVar as RustLiteralVar, Var as RustVar
 
 _NON_LITERAL_TARGETS = [
     NumberVar,

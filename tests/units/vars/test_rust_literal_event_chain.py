@@ -59,8 +59,8 @@ def _vd(var) -> tuple:
 
 def test_extends_literal_var() -> None:
     """RustLiteralEventChainVar subclasses RustLiteralVar (and RustVar)."""
-    assert issubclass(_native.RustLiteralEventChainVar, _native.RustLiteralVar)
-    assert issubclass(_native.RustLiteralEventChainVar, _native.RustVar)
+    assert issubclass(_native.RustLiteralEventChainVar, _native.LiteralVar)
+    assert issubclass(_native.RustLiteralEventChainVar, _native.Var)
 
 
 CASES = {
@@ -81,4 +81,4 @@ def test_create_matches_python_js_and_var_data(key: str) -> None:
     ru = _native.RustLiteralEventChainVar.create(chain)
     assert ru._js_expr == str(py._js_expr)
     assert _vd(ru) == _vd(py)
-    assert isinstance(ru, _native.RustLiteralVar)
+    assert isinstance(ru, _native.LiteralVar)

@@ -1,4 +1,4 @@
-"""Tests for the Rust ``LiteralVar`` class (`_native.RustLiteralVar`).
+"""Tests for the Rust ``LiteralVar`` class (`_native.LiteralVar`).
 
 `RustLiteralVar` is the Rust analog of Python's `LiteralVar(Var)`: it *extends*
 `RustVar` (inheriting `_js_expr` / `_var_type` / `_get_all_var_data` / every
@@ -21,15 +21,15 @@ class _LVState(rx.State):
 
 def test_is_class_extending_rust_var() -> None:
     """RustLiteralVar is a class that subclasses RustVar (like LiteralVar(Var))."""
-    assert isinstance(_native.RustLiteralVar, type)
-    assert issubclass(_native.RustLiteralVar, _native.RustVar)
+    assert isinstance(_native.LiteralVar, type)
+    assert issubclass(_native.LiteralVar, _native.Var)
 
 
 def test_create_returns_literal_var_instance() -> None:
     """create() returns a RustLiteralVar that is also a RustVar."""
-    v = _native.RustLiteralVar.create(5)
-    assert isinstance(v, _native.RustLiteralVar)
-    assert isinstance(v, _native.RustVar)
+    v = _native.LiteralVar.create(5)
+    assert isinstance(v, _native.LiteralVar)
+    assert isinstance(v, _native.Var)
     assert v._js_expr == "5"
     assert v._var_type is int
     assert v._var_value == 5
@@ -37,13 +37,13 @@ def test_create_returns_literal_var_instance() -> None:
 
 def test_inherits_var_operators() -> None:
     """A RustLiteralVar uses the inherited RustVar operators."""
-    assert (_native.RustLiteralVar.create(5) + 1)._js_expr == "(5 + 1)"
+    assert (_native.LiteralVar.create(5) + 1)._js_expr == "(5 + 1)"
 
 
 def test_create_passes_through_existing_var() -> None:
     """create(Var) returns the Var unchanged (matches LiteralVar.create)."""
     leaf = _LVState.count
-    assert _native.RustLiteralVar.create(leaf) is leaf
+    assert _native.LiteralVar.create(leaf) is leaf
 
 
 PARITY_VALUES = [
@@ -64,6 +64,6 @@ PARITY_VALUES = [
 @pytest.mark.parametrize("value", PARITY_VALUES)
 def test_create_matches_python_literal_var(value: object) -> None:
     """RustLiteralVar.create renders byte-identically to LiteralVar.create."""
-    assert _native.RustLiteralVar.create(value)._js_expr == str(
+    assert _native.LiteralVar.create(value)._js_expr == str(
         LiteralVar.create(value)._js_expr
     )

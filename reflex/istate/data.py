@@ -17,7 +17,7 @@ from reflex_base.vars.base import (
     VarSubclassEntry,
     _var_subclasses,
 )
-from reflex_compiler_rust._native import RustVar
+from reflex_compiler_rust._native import Var as RustVar
 
 
 @dataclasses.dataclass(frozen=True, init=False)
