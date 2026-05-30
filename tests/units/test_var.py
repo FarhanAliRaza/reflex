@@ -30,14 +30,9 @@ from reflex_base.vars.function import (
     DestructuredArg,
     FunctionStringVar,
 )
-from reflex_base.vars.number import LiteralBooleanVar, LiteralNumberVar, NumberVar
-from reflex_base.vars.object import LiteralObjectVar, ObjectVar
-from reflex_base.vars.sequence import (
-    ArrayVar,
-    ConcatVarOperation,
-    LiteralArrayVar,
-    LiteralStringVar,
-)
+from reflex_base.vars.number import NumberVar
+from reflex_base.vars.object import ObjectVar
+from reflex_base.vars.sequence import ArrayVar, ConcatVarOperation, LiteralStringVar
 
 import reflex as rx
 from reflex.environment import PerformanceMode
@@ -302,22 +297,22 @@ def test_basic_operations(TestObj):
     """
     assert str(v(1) == v(2)) == "(1?.valueOf?.() === 2?.valueOf?.())"
     assert str(v(1) != v(2)) == "(1?.valueOf?.() !== 2?.valueOf?.())"
-    assert str(LiteralNumberVar.create(1) < 2) == "(1 < 2)"
-    assert str(LiteralNumberVar.create(1) <= 2) == "(1 <= 2)"
-    assert str(LiteralNumberVar.create(1) > 2) == "(1 > 2)"
-    assert str(LiteralNumberVar.create(1) >= 2) == "(1 >= 2)"
-    assert str(LiteralNumberVar.create(1) + 2) == "(1 + 2)"
-    assert str(LiteralNumberVar.create(1) - 2) == "(1 - 2)"
-    assert str(LiteralNumberVar.create(1) * 2) == "(1 * 2)"
-    assert str(LiteralNumberVar.create(1) / 2) == "(1 / 2)"
-    assert str(LiteralNumberVar.create(1) // 2) == "Math.floor(1 / 2)"
-    assert str(LiteralNumberVar.create(1) % 2) == "(1 % 2)"
-    assert str(LiteralNumberVar.create(1) ** 2) == "(1 ** 2)"
-    assert str(LiteralNumberVar.create(1) & v(2)) == "(1 && 2)"
-    assert str(LiteralNumberVar.create(1) | v(2)) == "(1 || 2)"
-    assert str(LiteralArrayVar.create([1, 2, 3])[0]) == "[1, 2, 3]?.at?.(0)"
+    assert str(LiteralVar.create(1) < 2) == "(1 < 2)"
+    assert str(LiteralVar.create(1) <= 2) == "(1 <= 2)"
+    assert str(LiteralVar.create(1) > 2) == "(1 > 2)"
+    assert str(LiteralVar.create(1) >= 2) == "(1 >= 2)"
+    assert str(LiteralVar.create(1) + 2) == "(1 + 2)"
+    assert str(LiteralVar.create(1) - 2) == "(1 - 2)"
+    assert str(LiteralVar.create(1) * 2) == "(1 * 2)"
+    assert str(LiteralVar.create(1) / 2) == "(1 / 2)"
+    assert str(LiteralVar.create(1) // 2) == "Math.floor(1 / 2)"
+    assert str(LiteralVar.create(1) % 2) == "(1 % 2)"
+    assert str(LiteralVar.create(1) ** 2) == "(1 ** 2)"
+    assert str(LiteralVar.create(1) & v(2)) == "(1 && 2)"
+    assert str(LiteralVar.create(1) | v(2)) == "(1 || 2)"
+    assert str(LiteralVar.create([1, 2, 3])[0]) == "[1, 2, 3]?.at?.(0)"
     assert (
-        str(LiteralObjectVar.create({"a": 1, "b": 2})["a"])
+        str(LiteralVar.create({"a": 1, "b": 2})["a"])
         == '({ ["a"] : 1, ["b"] : 2 })?.["a"]'
     )
     assert str(v("foo") == v("bar")) == '("foo"?.valueOf?.() === "bar"?.valueOf?.())'
@@ -343,20 +338,17 @@ def test_basic_operations(TestObj):
         str(Var(_js_expr="foo").to(ObjectVar, TestObj)._var_set_state("state").bar)
         == 'state.foo?.["bar"]'
     )
-    assert str(abs(LiteralNumberVar.create(1))) == "Math.abs(1)"
-    assert str(LiteralArrayVar.create([1, 2, 3]).length()) == "[1, 2, 3].length"
+    assert str(abs(LiteralVar.create(1))) == "Math.abs(1)"
+    assert str(LiteralVar.create([1, 2, 3]).length()) == "[1, 2, 3].length"
     assert (
-        str(LiteralArrayVar.create([1, 2]) + LiteralArrayVar.create([3, 4]))
+        str(LiteralVar.create([1, 2]) + LiteralVar.create([3, 4]))
         == "[...[1, 2], ...[3, 4]]"
     )
 
     # Tests for reverse operation
+    assert str(LiteralVar.create([1, 2, 3]).reverse()) == "[1, 2, 3].slice().reverse()"
     assert (
-        str(LiteralArrayVar.create([1, 2, 3]).reverse())
-        == "[1, 2, 3].slice().reverse()"
-    )
-    assert (
-        str(LiteralArrayVar.create(["1", "2", "3"]).reverse())
+        str(LiteralVar.create(["1", "2", "3"]).reverse())
         == '["1", "2", "3"].slice().reverse()'
     )
     assert (
@@ -934,8 +926,8 @@ def test_function_var():
     create_hello_statement = ArgsFunctionOperation.create(
         ("name",), f"Hello, {Var(_js_expr='name')}!"
     )
-    first_name = LiteralStringVar.create("Steven")
-    last_name = LiteralStringVar.create("Universe")
+    first_name = LiteralVar.create("Steven")
+    last_name = LiteralVar.create("Universe")
     assert (
         str(create_hello_statement.call(f"{first_name} {last_name}"))
         == '(((name) => ("Hello, "+name+"!"))("Steven Universe"))'
@@ -992,14 +984,14 @@ def test_var_operation():
     assert str(add(1, 2)) == "(1 + 2)"
     assert str(add(a=4, b=-9)) == "(4 + -9)"
 
-    five = LiteralNumberVar.create(5)
+    five = LiteralVar.create(5)
     seven = add(2, five)
 
     assert isinstance(seven, NumberVar)
 
 
 def test_string_operations():
-    basic_string = LiteralStringVar.create("Hello, World!")
+    basic_string = LiteralVar.create("Hello, World!")
 
     assert str(basic_string.length()) == '"Hello, World!".split("").length'
     assert str(basic_string.lower()) == '"Hello, World!".toLowerCase()'
@@ -1012,7 +1004,7 @@ def test_string_operations():
 
 
 def test_all_number_operations():
-    starting_number = LiteralNumberVar.create(-5.4)
+    starting_number = LiteralVar.create(-5.4)
 
     complicated_number = (((-(starting_number + 1)) * 2 / 3) // 2 % 3) ** 2
 
@@ -1030,10 +1022,10 @@ def test_all_number_operations():
         == "!(isTrue((Math.abs(Math.floor(((Math.floor(((-((-5.4 + 1)) * 2) / 3) / 2) % 3) ** 2))) || (2 && Math.round(((Math.floor(((-((-5.4 + 1)) * 2) / 3) / 2) % 3) ** 2))))))"
     )
 
-    assert str(LiteralNumberVar.create(5) > False) == "(5 > 0)"
-    assert str(LiteralBooleanVar.create(False) < 5) == "(Number(false) < 5)"
+    assert str(LiteralVar.create(5) > False) == "(5 > 0)"
+    assert str(LiteralVar.create(False) < 5) == "(Number(false) < 5)"
     assert (
-        str(LiteralBooleanVar.create(False) < LiteralBooleanVar.create(True))
+        str(LiteralVar.create(False) < LiteralVar.create(True))
         == "(Number(false) < Number(true))"
     )
 
@@ -1054,7 +1046,7 @@ def test_boolify_operations(var, expected):
 
 
 def test_index_operation():
-    array_var = LiteralArrayVar.create([1, 2, 3, 4, 5])
+    array_var = LiteralVar.create([1, 2, 3, 4, 5])
     assert str(array_var[0]) == "[1, 2, 3, 4, 5]?.at?.(0)"
     assert str(array_var[1:2]) == "[1, 2, 3, 4, 5].slice(1, 2)"
     assert (
@@ -1086,7 +1078,7 @@ def test_inf_and_nan(var, expected_js):
 
 
 def test_array_operations():
-    array_var = LiteralArrayVar.create([1, 2, 3, 4, 5])
+    array_var = LiteralVar.create([1, 2, 3, 4, 5])
 
     assert str(array_var.length()) == "[1, 2, 3, 4, 5].length"
     assert str(array_var.contains(3)) == "[1, 2, 3, 4, 5].includes(3)"
@@ -1110,7 +1102,7 @@ def test_array_operations():
 
 
 def test_object_operations():
-    object_var = LiteralObjectVar.create({"a": 1, "b": 2, "c": 3})
+    object_var = LiteralVar.create({"a": 1, "b": 2, "c": 3})
 
     assert (
         str(object_var.keys())
@@ -1127,7 +1119,7 @@ def test_object_operations():
     assert str(object_var.a) == '({ ["a"] : 1, ["b"] : 2, ["c"] : 3 })?.["a"]'
     assert str(object_var["a"]) == '({ ["a"] : 1, ["b"] : 2, ["c"] : 3 })?.["a"]'
     assert (
-        str(object_var.merge(LiteralObjectVar.create({"c": 4, "d": 5})))
+        str(object_var.merge(LiteralVar.create({"c": 4, "d": 5})))
         == '({...({ ["a"] : 1, ["b"] : 2, ["c"] : 3 }), ...({ ["c"] : 4, ["d"] : 5 })})'
     )
 
@@ -1156,7 +1148,7 @@ def test_var_component():
 
 
 def test_type_chains():
-    object_var = LiteralObjectVar.create({"a": 1, "b": 2, "c": 3})
+    object_var = LiteralVar.create({"a": 1, "b": 2, "c": 3})
     assert (object_var._key_type(), object_var._value_type()) == (str, int)
     assert (object_var.keys()._var_type, object_var.values()._var_type) == (
         list[str],
@@ -1177,7 +1169,7 @@ def test_type_chains():
 
 
 def test_nested_dict():
-    arr = LiteralArrayVar.create([{"bar": ["foo", "bar"]}], list[dict[str, list[str]]])
+    arr = LiteralVar.create([{"bar": ["foo", "bar"]}]).to(list[dict[str, list[str]]])
 
     assert (
         str(arr[0]["bar"][0])
@@ -1194,9 +1186,9 @@ def nested_base():
         bar: Boo
         baz: int
 
-    parent_obj = LiteralObjectVar.create(
-        Foo(bar=Boo(foo="bar", bar=5), baz=5).model_dump(), Foo
-    )
+    parent_obj = LiteralVar.create(
+        Foo(bar=Boo(foo="bar", bar=5), baz=5).model_dump()
+    ).to(Foo)
 
     assert (
         str(parent_obj.bar.foo)
