@@ -14,7 +14,13 @@ from reflex_base.utils import console, format, types
 from reflex_base.utils.imports import ImportDict, ImportVar
 from reflex_base.utils.serializers import serializer
 from reflex_base.vars import get_unique_variable_name
-from reflex_base.vars.base import ArrayVar, FunctionStringVar, Var, VarData
+from reflex_base.vars.base import (
+    ArrayVar,
+    FunctionStringVar,
+    Var,
+    VarData,
+    var_isinstance,
+)
 
 
 # TODO: Fix the serialization issue for custom types.
@@ -512,11 +518,11 @@ class DataEditor(NoSSRComponent):
 
         # If rows is not provided, determine from data.
         if rows is None:
-            if isinstance(data, Var) and not isinstance(data, ArrayVar):
+            if isinstance(data, Var) and not var_isinstance(data, ArrayVar):
                 msg = "DataEditor data must be an ArrayVar if rows is not provided."
                 raise ValueError(msg)
 
-            props["rows"] = data.length() if isinstance(data, ArrayVar) else len(data)
+            props["rows"] = data.length() if var_isinstance(data, ArrayVar) else len(data)
 
         if not isinstance(columns, Var) and len(columns):
             if types.is_dataframe(type(data)) or (

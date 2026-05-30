@@ -20,6 +20,7 @@ from reflex_base.vars.base import (
     StringVar,
     Var,
     string_replace_operation,
+    var_isinstance,
 )
 from reflex_components_core.core.colors import color
 from reflex_components_core.core.cond import color_mode_cond
@@ -838,7 +839,7 @@ class ShikiHighLevelCodeBlock(ShikiCodeBlock):
 
     @staticmethod
     def _strip_transformer_triggers(code: str | StringVar) -> StringVar | str:
-        if not isinstance(code, (StringVar, str)):
+        if not (isinstance(code, str) or var_isinstance(code, StringVar)):
             msg = f"code should be string literal or a StringVar type. Got {type(code)} instead."
             raise VarTypeError(msg)
         regex_pattern = r"[\/#]+ *\[!code.*?\]"

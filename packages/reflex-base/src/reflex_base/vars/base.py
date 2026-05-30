@@ -25,7 +25,6 @@ from typing import (
     Annotated,
     Any,
     ClassVar,
-    Concatenate,
     Generic,
     Literal,
     NoReturn,
@@ -45,7 +44,6 @@ from typing_extensions import LiteralString, dataclass_transform, override
 from typing_extensions import TypeVar as TypeVarExt
 
 from reflex_base import constants
-from reflex_base.constants.compiler import Hooks
 from reflex_base.constants.state import FIELD_MARKER
 from reflex_base.utils import console, exceptions, format, imports, serializers, types
 from reflex_base.utils.compat import annotations_from_namespace
@@ -59,14 +57,7 @@ from reflex_base.utils.exceptions import (
     VarTypeError,
 )
 from reflex_base.utils.format import format_state_name
-from reflex_base.utils.imports import (
-    ImmutableImportDict,
-    ImmutableParsedImportDict,
-    ImportDict,
-    ImportVar,
-    ParsedImportTuple,
-    parse_imports,
-)
+from reflex_base.utils.imports import ImportDict, ImportVar
 from reflex_base.utils.types import (
     GenericType,
     Self,
@@ -79,7 +70,6 @@ from reflex_base.utils.types import (
 
 if TYPE_CHECKING:
     from reflex.state import BaseState
-    from reflex_base.components.component import BaseComponent
     from reflex_base.constants.colors import Color
 
     from .color import LiteralColorVar
@@ -135,7 +125,6 @@ def _rust_var_classify(var_type: GenericType) -> type:
     Returns:
         The matched typed ``Var`` subclass (``Var`` when nothing matches).
     """
-
     if var_type is None:
         return NoneVar
     if var_type is NoReturn or var_type is Any:
@@ -306,8 +295,16 @@ def can_use_in_object_var(cls: GenericType) -> bool:
 _BASE_VAR: list[type] = []
 
 
-class MetaclassVar(type):
-    """Metaclass for the Var class."""
+class MetaclassVar(ABCMeta):
+    """Metaclass for the Var class.
+
+    Subclasses ``ABCMeta`` so the Rust ``Var`` / ``LiteralVar`` can be
+    registered as virtual subclasses (``Var.register(RustVar)``) — making
+    ``isinstance(rust_var, Var)`` a native, cached check with no per-call
+    bridge. Typed-category membership (``StringVar``/``ArrayVar``/…), which
+    depends on a Rust var's runtime ``_var_type`` rather than its class, is
+    answered by the explicit :func:`var_isinstance` helper instead.
+    """
 
     def __call__(cls, *args, **kwargs):  # noqa: D102
         if _BASE_VAR and cls is _BASE_VAR[0]:
@@ -330,23 +327,26 @@ class MetaclassVar(type):
             name, value if name != _PYDANTIC_VALIDATE_VALUES else _pydantic_validator
         )
 
-    def __instancecheck__(cls, instance: Any) -> bool:
-        """Recognize Rust-backed vars as the typed ``Var`` they classify as.
 
-        A ``RustVar`` carries its type tag in ``_var_type``; the bridge maps that
-        to the matching typed ``Var`` subclass so ``isinstance(rust_var,
-        NumberVar)`` (etc.) behaves like the Python ``Var`` hierarchy. Python var
-        instances fall through to the default check.
+def var_isinstance(value: Any, cls: type) -> bool:
+    """Whether ``value`` is a var that classifies as the typed ``Var`` ``cls``.
 
-        Args:
-            instance: The object to test.
+    ``isinstance(x, Var)`` / ``isinstance(x, LiteralVar)`` are native (the Rust
+    classes are registered virtual subclasses). This helper covers the
+    *typed-category* questions (``isinstance(x, StringVar)`` etc.) that depend on
+    a Rust var's runtime ``_var_type`` — a Rust var is classified by its
+    ``_var_type``; any other object falls back to a plain ``isinstance``.
 
-        Returns:
-            Whether ``instance`` is an instance of ``cls``.
-        """
-        if isinstance(instance, RustVar):
-            return _rust_var_isinstance(instance, cls)
-        return super().__instancecheck__(instance)
+    Args:
+        value: The object to test.
+        cls: The typed ``Var`` subclass to test against.
+
+    Returns:
+        Whether ``value`` matches ``cls``.
+    """
+    if isinstance(value, RustVar):
+        return _rust_var_isinstance(value, cls)
+    return isinstance(value, cls)
 
 
 @dataclasses.dataclass(
@@ -758,7 +758,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             The converted var.
         """
-
         fixed_output_type = get_origin(output) or output
 
         # If the first argument is a python type, we map it to the corresponding Var type.
@@ -827,7 +826,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Raises:
             TypeError: If the type is not supported for guessing.
         """
-
         var_type = self._var_type
         if var_type is None:
             return self.to(None)
@@ -1070,7 +1068,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             The string var.
         """
-
         return (
             JSON_STRINGIFY.call(self).to(StringVar)
             if use_json
@@ -1101,7 +1098,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             StringVar: A string variable representing the type of the object.
         """
-
         type_of = FunctionStringVar("typeof")
         return type_of.call(self).to(StringVar)
 
@@ -1170,7 +1166,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             The range of numbers.
         """
-
         return RustVar.range(first_endpoint, second_endpoint, step)
 
     if not TYPE_CHECKING:
@@ -1288,8 +1283,7 @@ class ToOperation:
         Returns:
             The attribute of the var.
         """
-
-        if isinstance(self, ObjectVar) and name != "_js_expr":
+        if var_isinstance(self, ObjectVar) and name != "_js_expr":
             return ObjectVar.__getattr__(self, name)
         return getattr(self._original, name)
 
@@ -1413,7 +1407,6 @@ class LiteralVar(Var[VAR_TYPE]):
         Raises:
             TypeError: If the value is not a supported type for LiteralVar.
         """
-
         if isinstance(value, Var):
             if _var_data is None:
                 return value
@@ -1514,7 +1507,6 @@ class LiteralVar(Var[VAR_TYPE]):
         Raises:
             TypeError: If the value is not a supported type for LiteralVar.
         """
-
         if isinstance(value, Var):
             return value._get_all_var_data()
 
@@ -4050,7 +4042,6 @@ class LiteralObjectVar(
         Returns:
             The var data.
         """
-
         return VarData.merge(
             LiteralArrayVar._get_all_var_data_without_creating_var(value),
             LiteralArrayVar._get_all_var_data_without_creating_var(value.values()),
@@ -4063,7 +4054,6 @@ class LiteralObjectVar(
         Returns:
             The var data.
         """
-
         return VarData.merge(
             LiteralArrayVar._get_all_var_data_without_creating_var(self._var_value),
             LiteralArrayVar._get_all_var_data_without_creating_var(
@@ -4310,12 +4300,12 @@ class LiteralStringVar(LiteralVar[STRING_TYPE], StringVar[STRING_TYPE]):
                 literal_strings := [
                     s
                     for s in filtered_strings_and_vals
-                    if isinstance(s, (str, LiteralStringVar))
+                    if isinstance(s, str) or var_isinstance(s, LiteralStringVar)
                 ]
             ) == len(filtered_strings_and_vals):
                 return LiteralStringVar.create(
                     "".join(
-                        s._var_value if isinstance(s, LiteralStringVar) else s
+                        s._var_value if var_isinstance(s, LiteralStringVar) else s
                         for s in literal_strings
                     ),
                     _var_type=_var_type,
@@ -4380,7 +4370,7 @@ class ConcatVarOperation(CachedVarOperation, StringVar[str]):
         list_of_strs: list[str | Var] = []
         last_string = ""
         for var in self._var_value:
-            if isinstance(var, LiteralStringVar):
+            if var_isinstance(var, LiteralStringVar):
                 last_string += var._var_value
             else:
                 if last_string:
@@ -4904,3 +4894,11 @@ PROTOTYPE_TO_STRING = FunctionStringVar.create(
     "((__to_string) => __to_string.toString())",
     _var_type=ReflexCallable[[Any], str],
 )
+
+
+# Register the Rust var implementations as virtual subclasses of the Python
+# ``Var`` / ``LiteralVar`` bases (``MetaclassVar`` is an ``ABCMeta``). This makes
+# ``isinstance(rust_var, Var)`` / ``isinstance(rust_literal, LiteralVar)`` native,
+# cached checks — replacing the former custom ``__instancecheck__`` bridge.
+Var.register(RustVar)
+LiteralVar.register(RustLiteralVar)

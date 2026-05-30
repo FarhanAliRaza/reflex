@@ -30,6 +30,7 @@ from reflex_base.vars.base import (
     ObjectVar,
     Var,
     computed_var,
+    var_isinstance,
     var_operation,
     var_operation_return,
 )
@@ -987,7 +988,7 @@ def test_var_operation():
     five = LiteralVar.create(5)
     seven = add(2, five)
 
-    assert isinstance(seven, NumberVar)
+    assert var_isinstance(seven, NumberVar)
 
 
 def test_string_operations():
@@ -1071,7 +1072,7 @@ def test_index_operation():
 )
 def test_inf_and_nan(var, expected_js):
     assert str(var) == expected_js
-    assert isinstance(var, NumberVar)
+    assert var_isinstance(var, NumberVar)
     assert isinstance(var, LiteralVar)
     with pytest.raises(PrimitiveUnserializableToJSONError):
         var.json()

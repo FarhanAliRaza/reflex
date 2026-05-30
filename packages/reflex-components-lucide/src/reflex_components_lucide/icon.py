@@ -3,7 +3,13 @@
 from reflex_base.components.component import Component, field
 from reflex_base.utils import console, format
 from reflex_base.utils.imports import ImportVar
-from reflex_base.vars.base import LiteralStringVar, LiteralVar, StringVar, Var
+from reflex_base.vars.base import (
+    LiteralStringVar,
+    LiteralVar,
+    StringVar,
+    Var,
+    var_isinstance,
+)
 
 LUCIDE_LIBRARY = "lucide-react@1.14.0"
 
@@ -41,7 +47,7 @@ class Icon(LucideIconComponent):
         if children:
             if len(children) == 1:
                 child = Var.create(children[0]).guess_type()
-                if not isinstance(child, StringVar):
+                if not var_isinstance(child, StringVar):
                     msg = f"Icon name must be a string, got {children[0]._var_type if isinstance(children[0], Var) else children[0]}"
                     raise AttributeError(msg)
                 props["tag"] = children[0]
@@ -54,14 +60,14 @@ class Icon(LucideIconComponent):
 
         tag_var: Var | LiteralVar = Var.create(props.pop("tag"))
         if isinstance(tag_var, LiteralVar):
-            if isinstance(tag_var, LiteralStringVar):
+            if var_isinstance(tag_var, LiteralStringVar):
                 tag = format.to_snake_case(tag_var._var_value.lower())
             else:
                 msg = f"Icon name must be a string, got {type(tag_var)}"
                 raise TypeError(msg)
         elif isinstance(tag_var, Var):
             tag_stringified = tag_var.guess_type()
-            if not isinstance(tag_stringified, StringVar):
+            if not var_isinstance(tag_stringified, StringVar):
                 msg = f"Icon name must be a string, got {tag_var._var_type}"
                 raise TypeError(msg)
             return DynamicIcon.create(name=tag_stringified.replace("_", "-"), **props)

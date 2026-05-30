@@ -56,6 +56,7 @@ from reflex_base.vars.base import (
     Var,
     cached_property_no_lock,
     ternary_operation,
+    var_isinstance,
 )
 
 if TYPE_CHECKING:
@@ -1065,7 +1066,7 @@ class Component(BaseComponent, ABC):
                 if isinstance(c, str):
                     continue
                 if isinstance(c, Var):
-                    if not isinstance(c, StringVar) and not issubclass(
+                    if not var_isinstance(c, StringVar) and not issubclass(
                         c._var_type, str
                     ):
                         msg = f"Invalid class_name passed for prop {type(self).__name__}.class_name, expected type str, got value {c._js_expr} of type {c._var_type}."
@@ -1080,7 +1081,7 @@ class Component(BaseComponent, ABC):
                 kwargs["class_name"] = " ".join(class_name)
         elif (
             isinstance(class_name, Var)
-            and not isinstance(class_name, StringVar)
+            and not var_isinstance(class_name, StringVar)
             and not issubclass(class_name._var_type, str)
         ):
             msg = f"Invalid class_name passed for prop {type(self).__name__}.class_name, expected type str, got value {class_name._js_expr} of type {class_name._var_type}."
@@ -2628,7 +2629,7 @@ def render_dict_to_var(tag: dict | Component | str) -> Var:
 
         return FunctionStringVar.create("Array.prototype.map.call").call(
             tag["iterable"]
-            if not isinstance(tag["iterable"], ObjectVar)
+            if not var_isinstance(tag["iterable"], ObjectVar)
             else tag["iterable"].items(),
             func,
         )

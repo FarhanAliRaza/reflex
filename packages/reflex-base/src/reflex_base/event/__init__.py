@@ -59,6 +59,7 @@ from reflex_base.vars.base import (
     VarOperationCall,
     cached_property_no_lock,
     ternary_operation,
+    var_isinstance,
 )
 
 if TYPE_CHECKING:
@@ -695,7 +696,7 @@ class EventChain(EventActionsMixin):
                         stacklevel=2,
                     )
                 return value
-            if isinstance(value, (EventVar, FunctionVar)):
+            if var_isinstance(value, EventVar) or var_isinstance(value, FunctionVar):
                 value = [value]
             elif safe_issubclass(value._var_type, (EventChain, EventSpec)):
                 return cls.create(
@@ -723,9 +724,9 @@ class EventChain(EventActionsMixin):
                 if isinstance(v, (EventHandler, EventSpec)):
                     # Call the event handler to get the event.
                     events.append(call_event_handler(v, args_spec, key=key))
-                elif isinstance(v, (EventVar, EventChainVar)):
+                elif var_isinstance(v, EventVar) or var_isinstance(v, EventChainVar):
                     events.append(v)
-                elif isinstance(v, FunctionVar):
+                elif var_isinstance(v, FunctionVar):
                     # Apply the args_spec transformations as partial arguments to the function.
                     events.append(v.partial(*parse_args_spec(args_spec)[0]))
                 elif isinstance(v, Callable):
@@ -2144,14 +2145,14 @@ def call_event_fn(
 
         if (
             isinstance(e, Var)
-            and not isinstance(e, (EventVar, FunctionVar))
+            and not (var_isinstance(e, EventVar) or var_isinstance(e, FunctionVar))
             and get_origin(e._var_type) in (Union, types.UnionType)
             and typehint_issubclass(e._var_type, EventSpec | Callable)
         ):
             e = _dispatch_mixed_event_var(e)
 
         # Make sure the event spec is valid.
-        if not isinstance(e, (EventSpec, FunctionVar, EventVar)):
+        if not (isinstance(e, EventSpec) or var_isinstance(e, FunctionVar) or var_isinstance(e, EventVar)):
             hint = ""
             if isinstance(e, VarOperationCall):
                 hint = " Hint: use `fn.partial(...)` instead of calling the FunctionVar directly."

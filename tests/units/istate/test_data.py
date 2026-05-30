@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from urllib.parse import parse_qsl
 
-from reflex_base.vars.base import ObjectVar, StringVar
+from reflex_base.vars.base import ObjectVar, StringVar, var_isinstance
 
 import reflex as rx
 from reflex.istate.data import ReflexURL, ReflexURLCastedVar
@@ -119,7 +119,7 @@ def test_router_url_var_string_components():
         "fragment",
     ):
         child = getattr(url_var, component)
-        assert isinstance(child, StringVar), (
+        assert var_isinstance(child, StringVar), (
             f"{component!r} should be a StringVar, got {type(child).__name__}"
         )
         assert child._var_type is str
@@ -133,7 +133,7 @@ def test_router_url_var_query_parameters_is_object():
     url_var = rx.State.router.url
     qp = url_var.query_parameters
 
-    assert isinstance(qp, ObjectVar)
+    assert var_isinstance(qp, ObjectVar)
     assert qp._var_type == Mapping[str, str]
     assert str(qp) == f'{url_var._original!s}?.["query_parameters"]'
 

@@ -2023,14 +2023,37 @@ fn rebuild_like(
     .into_any())
 }
 
+/// The classified var-category (`NumberVar`/`StringVar`/…) of an operand that
+/// is a var (a `RustVar`, or any Python object carrying `_var_type` such as a
+/// `ComputedVar`); `None` for a non-var value. Replaces the old isinstance
+/// bridge: a var's category is resolved from its `_var_type` directly.
+fn operand_category(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
+    if let Ok(rv) = value.downcast::<RustVar>() {
+        return Ok(Some(var_category(py, &rv.borrow().var_type)?));
+    }
+    if value.hasattr("_var_type")? && value.hasattr("_js_expr")? {
+        let var_type = value.getattr("_var_type")?.unbind();
+        return Ok(Some(var_category(py, &var_type)?));
+    }
+    Ok(None)
+}
+
 /// Whether `value` is a numeric operand (matches `isinstance(value,
-/// NUMBER_TYPES)` = `int`/`float`/`Decimal`/`NumberVar`). The `NumberVar` check
-/// goes through the isinstance bridge, so a numeric RustVar qualifies too.
+/// NUMBER_TYPES)` = `int`/`float`/`Decimal`/`NumberVar`): a raw `int`/`float`/
+/// `Decimal` (bool is an `int` subclass), or a var classifying as a number
+/// (`NumberVar` / `BooleanVar`).
 fn is_number_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool> {
-    let number_types = py
-        .import_bound("reflex_base.vars.base")?
-        .getattr("NUMBER_TYPES")?;
-    value.is_instance(&number_types)
+    if value.is_instance_of::<PyInt>() || value.is_instance_of::<PyFloat>() {
+        return Ok(true);
+    }
+    let decimal_cls = py.import_bound("decimal")?.getattr("Decimal")?;
+    if value.is_instance(&decimal_cls)? {
+        return Ok(true);
+    }
+    Ok(matches!(
+        operand_category(py, value)?.as_deref(),
+        Some("NumberVar" | "BooleanVar")
+    ))
 }
 
 /// Whether `count` is a valid repeat multiplier (matches the `*` operators'
@@ -2052,18 +2075,16 @@ fn valid_repeat_count(
             cat == "NumberVar" || cat == "BooleanVar",
             b._is_strict_float(py),
         )
+    } else if matches!(
+        operand_category(py, count)?.as_deref(),
+        Some("NumberVar" | "BooleanVar")
+    ) {
+        (
+            true,
+            count.call_method0("_is_strict_float")?.extract::<bool>()?,
+        )
     } else {
-        let number_var = py
-            .import_bound("reflex_base.vars.base")?
-            .getattr("NumberVar")?;
-        if count.is_instance(&number_var)? {
-            (
-                true,
-                count.call_method0("_is_strict_float")?.extract::<bool>()?,
-            )
-        } else {
-            (false, false)
-        }
+        (false, false)
     };
     Ok(is_number_var && (allow_float || !strict_float))
 }
@@ -2075,12 +2096,12 @@ fn literal_string_value(py: Python<'_>, elem: &Bound<'_, PyAny>) -> PyResult<Opt
     if let Ok(s) = elem.extract::<String>() {
         return Ok(Some(s));
     }
-    // A literal-string var (Python LiteralStringVar or a str-typed RustLiteralVar,
-    // recognized via the isinstance bridge) carries its value in _var_value.
-    let string_lit = py
-        .import_bound("reflex_base.vars.base")?
-        .getattr("LiteralStringVar")?;
-    if elem.is_instance(&string_lit)? {
+    // A literal-string var carries its value in `_var_value`: a str-typed
+    // `RustLiteralVar`, or a Python literal string var. Both are literals whose
+    // var classifies as a string.
+    let is_literal = (elem.downcast::<RustLiteralVar>().is_ok() || elem.hasattr("_var_value")?)
+        && operand_category(py, elem)?.as_deref() == Some("StringVar");
+    if is_literal {
         if let Ok(s) = elem.getattr("_var_value")?.extract::<String>() {
             return Ok(Some(s));
         }
@@ -2106,22 +2127,19 @@ fn is_array_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool> 
     if value.is_instance_of::<PyList>() || value.downcast::<pyo3::types::PyTuple>().is_ok() {
         return Ok(true);
     }
-    let array_var = py
-        .import_bound("reflex_base.vars.base")?
-        .getattr("ArrayVar")?;
-    value.is_instance(&array_var)
+    Ok(operand_category(py, value)?.as_deref() == Some("ArrayVar"))
 }
 
-/// Whether `value` is a string operand (`str` or a `StringVar`, including a
-/// RustVar that classifies as one).
+/// Whether `value` is a string operand (`str`, or a var classifying as a string
+/// — `StringVar` or its `ColorVar` subclass).
 fn is_string_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool> {
     if value.is_instance_of::<PyString>() {
         return Ok(true);
     }
-    let string_var = py
-        .import_bound("reflex_base.vars.base")?
-        .getattr("StringVar")?;
-    value.is_instance(&string_var)
+    Ok(matches!(
+        operand_category(py, value)?.as_deref(),
+        Some("StringVar" | "ColorVar")
+    ))
 }
 
 /// The element type of an array index (matches `_determine_value_of_array_index`

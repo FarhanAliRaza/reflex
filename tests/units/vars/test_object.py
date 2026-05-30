@@ -3,7 +3,7 @@ from collections.abc import Sequence
 
 import pytest
 from reflex_base.utils.types import GenericType
-from reflex_base.vars.base import ArrayVar, LiteralVar, ObjectVar, Var
+from reflex_base.vars.base import ArrayVar, LiteralVar, ObjectVar, Var, var_isinstance
 from typing_extensions import assert_type
 
 import reflex as rx
@@ -80,7 +80,7 @@ def test_var_create(type_: type[Base | Bare | SqlaModel | Dataclass]) -> None:
     my_object = type_()
     var = Var.create(my_object)
     assert var._var_type is type_
-    assert isinstance(var, ObjectVar)
+    assert var_isinstance(var, ObjectVar)
     quantity = var.quantity
     assert quantity._var_type is int
 
@@ -101,7 +101,7 @@ def test_guess(type_: type[Base | Bare | SqlaModel | Dataclass]) -> None:
     var = Var.create(my_object)
     var = var.guess_type()
     assert var._var_type is type_
-    assert isinstance(var, ObjectVar)
+    assert var_isinstance(var, ObjectVar)
     quantity = var.quantity
     assert quantity._var_type is int
 

@@ -13,7 +13,12 @@ from reflex_base.utils import console
 from reflex_base.utils.decorator import once
 from reflex_base.utils.imports import ParsedImportDict
 from reflex_base.vars import BooleanVar, ObjectVar, Var
-from reflex_base.vars.base import GLOBAL_CACHE, LiteralStringVar, VarData
+from reflex_base.vars.base import (
+    GLOBAL_CACHE,
+    LiteralStringVar,
+    VarData,
+    var_isinstance,
+)
 
 
 @once
@@ -67,7 +72,7 @@ class Bare(Component):
             The component.
         """
         if isinstance(contents, Var):
-            if isinstance(contents, LiteralStringVar):
+            if var_isinstance(contents, LiteralStringVar):
                 validate_str(contents._var_value)
             return cls._unsafe_create(children=[], contents=contents)
         if isinstance(contents, str):
@@ -183,7 +188,7 @@ class Bare(Component):
             if not isinstance(self.contents, Var)
             else self.contents
         )
-        if isinstance(contents, (BooleanVar, ObjectVar)):
+        if var_isinstance(contents, BooleanVar) or var_isinstance(contents, ObjectVar):
             return Tagless(contents=f"{contents.to_string()!s}")
         return Tagless(contents=f"{contents!s}")
 
@@ -200,7 +205,7 @@ class Bare(Component):
             if not isinstance(self.contents, Var)
             else self.contents
         )
-        if isinstance(contents, (BooleanVar, ObjectVar)):
+        if var_isinstance(contents, BooleanVar) or var_isinstance(contents, ObjectVar):
             return {"contents": f"{contents.to_string()!s}"}
         return {"contents": f"{contents!s}"}
 

@@ -10,7 +10,7 @@ from reflex_base.components.component import CUSTOM_COMPONENTS, Component
 from reflex_base.style import Style
 from reflex_base.utils.imports import ImportVar
 from reflex_base.vars import VarData
-from reflex_base.vars.base import FunctionVar, Var
+from reflex_base.vars.base import FunctionVar, Var, var_isinstance
 
 import reflex as rx
 from reflex.compiler import compiler
@@ -46,7 +46,7 @@ def test_var_returning_memo():
         str(format_price.call(amount=price, currency=currency))
         == "(format_price(price, currency))"
     )
-    assert isinstance(format_price._as_var(), FunctionVar)
+    assert var_isinstance(format_price._as_var(), FunctionVar)
 
     definition = EXPERIMENTAL_MEMOS["format_price"]
     assert isinstance(definition, ExperimentalMemoFunctionDefinition)
