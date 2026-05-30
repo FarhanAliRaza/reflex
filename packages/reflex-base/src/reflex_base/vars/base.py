@@ -1447,7 +1447,18 @@ class LiteralVar(Var[VAR_TYPE]):
         # (datetime/Color/range/serializer-backed/dataclasses) and non-exact
         # types (int/str subclasses, tuples, sets, custom Mappings) stay on the
         # Python dispatch below.
-        if type(value) in (bool, int, float, str, type(None), list, dict, tuple, set):
+        if type(value) in (
+            bool,
+            int,
+            float,
+            str,
+            type(None),
+            list,
+            dict,
+            tuple,
+            set,
+            Decimal,
+        ):
             return RustLiteralVar.create(value, _var_data=_var_data)
 
         for literal_subclass, var_subclass in _var_literal_subclasses[::-1]:

@@ -2517,6 +2517,13 @@ fn render_literal_js(value: &Bound<'_, PyAny>) -> PyResult<String> {
         }
         return Ok(render_js_string(&s));
     }
+    // A `decimal.Decimal` renders as its `str()` (matches LiteralNumberVar.create:
+    // finite -> str(value); ±Infinity / NaN already stringify to those tokens).
+    let py = value.py();
+    let decimal_cls = py.import_bound("decimal")?.getattr("Decimal")?;
+    if value.is_instance(&decimal_cls)? {
+        return Ok(value.str()?.to_string());
+    }
     // Lists, tuples and sets all render as JS arrays (iterating preserves the
     // Python object's order, so a set matches its own iteration).
     if value.is_instance_of::<PyList>()
@@ -2544,7 +2551,6 @@ fn render_literal_js(value: &Bound<'_, PyAny>) -> PyResult<String> {
     // Exotic nested values (enums, Color, serializer-backed types, dataclasses,
     // tuples, …) defer to the Python LiteralVar.create dispatch and render via
     // its js_expr — so a list/dict of any element type renders faithfully.
-    let py = value.py();
     let created = py
         .import_bound("reflex_base.vars.base")?
         .getattr("LiteralVar")?
@@ -2570,6 +2576,12 @@ fn literal_var_type(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyA
     }
     if value.is_instance_of::<PyString>() {
         return Ok(PyString::type_object_bound(py).into_any().unbind());
+    }
+    // A `decimal.Decimal` keeps its own type (matches LiteralNumberVar's
+    // `_var_type=type(value)`); it renders as a plain number via render_literal_js.
+    let decimal_cls = py.import_bound("decimal")?.getattr("Decimal")?;
+    if value.is_instance(&decimal_cls)? {
+        return Ok(decimal_cls.unbind());
     }
     // Containers carry an inferred element type (Sequence[int], Mapping[str,
     // int], …); defer to Python's figure_out_type for byte-parity with the
