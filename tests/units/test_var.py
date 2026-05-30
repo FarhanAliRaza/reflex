@@ -335,7 +335,9 @@ def test_basic_operations(TestObj):
             Var(_js_expr="foo").to(ObjectVar, TestObj)._var_set_state("state").bar
             == LiteralVar.create("bar")
         )
-        == '(state.foo?.["bar"]?.valueOf?.() === "bar"?.valueOf?.())'
+        # `===` is symmetric; the literal-subclass operand renders first under the
+        # unified RustVar (RustLiteralVar's reflected comparison has priority).
+        == '("bar"?.valueOf?.() === state.foo?.["bar"]?.valueOf?.())'
     )
     assert (
         str(Var(_js_expr="foo").to(ObjectVar, TestObj)._var_set_state("state").bar)
@@ -1400,7 +1402,7 @@ def test_unsupported_types_for_string_contains(other):
         assert Var(_js_expr="var").to(str).contains(other)
     assert (
         err.value.args[0]
-        == f"Unsupported Operand type(s) for contains: StringCastedVar, {type(other).__name__}"
+        == f"Unsupported Operand type(s) for contains: StringVar, {type(other).__name__}"
     )
 
 

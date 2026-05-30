@@ -101,9 +101,13 @@ impl RustVar {
         } else {
             _js_expr
         };
+        // An explicit `_var_type` (including `None`) is used as-is; the dataclass
+        // `Any` default for an *absent* type is supplied by the construction
+        // bridge (MetaclassVar.__call__), since pyo3 cannot tell absent from a
+        // passed `None`.
         let var_type = match _var_type {
-            Some(t) if !t.bind(py).is_none() => t,
-            _ => py.import_bound("typing")?.getattr("Any")?.unbind(),
+            Some(t) => t,
+            None => py.None(),
         };
         Ok(RustVar {
             js_expr,
@@ -245,6 +249,18 @@ impl RustVar {
                             "The {bad} argument is not supported for Var."
                         )));
                     }
+                }
+            }
+        }
+        // Unknown kwargs are rejected (Python's dataclasses.replace raises for a
+        // non-field), so only the var's own fields are accepted.
+        if let Some(k) = kwargs {
+            for key in k.keys() {
+                let name: String = key.extract()?;
+                if !matches!(name.as_str(), "_js_expr" | "_var_type" | "_var_data") {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "_replace() got an unexpected keyword argument '{name}'"
+                    )));
                 }
             }
         }
@@ -630,7 +646,10 @@ impl RustVar {
     /// correctly — and also into the Rust registry for ``rust_create_string``.
     fn __format__(slf: &Bound<'_, Self>, py: Python<'_>, _format_spec: &str) -> PyResult<String> {
         let b = slf.borrow();
-        let id = VAR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        // Key the marker by `hash(self)` (matching `Var.__format__`), so an
+        // identical var formats to the same id (idempotent) and the decode side
+        // resolves it from the shared registry.
+        let id = slf.hash()? as i64;
         if let Ok(mut reg) = var_registry().lock() {
             reg.insert(id, (b.js_expr.clone(), b.var_data.clone()));
         }
@@ -903,10 +922,17 @@ impl RustVar {
             let none_type = py.None().bind(py).get_type().into_any().unbind();
             return Ok(cast(none_type));
         }
-        // An output that is a Var (RustVar) class keeps the current var_type
-        // (unless overridden), matching the `var_subclass` branch.
+        // An output that is a Var class (a typed Var subclass like ObjectVar /
+        // StringVar, or RustVar itself) keeps the current var_type unless an
+        // explicit var_type overrides it (matches the `var_subclass` branch).
         if let Ok(ty) = output.downcast::<PyType>() {
-            if ty.is_subclass_of::<RustVar>().unwrap_or(false) {
+            let is_var_class = ty.is_subclass_of::<RustVar>().unwrap_or(false)
+                || py
+                    .import_bound("reflex_base.vars.base")
+                    .and_then(|m| m.getattr("Var"))
+                    .and_then(|var_cls| ty.is_subclass(&var_cls))
+                    .unwrap_or(false);
+            if is_var_class {
                 let current = self.var_type.bind(py);
                 let is_any = current.eq(typing.getattr("Any")?).unwrap_or(false);
                 let new_type = match (var_type, is_any) {
@@ -1385,7 +1411,7 @@ impl RustVar {
             py,
             RustVar {
                 js_expr: format!("{}?.at?.({ijs})", self.js_expr),
-                var_type: self.value_type(py, 0),
+                var_type: array_element_type(py, &self.var_type, &index)?,
                 var_data: var_op_plain(&[&self.var_data, &ivd]),
             },
         )
@@ -1581,6 +1607,22 @@ impl RustVar {
         py: Python<'_>,
         slice: &Bound<'_, pyo3::types::PySlice>,
     ) -> PyResult<RustVar> {
+        // String slicing operates on characters: split("")[slice].join("")
+        // (matches StringVar.__getitem__(slice)).
+        if matches!(
+            var_category(py, &self.var_type)?.as_str(),
+            "StringVar" | "ColorVar"
+        ) {
+            let split = self.str_split(py, None)?;
+            let sliced = Bound::new(py, split.slice_op(py, slice)?)?;
+            let joined = RustVar::join(&sliced, py, None)?;
+            let jb = joined.bind(py);
+            return Ok(RustVar {
+                js_expr: jb.getattr("_js_expr")?.extract()?,
+                var_type: jb.getattr("_var_type")?.unbind(),
+                var_data: convert_var_data(&jb.call_method0("_get_all_var_data")?)?,
+            });
+        }
         let start = slice.getattr("start")?;
         let stop = slice.getattr("stop")?;
         let step = slice.getattr("step")?;
@@ -2035,6 +2077,27 @@ fn is_string_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool>
         .import_bound("reflex_base.vars.sequence")?
         .getattr("StringVar")?;
     value.is_instance(&string_var)
+}
+
+/// The element type of an array index (matches `_determine_value_of_array_index`
+/// — positional for tuples, the element type for sequences). The index is the
+/// literal int when known (int or `LiteralNumberVar`), else `None`.
+fn array_element_type(
+    py: Python<'_>,
+    var_type: &Py<PyAny>,
+    index: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let idx: Option<i64> = if let Ok(i) = index.extract::<i64>() {
+        Some(i)
+    } else if let Ok(rv) = index.downcast::<RustLiteralVar>() {
+        rv.borrow().var_value.bind(py).extract::<i64>().ok()
+    } else {
+        None
+    };
+    py.import_bound("reflex_base.vars.sequence")?
+        .getattr("_determine_value_of_array_index")?
+        .call1((var_type.bind(py), idx))
+        .map(|t| t.unbind())
 }
 
 /// Resolve a freshly-built `RustVar` to its guessed typed form (the bridge

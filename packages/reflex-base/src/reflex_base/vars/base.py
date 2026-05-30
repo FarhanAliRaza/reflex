@@ -308,8 +308,21 @@ def can_use_in_object_var(cls: GenericType) -> bool:
     )
 
 
+_BASE_VAR: list[type] = []
+
+
 class MetaclassVar(type):
     """Metaclass for the Var class."""
+
+    def __call__(cls, *args, **kwargs):  # noqa: D102
+        if _BASE_VAR and cls is _BASE_VAR[0]:
+            # Supply the dataclass `Any` default when no `_var_type` is given
+            # (RustVar keeps an explicitly-passed `None`, which pyo3 cannot
+            # distinguish from absent on its own).
+            if len(args) < 2 and "_var_type" not in kwargs:
+                kwargs["_var_type"] = Any
+            return RustVar(*args, **kwargs)
+        return super().__call__(*args, **kwargs)
 
     def __setattr__(cls, name: str, value: Any):
         """Set an attribute on the class.
@@ -1274,6 +1287,9 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
                 "'in' operator not supported for Var types, use Var.contains() instead."
             )
             raise VarTypeError(msg)
+
+
+_BASE_VAR.append(Var)
 
 
 OUTPUT = TypeVar("OUTPUT", bound=Var)
