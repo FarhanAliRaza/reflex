@@ -3,8 +3,7 @@
 from collections.abc import Mapping
 from urllib.parse import parse_qsl
 
-from reflex_base.vars.base import ObjectVar
-from reflex_base.vars.sequence import StringVar
+from reflex_base.vars.base import ObjectVar, StringVar
 
 import reflex as rx
 from reflex.istate.data import ReflexURL, ReflexURLCastedVar

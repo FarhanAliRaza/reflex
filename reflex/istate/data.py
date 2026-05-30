@@ -11,12 +11,12 @@ from reflex_base.utils import console, format
 from reflex_base.utils.serializers import serializer
 from reflex_base.vars.base import (
     ObjectVar,
+    StringVar,
     Var,
     VarData,
     VarSubclassEntry,
     _var_subclasses,
 )
-from reflex_base.vars.sequence import StringVar
 from reflex_compiler_rust._native import RustVar
 
 

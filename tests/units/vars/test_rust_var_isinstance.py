@@ -16,16 +16,18 @@ from typing import Any
 
 import pytest
 from reflex_base.vars.base import (
+    ArrayVar,
     BooleanVar,
     LiteralNumberVar,
+    LiteralStringVar,
     LiteralVar,
     NoneVar,
     NumberVar,
     ObjectVar,
+    StringVar,
     Var,
 )
 from reflex_base.vars.datetime import DateTimeVar
-from reflex_base.vars.sequence import ArrayVar, LiteralStringVar, StringVar
 from reflex_compiler_rust._native import RustLiteralVar, RustVar
 
 _NON_LITERAL_TARGETS = [

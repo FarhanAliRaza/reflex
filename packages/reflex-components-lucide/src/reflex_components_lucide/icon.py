@@ -3,8 +3,7 @@
 from reflex_base.components.component import Component, field
 from reflex_base.utils import console, format
 from reflex_base.utils.imports import ImportVar
-from reflex_base.vars.base import LiteralVar, Var
-from reflex_base.vars.sequence import LiteralStringVar, StringVar
+from reflex_base.vars.base import LiteralStringVar, LiteralVar, StringVar, Var
 
 LUCIDE_LIBRARY = "lucide-react@1.14.0"
 

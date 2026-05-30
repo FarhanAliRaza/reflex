@@ -8,8 +8,7 @@ from reflex_base import constants
 from reflex_base.components.dynamic import bundle_library, reset_bundled_libraries
 from reflex_base.constants.compiler import PageNames
 from reflex_base.utils.imports import ImportVar, ParsedImportDict
-from reflex_base.vars.base import Var
-from reflex_base.vars.sequence import LiteralStringVar
+from reflex_base.vars.base import LiteralStringVar, Var
 from reflex_components_core.base import document
 from reflex_components_core.base.document import Links, Scripts
 from reflex_components_core.el.elements.metadata import Head, Link, Meta

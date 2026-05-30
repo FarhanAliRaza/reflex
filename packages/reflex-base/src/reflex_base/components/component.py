@@ -49,6 +49,7 @@ from reflex_base.vars.base import (
     CachedVarOperation,
     LiteralVar,
     ObjectVar,
+    StringVar,
     Var,
     cached_property_no_lock,
     ternary_operation,
@@ -58,7 +59,6 @@ from reflex_base.vars.function import (
     FunctionStringVar,
     FunctionVar,
 )
-from reflex_base.vars.sequence import StringVar
 
 if TYPE_CHECKING:
     import reflex.state

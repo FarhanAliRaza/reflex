@@ -9,12 +9,12 @@ from typing import Any, ClassVar, Literal, cast
 from reflex_base.components.component import Component, field
 from reflex_base.event import EventHandler
 from reflex_base.vars.base import (
+    ArrayVar,
     CustomVarOperationReturn,
     LiteralVar,
     Var,
     var_operation,
 )
-from reflex_base.vars.sequence import ArrayVar
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.core.foreach import Foreach
 

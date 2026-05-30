@@ -10,8 +10,7 @@ from typing import TYPE_CHECKING
 from reflex_base.components.tags.tag import Tag
 from reflex_base.utils.types import GenericType
 from reflex_base.vars import Var, get_unique_variable_name
-from reflex_base.vars.base import LiteralVar
-from reflex_base.vars.sequence import _determine_value_of_array_index
+from reflex_base.vars.base import LiteralVar, _determine_value_of_array_index
 
 if TYPE_CHECKING:
     from reflex_base.components.component import Component

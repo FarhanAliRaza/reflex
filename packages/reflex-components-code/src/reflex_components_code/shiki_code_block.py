@@ -14,9 +14,8 @@ from reflex_base.event import run_script, set_clipboard
 from reflex_base.style import Style
 from reflex_base.utils.exceptions import VarTypeError
 from reflex_base.utils.imports import ImportVar
-from reflex_base.vars.base import LiteralVar, Var
+from reflex_base.vars.base import LiteralVar, StringVar, Var, string_replace_operation
 from reflex_base.vars.function import FunctionStringVar
-from reflex_base.vars.sequence import StringVar, string_replace_operation
 from reflex_components_core.core.colors import color
 from reflex_components_core.core.cond import color_mode_cond
 from reflex_components_core.core.markdown_component_map import MarkdownComponentMap

@@ -13,8 +13,7 @@ from reflex_base.utils import console
 from reflex_base.utils.decorator import once
 from reflex_base.utils.imports import ParsedImportDict
 from reflex_base.vars import BooleanVar, ObjectVar, Var
-from reflex_base.vars.base import GLOBAL_CACHE, VarData
-from reflex_base.vars.sequence import LiteralStringVar
+from reflex_base.vars.base import GLOBAL_CACHE, LiteralStringVar, VarData
 
 
 @once

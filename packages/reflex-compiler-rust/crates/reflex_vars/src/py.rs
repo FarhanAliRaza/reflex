@@ -2078,7 +2078,7 @@ fn literal_string_value(py: Python<'_>, elem: &Bound<'_, PyAny>) -> PyResult<Opt
     // A literal-string var (Python LiteralStringVar or a str-typed RustLiteralVar,
     // recognized via the isinstance bridge) carries its value in _var_value.
     let string_lit = py
-        .import_bound("reflex_base.vars.sequence")?
+        .import_bound("reflex_base.vars.base")?
         .getattr("LiteralStringVar")?;
     if elem.is_instance(&string_lit)? {
         if let Ok(s) = elem.getattr("_var_value")?.extract::<String>() {
@@ -2107,7 +2107,7 @@ fn is_array_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool> 
         return Ok(true);
     }
     let array_var = py
-        .import_bound("reflex_base.vars.sequence")?
+        .import_bound("reflex_base.vars.base")?
         .getattr("ArrayVar")?;
     value.is_instance(&array_var)
 }
@@ -2119,7 +2119,7 @@ fn is_string_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool>
         return Ok(true);
     }
     let string_var = py
-        .import_bound("reflex_base.vars.sequence")?
+        .import_bound("reflex_base.vars.base")?
         .getattr("StringVar")?;
     value.is_instance(&string_var)
 }
@@ -2139,7 +2139,7 @@ fn array_element_type(
     } else {
         None
     };
-    py.import_bound("reflex_base.vars.sequence")?
+    py.import_bound("reflex_base.vars.base")?
         .getattr("_determine_value_of_array_index")?
         .call1((var_type.bind(py), idx))
         .map(|t| t.unbind())

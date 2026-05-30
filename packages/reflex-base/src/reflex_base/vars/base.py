@@ -82,7 +82,6 @@ if TYPE_CHECKING:
     from reflex_base.constants.colors import Color
 
     from .color import LiteralColorVar
-    from .sequence import ArrayVar, LiteralArrayVar, LiteralStringVar, StringVar
 
 
 VAR_TYPE = TypeVar("VAR_TYPE", covariant=True)
@@ -1071,7 +1070,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
             The string var.
         """
         from .function import JSON_STRINGIFY, PROTOTYPE_TO_STRING
-        from .sequence import StringVar
 
         return (
             JSON_STRINGIFY.call(self).to(StringVar)
@@ -1104,7 +1102,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
             StringVar: A string variable representing the type of the object.
         """
         from .function import FunctionStringVar
-        from .sequence import StringVar
 
         type_of = FunctionStringVar("typeof")
         return type_of.call(self).to(StringVar)
@@ -1174,9 +1171,8 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             The range of numbers.
         """
-        from .sequence import ArrayVar
 
-        return ArrayVar.range(first_endpoint, second_endpoint, step)
+        return RustVar.range(first_endpoint, second_endpoint, step)
 
     if not TYPE_CHECKING:
 
@@ -1418,7 +1414,6 @@ class LiteralVar(Var[VAR_TYPE]):
         Raises:
             TypeError: If the value is not a supported type for LiteralVar.
         """
-        from .sequence import ArrayVar, LiteralStringVar
 
         if isinstance(value, Var):
             if _var_data is None:
@@ -1486,7 +1481,7 @@ class LiteralVar(Var[VAR_TYPE]):
             )
 
         if isinstance(value, range):
-            return ArrayVar.range(value.start, value.stop, value.step)
+            return RustVar.range(value.start, value.stop, value.step)
 
         msg = f"Unsupported type {type(value)} for LiteralVar. Tried to create a LiteralVar from {value}."
         raise TypeError(msg)
@@ -1520,7 +1515,6 @@ class LiteralVar(Var[VAR_TYPE]):
         Raises:
             TypeError: If the value is not a supported type for LiteralVar.
         """
-        from .sequence import LiteralStringVar
 
         if isinstance(value, Var):
             return value._get_all_var_data()
@@ -4057,7 +4051,6 @@ class LiteralObjectVar(
         Returns:
             The var data.
         """
-        from .sequence import LiteralArrayVar
 
         return VarData.merge(
             LiteralArrayVar._get_all_var_data_without_creating_var(value),
@@ -4071,7 +4064,6 @@ class LiteralObjectVar(
         Returns:
             The var data.
         """
-        from .sequence import LiteralArrayVar
 
         return VarData.merge(
             LiteralArrayVar._get_all_var_data_without_creating_var(self._var_value),
@@ -4122,3 +4114,383 @@ class LiteralObjectVar(
             _var_data=_var_data,
             _var_value=_var_value,
         )
+
+
+ARRAY_VAR_TYPE = TypeVar("ARRAY_VAR_TYPE", bound=Sequence, covariant=True)
+OTHER_ARRAY_VAR_TYPE = TypeVar("OTHER_ARRAY_VAR_TYPE", bound=Sequence, covariant=True)
+STRING_TYPE = TypeVarExt("STRING_TYPE", default=str, covariant=True)
+
+
+class ArrayVar(Var[ARRAY_VAR_TYPE], python_types=(Sequence, set)):
+    """Type marker for immutable array vars (behavior is in ``RustVar``)."""
+
+
+class StringVar(Var[STRING_TYPE], python_types=str):
+    """Type marker for immutable string vars (behavior is in ``RustVar``)."""
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class LiteralArrayVar(
+    CachedVarOperation, LiteralVar[ARRAY_VAR_TYPE], ArrayVar[ARRAY_VAR_TYPE]
+):
+    """Registry anchor for literal array vars; plain lists mint a RustLiteralVar."""
+
+    _var_value: Sequence[Var | Any] = dataclasses.field(default=())
+
+    @cached_property_no_lock
+    def _cached_var_name(self) -> str:
+        """The name of the var.
+
+        Returns:
+            The name of the var.
+        """
+        return (
+            "["
+            + ", ".join([
+                str(LiteralVar.create(element)) for element in self._var_value
+            ])
+            + "]"
+        )
+
+    @classmethod
+    def _get_all_var_data_without_creating_var(cls, value: Iterable) -> VarData | None:
+        """Get all the VarData associated with the Var without creating a Var.
+
+        Args:
+            value: The value to get the VarData for.
+
+        Returns:
+            The VarData associated with the Var.
+        """
+        return VarData.merge(*[
+            LiteralVar._get_all_var_data_without_creating_var_dispatch(element)
+            for element in value
+        ])
+
+    @cached_property_no_lock
+    def _cached_get_all_var_data(self) -> VarData | None:
+        """Get all the VarData associated with the Var.
+
+        Returns:
+            The VarData associated with the Var.
+        """
+        return VarData.merge(
+            *[
+                LiteralVar._get_all_var_data_without_creating_var_dispatch(element)
+                for element in self._var_value
+            ],
+            self._var_data,
+        )
+
+    def __hash__(self) -> int:
+        """Get the hash of the var.
+
+        Returns:
+            The hash of the var.
+        """
+        return hash((self.__class__.__name__, self._js_expr))
+
+    def json(self) -> str:
+        """Get the JSON representation of the var.
+
+        Returns:
+            The JSON representation of the var.
+
+        Raises:
+            TypeError: If the array elements are not of type LiteralVar.
+        """
+        elements = []
+        for element in self._var_value:
+            element_var = LiteralVar.create(element)
+            if not isinstance(element_var, LiteralVar):
+                msg = f"Array elements must be of type LiteralVar, not {type(element_var)}"
+                raise TypeError(msg)
+            elements.append(element_var.json())
+
+        return "[" + ", ".join(elements) + "]"
+
+    @classmethod
+    def create(
+        cls,
+        value: OTHER_ARRAY_VAR_TYPE,
+        _var_type: type[OTHER_ARRAY_VAR_TYPE] | None = None,
+        _var_data: VarData | None = None,
+    ) -> LiteralArrayVar[OTHER_ARRAY_VAR_TYPE]:
+        """Create a var from a string value.
+
+        Args:
+            value: The value to create the var from.
+            _var_type: The type of the var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The var.
+        """
+        return LiteralArrayVar(
+            _js_expr="",
+            _var_type=figure_out_type(value) if _var_type is None else _var_type,
+            _var_data=_var_data,
+            _var_value=value,
+        )
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class LiteralStringVar(LiteralVar[STRING_TYPE], StringVar[STRING_TYPE]):
+    """Registry anchor for literal string vars; plain strings mint a RustLiteralVar."""
+
+    _var_value: str = dataclasses.field(default="")
+
+    @classmethod
+    def _get_all_var_data_without_creating_var(cls, value: str) -> VarData | None:
+        """Get all the VarData associated with the Var without creating a Var.
+
+        Args:
+            value: The value to get the VarData for.
+
+        Returns:
+            The VarData associated with the Var.
+        """
+        if constants.REFLEX_VAR_OPENING_TAG not in value:
+            return None
+        return cls.create(value)._get_all_var_data()
+
+    @classmethod
+    def create(
+        cls,
+        value: str,
+        _var_type: GenericType | None = None,
+        _var_data: VarData | None = None,
+    ) -> StringVar:
+        """Create a var from a string value.
+
+        Args:
+            value: The value to create the var from.
+            _var_type: The type of the var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The var.
+        """
+        # Determine var type in case the value is inherited from str.
+        _var_type = _var_type or type(value) or str
+
+        if constants.REFLEX_VAR_OPENING_TAG in value:
+            strings_and_vals: list[Var | str] = []
+            offset = 0
+
+            # Find all tags
+            while m := _decode_var_pattern.search(value):
+                start, end = m.span()
+
+                strings_and_vals.append(value[:start])
+
+                serialized_data = m.group(1)
+
+                if serialized_data.isnumeric() or (
+                    serialized_data[0] == "-" and serialized_data[1:].isnumeric()
+                ):
+                    # This is a global immutable var.
+                    var = _global_vars[int(serialized_data)]
+                    strings_and_vals.append(var)
+                    value = value[(end + len(var._js_expr)) :]
+
+                offset += end - start
+
+            strings_and_vals.append(value)
+
+            filtered_strings_and_vals = [
+                s for s in strings_and_vals if isinstance(s, Var) or s
+            ]
+            if len(filtered_strings_and_vals) == 1:
+                only_string = filtered_strings_and_vals[0]
+                if isinstance(only_string, str):
+                    return LiteralVar.create(only_string).to(StringVar, _var_type)
+                return only_string.to(StringVar, only_string._var_type)
+
+            if len(
+                literal_strings := [
+                    s
+                    for s in filtered_strings_and_vals
+                    if isinstance(s, (str, LiteralStringVar))
+                ]
+            ) == len(filtered_strings_and_vals):
+                return LiteralStringVar.create(
+                    "".join(
+                        s._var_value if isinstance(s, LiteralStringVar) else s
+                        for s in literal_strings
+                    ),
+                    _var_type=_var_type,
+                    _var_data=VarData.merge(
+                        _var_data,
+                        *(
+                            s._get_all_var_data()
+                            for s in filtered_strings_and_vals
+                            if isinstance(s, Var)
+                        ),
+                    ),
+                )
+
+            concat_result = ConcatVarOperation.create(
+                *filtered_strings_and_vals,
+                _var_data=_var_data,
+            )
+
+            return (
+                concat_result
+                if _var_type is str
+                else concat_result.to(StringVar, _var_type)
+            )
+
+        return LiteralStringVar(
+            _js_expr=json.dumps(value),
+            _var_type=_var_type,
+            _var_data=_var_data,
+            _var_value=value,
+        )
+
+    def __hash__(self) -> int:
+        """Get the hash of the var.
+
+        Returns:
+            The hash of the var.
+        """
+        return hash((type(self).__name__, self._var_value))
+
+    def json(self) -> str:
+        """Get the JSON representation of the var.
+
+        Returns:
+            The JSON representation of the var.
+        """
+        return json.dumps(self._var_value)
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class ConcatVarOperation(CachedVarOperation, StringVar[str]):
+    """Representing a concatenation of literal string vars."""
+
+    _var_value: tuple[Var, ...] = dataclasses.field(default_factory=tuple)
+
+    @cached_property_no_lock
+    def _cached_var_name(self) -> str:
+        """The name of the var.
+
+        Returns:
+            The name of the var.
+        """
+        list_of_strs: list[str | Var] = []
+        last_string = ""
+        for var in self._var_value:
+            if isinstance(var, LiteralStringVar):
+                last_string += var._var_value
+            else:
+                if last_string:
+                    list_of_strs.append(last_string)
+                    last_string = ""
+                list_of_strs.append(var)
+
+        if last_string:
+            list_of_strs.append(last_string)
+
+        list_of_strs_filtered = [
+            str(LiteralVar.create(s)) for s in list_of_strs if isinstance(s, Var) or s
+        ]
+
+        if len(list_of_strs_filtered) == 1:
+            return list_of_strs_filtered[0]
+
+        return "(" + "+".join(list_of_strs_filtered) + ")"
+
+    @cached_property_no_lock
+    def _cached_get_all_var_data(self) -> VarData | None:
+        """Get all the VarData associated with the Var.
+
+        Returns:
+            The VarData associated with the Var.
+        """
+        return VarData.merge(
+            *[
+                var._get_all_var_data()
+                for var in self._var_value
+                if isinstance(var, Var)
+            ],
+            self._var_data,
+        )
+
+    @classmethod
+    def create(
+        cls,
+        *value: Var | str,
+        _var_data: VarData | None = None,
+    ) -> ConcatVarOperation:
+        """Create a var from a string value.
+
+        Args:
+            *value: The values to concatenate.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The var.
+        """
+        return cls(
+            _js_expr="",
+            _var_type=str,
+            _var_data=_var_data,
+            _var_value=tuple(map(LiteralVar.create, value)),
+        )
+
+
+def _determine_value_of_array_index(
+    var_type: GenericType, index: int | float | Decimal | None = None
+):
+    """Determine the element type of an array index.
+
+    Args:
+        var_type: The type of the array.
+        index: The index of the array.
+
+    Returns:
+        The value of the array index.
+    """
+    origin_var_type = get_origin(var_type) or var_type
+    if origin_var_type in types.UnionTypes:
+        return unionize(*[
+            _determine_value_of_array_index(t, index)
+            for t in get_args(var_type)
+            if t is not type(None)
+        ])
+    if origin_var_type is range:
+        return int
+    if origin_var_type in (Sequence, Iterable, list, set):
+        args = get_args(var_type)
+        return args[0] if args else Any
+    if origin_var_type is tuple:
+        args = get_args(var_type)
+        if len(args) == 2 and args[1] is ...:
+            return args[0]
+        return (
+            args[int(index) % len(args)]
+            if args and index is not None
+            else (unionize(*args) if args else Any)
+        )
+    return Any
+
+
+@var_operation
+def string_replace_operation(
+    string: StringVar[Any], search_value: StringVar | str, new_value: StringVar | str
+):
+    """Replace a string with a value.
+
+    Args:
+        string: The string.
+        search_value: The string to search.
+        new_value: The value to be replaced with.
+
+    Returns:
+        The string replace operation.
+    """
+    return var_operation_return(
+        js_expression=f"{string}.replaceAll({search_value}, {new_value})",
+        var_type=str,
+    )

@@ -18,7 +18,10 @@ from reflex_base.utils.imports import ImportVar
 from reflex_base.utils.types import get_default_value_for_type
 from reflex_base.vars import VarData
 from reflex_base.vars.base import (
+    ArrayVar,
     ComputedVar,
+    ConcatVarOperation,
+    LiteralStringVar,
     LiteralVar,
     NumberVar,
     ObjectVar,
@@ -32,7 +35,6 @@ from reflex_base.vars.function import (
     DestructuredArg,
     FunctionStringVar,
 )
-from reflex_base.vars.sequence import ArrayVar, ConcatVarOperation, LiteralStringVar
 
 import reflex as rx
 from reflex.environment import PerformanceMode

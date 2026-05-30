@@ -14,9 +14,8 @@ from reflex_base.utils import console, format, types
 from reflex_base.utils.imports import ImportDict, ImportVar
 from reflex_base.utils.serializers import serializer
 from reflex_base.vars import get_unique_variable_name
-from reflex_base.vars.base import Var, VarData
+from reflex_base.vars.base import ArrayVar, Var, VarData
 from reflex_base.vars.function import FunctionStringVar
-from reflex_base.vars.sequence import ArrayVar
 
 
 # TODO: Fix the serialization issue for custom types.
