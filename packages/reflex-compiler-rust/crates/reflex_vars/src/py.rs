@@ -811,11 +811,23 @@ impl RustVar {
         })
     }
 
+    /// Logical NOT (matches `Var.__invert__` = `~self.bool()`): boolifies a
+    /// non-boolean receiver to `isTrue({self})` first, then negates. An
+    /// already-boolean receiver is negated directly (matches
+    /// `BooleanVar.__invert__` = `boolean_not_operation(self)`).
     fn __invert__(&self, py: Python<'_>) -> RustVar {
+        let (inner_js, inner_vd) = if self.type_label(py).as_deref() == Some("bool") {
+            (self.js_expr.clone(), self.var_data.clone())
+        } else {
+            (
+                format!("isTrue({})", self.js_expr),
+                var_op_with_import(&self.var_data, "isTrue"),
+            )
+        };
         RustVar {
-            js_expr: format!("!({})", self.js_expr),
+            js_expr: format!("!({inner_js})"),
             var_type: PyBool::type_object_bound(py).into_any().unbind(),
-            var_data: unary_var_data(&self.var_data),
+            var_data: unary_var_data(&inner_vd),
         }
     }
 
@@ -828,12 +840,30 @@ impl RustVar {
         })
     }
 
+    fn __rand__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let (ojs, ot, ovd) = operand_parts(py, &other)?;
+        Ok(RustVar {
+            js_expr: format!("({ojs} && {})", self.js_expr),
+            var_type: unionize(py, &ot, &self.var_type),
+            var_data: binary_var_data(&ovd, &self.var_data),
+        })
+    }
+
     fn __or__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
         let (ojs, ot, ovd) = operand_parts(py, &other)?;
         Ok(RustVar {
             js_expr: format!("({} || {ojs})", self.js_expr),
             var_type: unionize(py, &self.var_type, &ot),
             var_data: binary_var_data(&self.var_data, &ovd),
+        })
+    }
+
+    fn __ror__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
+        let (ojs, ot, ovd) = operand_parts(py, &other)?;
+        Ok(RustVar {
+            js_expr: format!("({ojs} || {})", self.js_expr),
+            var_type: unionize(py, &ot, &self.var_type),
+            var_data: binary_var_data(&ovd, &self.var_data),
         })
     }
 
@@ -872,8 +902,22 @@ impl RustVar {
                 ));
             }
         }
-        let (ojs, _ot, ovd) = operand_parts(py, &other)?;
-        let lhs = &self.js_expr;
+        let (mut ojs, _ot, ovd) = operand_parts(py, &other)?;
+        let mut lhs = self.js_expr.clone();
+        // Ordering comparisons apply unary `+` to each operand (matches
+        // `NumberVar.__lt__` = `op(+self, +other)`): a boolean Var is coerced via
+        // `Number(...)`, while a raw Python bool operand becomes its int value
+        // (Python's `+True`/`+False` → `1`/`0`).
+        if sym.is_some() {
+            if var_category(py, &self.var_type)?.as_str() == "BooleanVar" {
+                lhs = format!("Number({lhs})");
+            }
+            if other.is_instance_of::<PyBool>() {
+                ojs = if other.extract::<bool>()? { "1" } else { "0" }.to_string();
+            } else if var_category(py, &_ot)?.as_str() == "BooleanVar" {
+                ojs = format!("Number({ojs})");
+            }
+        }
         let js = match op {
             CompareOp::Lt => format!("({lhs} < {ojs})"),
             CompareOp::Le => format!("({lhs} <= {ojs})"),

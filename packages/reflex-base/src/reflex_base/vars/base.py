@@ -171,22 +171,20 @@ def _rust_var_classify(var_type: GenericType) -> type:
 # ``guess_type`` is identity. Any *other* registered subclass (e.g.
 # ``ReflexURLCastedVar``) carries bespoke rendering/properties and must be
 # produced as its own casted instance.
-_STANDARD_VAR_CLASS_NAMES = frozenset(
-    {
-        "Var",
-        "NumberVar",
-        "BooleanVar",
-        "StringVar",
-        "ArrayVar",
-        "ObjectVar",
-        "NoneVar",
-        "DateTimeVar",
-        "ColorVar",
-        "FunctionVar",
-        "BuilderFunctionVar",
-        "RangeVar",
-    }
-)
+_STANDARD_VAR_CLASS_NAMES = frozenset({
+    "Var",
+    "NumberVar",
+    "BooleanVar",
+    "StringVar",
+    "ArrayVar",
+    "ObjectVar",
+    "NoneVar",
+    "DateTimeVar",
+    "ColorVar",
+    "FunctionVar",
+    "BuilderFunctionVar",
+    "RangeVar",
+})
 
 
 def _rust_guess_type(var: RustVar) -> Any:
@@ -208,9 +206,7 @@ def _rust_guess_type(var: RustVar) -> Any:
         return var
     for entry in _var_subclasses:
         if entry.var_subclass is matched:
-            return entry.to_var_subclass.create(
-                value=var, _var_type=var._var_type
-            )
+            return entry.to_var_subclass.create(value=var, _var_type=var._var_type)
     return var
 
 
@@ -2910,16 +2906,21 @@ class CustomVarOperation(CachedVarOperation, Var[T]):
             _var_data: Additional hooks and imports associated with the Var.
 
         Returns:
-            The CustomVarOperation.
+            The CustomVarOperation (a RustVar).
         """
-        return CustomVarOperation(
-            _js_expr="",
-            _var_type=return_var._var_type,
-            _var_data=_var_data,
-            _name=name,
-            _args=args,
-            _return=return_var,
+        # A var operation's rendered name is the (already marker-decoded) return
+        # expression; its var_data is the merge of each arg, the return, and any
+        # extra. Build the Rust var directly — the operation result is a RustVar.
+        var_data = VarData.merge(
+            *(arg[1]._get_all_var_data() for arg in args),
+            return_var._get_all_var_data(),
+            _var_data,
         )
+        return Var(
+            _js_expr=str(return_var),
+            _var_type=return_var._var_type,
+            _var_data=var_data,
+        ).guess_type()
 
 
 class NoneVar(Var[None], python_types=type(None)):
