@@ -47,7 +47,6 @@ from reflex_base.utils.imports import ImportDict, ImportVar, ParsedImportDict
 from reflex_base.vars import VarData
 from reflex_base.vars.base import (
     CachedVarOperation,
-    LiteralNoneVar,
     LiteralVar,
     Var,
     cached_property_no_lock,
@@ -59,7 +58,7 @@ from reflex_base.vars.function import (
 )
 from reflex_base.vars.number import ternary_operation
 from reflex_base.vars.object import ObjectVar
-from reflex_base.vars.sequence import LiteralArrayVar, StringVar
+from reflex_base.vars.sequence import StringVar
 
 if TYPE_CHECKING:
     import reflex.state
@@ -1078,9 +1077,7 @@ class Component(BaseComponent, ABC):
                     msg = f"Invalid class_name passed for prop {type(self).__name__}.class_name, expected type str, got value {c} of type {type(c)}."
                     raise TypeError(msg)
             if has_var:
-                kwargs["class_name"] = LiteralArrayVar.create(
-                    class_name, _var_type=list[str]
-                ).join(" ")
+                kwargs["class_name"] = LiteralVar.create(class_name).join(" ")
             else:
                 kwargs["class_name"] = " ".join(class_name)
         elif (
@@ -2665,7 +2662,7 @@ def render_dict_to_var(tag: dict | Component | str) -> Var:
             render_dict_to_var(tag["true_value"]),
             render_dict_to_var(tag["false_value"])
             if tag["false_value"] is not None
-            else LiteralNoneVar.create(),
+            else LiteralVar.create(None),
         )
 
     props = Var("({" + ",".join(tag["props"]) + "})")
