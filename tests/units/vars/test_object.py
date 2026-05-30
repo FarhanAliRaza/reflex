@@ -3,8 +3,8 @@ from collections.abc import Sequence
 
 import pytest
 from reflex_base.utils.types import GenericType
-from reflex_base.vars.base import Var
-from reflex_base.vars.object import LiteralObjectVar, ObjectVar
+from reflex_base.vars.base import LiteralVar, Var
+from reflex_base.vars.object import ObjectVar
 from reflex_base.vars.sequence import ArrayVar
 from typing_extensions import assert_type
 
@@ -90,7 +90,7 @@ def test_var_create(type_: type[Base | Bare | SqlaModel | Dataclass]) -> None:
 @pytest.mark.parametrize("type_", [Base, Bare, SqlaModel, Dataclass])
 def test_literal_create(type_: GenericType) -> None:
     my_object = type_()
-    var = LiteralObjectVar.create(my_object)
+    var = LiteralVar.create(my_object)
     assert var._var_type is type_
 
     quantity = var.quantity
