@@ -3,8 +3,7 @@ from collections.abc import Sequence
 
 import pytest
 from reflex_base.utils.types import GenericType
-from reflex_base.vars.base import LiteralVar, Var
-from reflex_base.vars.object import ObjectVar
+from reflex_base.vars.base import LiteralVar, ObjectVar, Var
 from reflex_base.vars.sequence import ArrayVar
 from typing_extensions import assert_type
 

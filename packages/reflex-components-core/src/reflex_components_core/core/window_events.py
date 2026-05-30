@@ -7,8 +7,7 @@ from typing import Any, cast
 from reflex_base.components.component import field
 from reflex_base.constants.compiler import Hooks
 from reflex_base.event import EventHandler, key_event, no_args_event_spec
-from reflex_base.vars.base import Var, VarData
-from reflex_base.vars.object import ObjectVar
+from reflex_base.vars.base import ObjectVar, Var, VarData
 
 from reflex_components_core.base.fragment import Fragment
 

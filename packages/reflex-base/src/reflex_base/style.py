@@ -13,9 +13,8 @@ from reflex_base.utils.exceptions import ReflexError
 from reflex_base.utils.imports import ImportVar
 from reflex_base.utils.types import typehint_issubclass
 from reflex_base.vars import VarData
-from reflex_base.vars.base import LiteralVar, Var
+from reflex_base.vars.base import LiteralVar, ObjectVar, Var
 from reflex_base.vars.function import FunctionVar
-from reflex_base.vars.object import ObjectVar
 
 SYSTEM_COLOR_MODE: str = "system"
 LIGHT_COLOR_MODE: str = "light"

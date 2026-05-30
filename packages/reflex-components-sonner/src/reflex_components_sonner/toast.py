@@ -14,10 +14,8 @@ from reflex_base.utils import format
 from reflex_base.utils.imports import ImportVar
 from reflex_base.utils.serializers import serializer
 from reflex_base.vars import VarData
-from reflex_base.vars.base import LiteralVar, Var
+from reflex_base.vars.base import LiteralVar, Var, ternary_operation
 from reflex_base.vars.function import FunctionVar
-from reflex_base.vars.base import ternary_operation
-from reflex_base.vars.object import ObjectVar
 from reflex_components_lucide.icon import Icon
 
 LiteralPosition = Literal[
@@ -260,7 +258,7 @@ class Toaster(Component):
             ValueError: If the Toaster component is not created.
         """
         toast_command = (
-            ObjectVar.__getattr__(toast_ref.to(dict), level) if level else toast_ref
+            getattr(toast_ref.to(dict), level) if level else toast_ref
         ).to(FunctionVar)
 
         if isinstance(message, Var):

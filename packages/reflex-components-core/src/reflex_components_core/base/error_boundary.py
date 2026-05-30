@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from reflex_base.components.component import Component, field
 from reflex_base.event import EventHandler, set_clipboard
-from reflex_base.vars.base import Var
+from reflex_base.vars.base import ObjectVar, Var
 from reflex_base.vars.function import ArgsFunctionOperation
-from reflex_base.vars.object import ObjectVar
 
 from reflex_components_core.datadisplay.logo import svg_logo
 from reflex_components_core.el import a, button, div, h2, hr, p, pre, svg

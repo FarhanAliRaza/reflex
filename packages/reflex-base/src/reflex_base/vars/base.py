@@ -18,6 +18,7 @@ from abc import ABCMeta
 from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import _MISSING_TYPE, MISSING
 from decimal import Decimal
+from importlib.util import find_spec
 from types import CodeType, FunctionType
 from typing import (
     TYPE_CHECKING,
@@ -34,6 +35,7 @@ from typing import (
     cast,
     get_args,
     get_type_hints,
+    is_typeddict,
     overload,
 )
 
@@ -80,7 +82,6 @@ if TYPE_CHECKING:
     from reflex_base.constants.colors import Color
 
     from .color import LiteralColorVar
-    from .object import LiteralObjectVar, ObjectVar
     from .sequence import ArrayVar, LiteralArrayVar, LiteralStringVar, StringVar
 
 
@@ -134,7 +135,6 @@ def _rust_var_classify(var_type: GenericType) -> type:
     Returns:
         The matched typed ``Var`` subclass (``Var`` when nothing matches).
     """
-    from .object import ObjectVar
 
     if var_type is None:
         return NoneVar
@@ -758,7 +758,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             The converted var.
         """
-        from .object import ObjectVar
 
         fixed_output_type = get_origin(output) or output
 
@@ -828,7 +827,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Raises:
             TypeError: If the type is not supported for guessing.
         """
-        from .object import ObjectVar
 
         var_type = self._var_type
         if var_type is None:
@@ -1295,7 +1293,6 @@ class ToOperation:
         Returns:
             The attribute of the var.
         """
-        from .object import ObjectVar
 
         if isinstance(self, ObjectVar) and name != "_js_expr":
             return ObjectVar.__getattr__(self, name)
@@ -1421,7 +1418,6 @@ class LiteralVar(Var[VAR_TYPE]):
         Raises:
             TypeError: If the value is not a supported type for LiteralVar.
         """
-        from .object import LiteralObjectVar
         from .sequence import ArrayVar, LiteralStringVar
 
         if isinstance(value, Var):
@@ -1524,7 +1520,6 @@ class LiteralVar(Var[VAR_TYPE]):
         Raises:
             TypeError: If the value is not a supported type for LiteralVar.
         """
-        from .object import LiteralObjectVar
         from .sequence import LiteralStringVar
 
         if isinstance(value, Var):
@@ -3949,3 +3944,181 @@ def ternary_operation(
 
 
 NUMBER_TYPES = (int, float, Decimal, NumberVar)
+
+
+OBJECT_TYPE = TypeVar("OBJECT_TYPE", covariant=True)
+
+
+def _determine_value_type(var_type: GenericType):
+    """Resolve the value type of a mapping/dataclass/typeddict var type.
+
+    Args:
+        var_type: The object var's type.
+
+    Returns:
+        The unionized value type (``Any`` when undeterminable).
+    """
+    origin_var_type = get_origin(var_type) or var_type
+
+    if origin_var_type in types.UnionTypes:
+        return unionize(*[
+            _determine_value_type(arg)
+            for arg in get_args(var_type)
+            if arg is not type(None)
+        ])
+
+    if is_typeddict(origin_var_type) or dataclasses.is_dataclass(origin_var_type):
+        annotations = get_type_hints(origin_var_type)
+        return unionize(*annotations.values())
+
+    if origin_var_type in (dict, Mapping):
+        args = get_args(var_type)
+        return args[1] if args else Any
+
+    return Any
+
+
+_OBJECT_PYTHON_TYPES = (Mapping,)
+if find_spec("pydantic"):
+    import pydantic
+
+    _OBJECT_PYTHON_TYPES += (pydantic.BaseModel,)
+
+
+class ObjectVar(Var[OBJECT_TYPE], python_types=_OBJECT_PYTHON_TYPES):
+    """Type marker for immutable object vars (behavior is in ``RustVar``)."""
+
+
+class RestProp(ObjectVar[dict[str, Any]]):
+    """A special object var representing forwarded rest props."""
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class LiteralObjectVar(
+    CachedVarOperation, ObjectVar[OBJECT_TYPE], LiteralVar[OBJECT_TYPE]
+):
+    """Registry anchor for literal object vars; plain dicts mint a RustLiteralVar."""
+
+    _var_value: Mapping[Var | Any, Var | Any] = dataclasses.field(default_factory=dict)
+
+    @cached_property_no_lock
+    def _cached_var_name(self) -> str:
+        """The name of the var.
+
+        Returns:
+            The name of the var.
+        """
+        return (
+            "({ "
+            + ", ".join([
+                f"[{LiteralVar.create(key)!s}] : {LiteralVar.create(value)!s}"
+                for key, value in self._var_value.items()
+            ])
+            + " })"
+        )
+
+    def json(self) -> str:
+        """Get the JSON representation of the object.
+
+        Returns:
+            The JSON representation of the object.
+
+        Raises:
+            TypeError: The keys and values of the object must be literal vars to get the JSON representation
+        """
+        keys_and_values = []
+        for key, value in self._var_value.items():
+            key = LiteralVar.create(key)
+            value = LiteralVar.create(value)
+            if not isinstance(key, LiteralVar) or not isinstance(value, LiteralVar):
+                msg = "The keys and values of the object must be literal vars to get the JSON representation."
+                raise TypeError(msg)
+            keys_and_values.append(f"{key.json()}:{value.json()}")
+        return "{" + ", ".join(keys_and_values) + "}"
+
+    def __hash__(self) -> int:
+        """Get the hash of the var.
+
+        Returns:
+            The hash of the var.
+        """
+        return hash((type(self).__name__, self._js_expr))
+
+    @classmethod
+    def _get_all_var_data_without_creating_var(
+        cls,
+        value: Mapping,
+    ) -> VarData | None:
+        """Get all the var data without creating a var.
+
+        Args:
+            value: The value to get the var data from.
+
+        Returns:
+            The var data.
+        """
+        from .sequence import LiteralArrayVar
+
+        return VarData.merge(
+            LiteralArrayVar._get_all_var_data_without_creating_var(value),
+            LiteralArrayVar._get_all_var_data_without_creating_var(value.values()),
+        )
+
+    @cached_property_no_lock
+    def _cached_get_all_var_data(self) -> VarData | None:
+        """Get all the var data.
+
+        Returns:
+            The var data.
+        """
+        from .sequence import LiteralArrayVar
+
+        return VarData.merge(
+            LiteralArrayVar._get_all_var_data_without_creating_var(self._var_value),
+            LiteralArrayVar._get_all_var_data_without_creating_var(
+                self._var_value.values()
+            ),
+            self._var_data,
+        )
+
+    @classmethod
+    def create(
+        cls,
+        _var_value: Mapping,
+        _var_type: type[OBJECT_TYPE] | None = None,
+        _var_data: VarData | None = None,
+    ) -> LiteralObjectVar[OBJECT_TYPE]:
+        """Create the literal object var.
+
+        Args:
+            _var_value: The value of the var.
+            _var_type: The type of the var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The literal object var.
+
+        Raises:
+            TypeError: If the value is not a mapping type or a dataclass.
+        """
+        if not isinstance(_var_value, Mapping):
+            from reflex_base.utils.serializers import serialize
+
+            serialized = serialize(_var_value, get_type=False)
+            if not isinstance(serialized, Mapping):
+                msg = f"Expected a mapping type or a dataclass, got {_var_value!r} of type {type(_var_value).__name__}."
+                raise TypeError(msg)
+
+            return LiteralObjectVar(
+                _js_expr="",
+                _var_type=(type(_var_value) if _var_type is None else _var_type),
+                _var_data=_var_data,
+                _var_value=serialized,
+            )
+
+        return LiteralObjectVar(
+            _js_expr="",
+            _var_type=(figure_out_type(_var_value) if _var_type is None else _var_type),
+            _var_data=_var_data,
+            _var_value=_var_value,
+        )

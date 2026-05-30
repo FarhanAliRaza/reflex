@@ -20,6 +20,8 @@ from reflex_base.vars import VarData
 from reflex_base.vars.base import (
     ComputedVar,
     LiteralVar,
+    NumberVar,
+    ObjectVar,
     Var,
     computed_var,
     var_operation,
@@ -30,8 +32,6 @@ from reflex_base.vars.function import (
     DestructuredArg,
     FunctionStringVar,
 )
-from reflex_base.vars.base import NumberVar
-from reflex_base.vars.object import ObjectVar
 from reflex_base.vars.sequence import ArrayVar, ConcatVarOperation, LiteralStringVar
 
 import reflex as rx

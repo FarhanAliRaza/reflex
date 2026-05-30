@@ -46,7 +46,13 @@ from reflex_base.utils.types import (
     typehint_issubclass,
 )
 from reflex_base.vars import VarData
-from reflex_base.vars.base import LiteralVar, Var, cached_property_no_lock
+from reflex_base.vars.base import (
+    LiteralVar,
+    ObjectVar,
+    Var,
+    cached_property_no_lock,
+    ternary_operation,
+)
 from reflex_base.vars.function import (
     ArgsFunctionOperation,
     ArgsFunctionOperationBuilder,
@@ -56,8 +62,6 @@ from reflex_base.vars.function import (
     FunctionVar,
     VarOperationCall,
 )
-from reflex_base.vars.base import ternary_operation
-from reflex_base.vars.object import ObjectVar
 
 if TYPE_CHECKING:
     from reflex.state import BaseState

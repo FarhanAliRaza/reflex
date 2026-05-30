@@ -48,16 +48,16 @@ from reflex_base.vars import VarData
 from reflex_base.vars.base import (
     CachedVarOperation,
     LiteralVar,
+    ObjectVar,
     Var,
     cached_property_no_lock,
+    ternary_operation,
 )
 from reflex_base.vars.function import (
     ArgsFunctionOperation,
     FunctionStringVar,
     FunctionVar,
 )
-from reflex_base.vars.base import ternary_operation
-from reflex_base.vars.object import ObjectVar
 from reflex_base.vars.sequence import StringVar
 
 if TYPE_CHECKING:

@@ -9,8 +9,13 @@ from urllib.parse import _NetlocResultMixinStr, parse_qsl, urlsplit
 from reflex_base import constants
 from reflex_base.utils import console, format
 from reflex_base.utils.serializers import serializer
-from reflex_base.vars.base import Var, VarData, VarSubclassEntry, _var_subclasses
-from reflex_base.vars.object import ObjectVar
+from reflex_base.vars.base import (
+    ObjectVar,
+    Var,
+    VarData,
+    VarSubclassEntry,
+    _var_subclasses,
+)
 from reflex_base.vars.sequence import StringVar
 from reflex_compiler_rust._native import RustVar
 

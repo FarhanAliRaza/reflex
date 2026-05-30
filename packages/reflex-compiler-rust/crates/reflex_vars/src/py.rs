@@ -2228,7 +2228,7 @@ fn func_return_type(py: Python<'_>, var_type: &Py<PyAny>) -> Py<PyAny> {
 /// The Mapping value type of an object var (`ObjectVar._value_type` =
 /// `_determine_value_type(var_type)`), e.g. `int` for `Mapping[str, int]`.
 fn determine_value_type(py: Python<'_>, var_type: &Py<PyAny>) -> Py<PyAny> {
-    py.import_bound("reflex_base.vars.object")
+    py.import_bound("reflex_base.vars.base")
         .and_then(|m| m.getattr("_determine_value_type"))
         .and_then(|f| f.call1((var_type.bind(py),)))
         .map(|t| t.unbind())

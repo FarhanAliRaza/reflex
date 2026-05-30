@@ -32,9 +32,8 @@ from reflex_base.style import Style
 from reflex_base.utils import format
 from reflex_base.utils.imports import ImportVar
 from reflex_base.vars import VarData
-from reflex_base.vars.base import LiteralVar, Var, get_unique_variable_name
+from reflex_base.vars.base import LiteralVar, ObjectVar, Var, get_unique_variable_name
 from reflex_base.vars.function import FunctionVar
-from reflex_base.vars.object import ObjectVar
 from reflex_base.vars.sequence import ArrayVar
 from reflex_components_sonner.toast import toast
 

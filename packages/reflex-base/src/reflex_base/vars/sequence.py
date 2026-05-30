@@ -39,9 +39,8 @@ from .base import (
 )
 
 if TYPE_CHECKING:
-    from .base import DATACLASS_TYPE, SQLA_TYPE
+    from .base import DATACLASS_TYPE, SQLA_TYPE, ObjectVar
     from .function import FunctionVar
-    from .object import ObjectVar
 
 ARRAY_VAR_TYPE = TypeVar("ARRAY_VAR_TYPE", bound=Sequence, covariant=True)
 OTHER_ARRAY_VAR_TYPE = TypeVar("OTHER_ARRAY_VAR_TYPE", bound=Sequence, covariant=True)

@@ -1,6 +1,6 @@
 """Immutable-Based Var System."""
 
-from . import base, color, datetime, function, object, sequence
+from . import base, color, datetime, function, sequence
 from .base import (
     BaseStateMeta,
     BooleanVar,
@@ -8,8 +8,11 @@ from .base import (
     Field,
     LiteralBooleanVar,
     LiteralNumberVar,
+    LiteralObjectVar,
     LiteralVar,
     NumberVar,
+    ObjectVar,
+    RestProp,
     Var,
     VarData,
     field,
@@ -21,7 +24,6 @@ from .base import (
 from .color import ColorVar, LiteralColorVar
 from .datetime import DateTimeVar
 from .function import FunctionStringVar, FunctionVar, VarOperationCall
-from .object import LiteralObjectVar, ObjectVar, RestProp
 from .sequence import (
     ArrayVar,
     ConcatVarOperation,
@@ -62,7 +64,6 @@ __all__ = [
     "function",
     "get_unique_variable_name",
     "get_uuid_string_var",
-    "object",
     "sequence",
     "var_operation",
     "var_operation_return",
