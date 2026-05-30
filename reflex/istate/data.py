@@ -9,16 +9,10 @@ from urllib.parse import _NetlocResultMixinStr, parse_qsl, urlsplit
 from reflex_base import constants
 from reflex_base.utils import console, format
 from reflex_base.utils.serializers import serializer
-from reflex_base.vars.base import (
-    CachedVarOperation,
-    Var,
-    VarData,
-    VarSubclassEntry,
-    _var_subclasses,
-    cached_property_no_lock,
-)
-from reflex_base.vars.object import ObjectItemOperation, ObjectVar
+from reflex_base.vars.base import Var, VarData, VarSubclassEntry, _var_subclasses
+from reflex_base.vars.object import ObjectVar
 from reflex_base.vars.sequence import StringVar
+from reflex_compiler_rust._native import RustVar
 
 
 @dataclasses.dataclass(frozen=True, init=False)
@@ -194,12 +188,7 @@ class ReflexURLVar(StringVar[ReflexURL]):
     """
 
 
-@dataclasses.dataclass(
-    eq=False,
-    frozen=True,
-    slots=True,
-)
-class ReflexURLCastedVar(CachedVarOperation, ReflexURLVar):
+class ReflexURLCastedVar(RustVar):
     """Cast-to-ReflexURL operation whose default rendering reads ``href``.
 
     Constructed when ``guess_type`` / ``to(ReflexURLVar)`` is invoked on any
@@ -209,19 +198,8 @@ class ReflexURLCastedVar(CachedVarOperation, ReflexURLVar):
     matching key on ``{original}`` instead.
     """
 
-    _original: Var = dataclasses.field(
-        default_factory=lambda: Var(_js_expr="null", _var_type=None),
-    )
     _default_var_type: ClassVar[Any] = ReflexURL
-
-    @cached_property_no_lock
-    def _cached_var_name(self) -> str:
-        """Render the URL as its ``href`` string in JS.
-
-        Returns:
-            The JS expression for the full URL string.
-        """
-        return f'{self._original!s}?.["href"]'
+    _original: Var
 
     def _component(self, name: str) -> Var:
         """Build an indexing operation for a key on the serialized URL object.
@@ -235,10 +213,7 @@ class ReflexURLCastedVar(CachedVarOperation, ReflexURLVar):
         Returns:
             A Var reading ``name`` from the URL object.
         """
-        return ObjectItemOperation.create(
-            self._original.to(ObjectVar, Mapping[str, Any]),
-            name,
-        )
+        return self._original.to(ObjectVar, Mapping[str, Any])[name]
 
     @property
     def scheme(self) -> StringVar:
@@ -312,6 +287,10 @@ class ReflexURLCastedVar(CachedVarOperation, ReflexURLVar):
     ) -> "ReflexURLCastedVar":
         """Create a ReflexURLCastedVar wrapping another Var.
 
+        The top-level JS expression reads ``href`` off the serialized URL so
+        string-context usage produces the full URL; the wrapped ``value`` is
+        kept on ``_original`` for the component properties to index.
+
         Args:
             value: The Var being cast to ReflexURL.
             _var_type: Optional override for the var type.
@@ -320,12 +299,13 @@ class ReflexURLCastedVar(CachedVarOperation, ReflexURLVar):
         Returns:
             The new ReflexURLCastedVar.
         """
-        return cls(
-            _js_expr="",
-            _var_type=_var_type or ReflexURL,
-            _var_data=_var_data,
-            _original=value,
+        var = cls(
+            f'{value!s}?.["href"]',
+            _var_type or ReflexURL,
+            VarData.merge(value._get_all_var_data(), _var_data),
         )
+        var._original = value
+        return var
 
 
 # ReflexURLCastedVar intentionally uses the CachedVarOperation lineage rather
