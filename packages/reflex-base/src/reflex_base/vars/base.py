@@ -9,6 +9,7 @@ import datetime
 import functools
 import inspect
 import json
+import math
 import re
 import string
 import uuid
@@ -38,6 +39,7 @@ from typing import (
 
 from rich.markup import escape
 from typing_extensions import LiteralString, dataclass_transform, override
+from typing_extensions import TypeVar as TypeVarExt
 
 from reflex_base import constants
 from reflex_base.constants.compiler import Hooks
@@ -47,6 +49,7 @@ from reflex_base.utils.compat import annotations_from_namespace
 from reflex_base.utils.decorator import once
 from reflex_base.utils.exceptions import (
     ComputedVarSignatureError,
+    PrimitiveUnserializableToJSONError,
     UntypedComputedVarError,
     VarAttributeError,
     VarDependencyError,
@@ -77,7 +80,6 @@ if TYPE_CHECKING:
     from reflex_base.constants.colors import Color
 
     from .color import LiteralColorVar
-    from .number import BooleanVar, LiteralBooleanVar, LiteralNumberVar, NumberVar
     from .object import LiteralObjectVar, ObjectVar
     from .sequence import ArrayVar, LiteralArrayVar, LiteralStringVar, StringVar
 
@@ -114,11 +116,8 @@ _var_literal_subclasses: list[tuple[type[LiteralVar], VarSubclassEntry]] = []
 
 
 # VarData is now the Rust-backed RustVarData (hard cutover, no Python impl).
-from reflex_compiler_rust._native import (  # noqa: E402
-    RustLiteralVar,
-    RustVar,
-    RustVarData as VarData,
-)
+from reflex_compiler_rust._native import RustLiteralVar, RustVar  # noqa: E402
+from reflex_compiler_rust._native import RustVarData as VarData
 
 
 def _rust_var_classify(var_type: GenericType) -> type:
@@ -967,8 +966,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             BooleanVar: A BooleanVar object representing the result of the equality check.
         """
-        from .number import equal_operation
-
         return equal_operation(self, other)
 
     def __ne__(self, other: Var | Any) -> BooleanVar:
@@ -980,8 +977,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             BooleanVar: A BooleanVar object representing the result of the comparison.
         """
-        from .number import equal_operation
-
         return ~equal_operation(self, other)
 
     def bool(self) -> BooleanVar:
@@ -990,8 +985,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             The boolean var.
         """
-        from .number import boolify
-
         return boolify(self)
 
     def is_none(self) -> BooleanVar:
@@ -1000,8 +993,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             A BooleanVar object representing the result of the check.
         """
-        from .number import is_not_none_operation
-
         return ~is_not_none_operation(self)
 
     def is_not_none(self) -> BooleanVar:
@@ -1010,8 +1001,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             A BooleanVar object representing the result of the check.
         """
-        from .number import is_not_none_operation
-
         return is_not_none_operation(self)
 
     def __and__(
@@ -1649,6 +1638,7 @@ def get_python_literal(value: LiteralVar | Any) -> Any | None:
 
 P = ParamSpec("P")
 T = TypeVar("T")
+U = TypeVar("U")
 
 
 # NoReturn is used to match CustomVarOperationReturn with no type hint.
@@ -3683,3 +3673,279 @@ class EvenMoreBasicBaseState(metaclass=BaseStateMeta):
                 annotated_type=var._var_type,
             )
         cls.__fields__[name] = new_field
+
+
+NUMBER_T = TypeVarExt(
+    "NUMBER_T",
+    bound=(int | float | Decimal),
+    default=(int | float | Decimal),
+    covariant=True,
+)
+
+
+def raise_unsupported_operand_types(
+    operator: str, operands_types: tuple[type, ...]
+) -> NoReturn:
+    """Raise an unsupported operand types error.
+
+    Args:
+        operator: The operator.
+        operands_types: The types of the operands.
+
+    Raises:
+        VarTypeError: The operand types are unsupported.
+    """
+    msg = f"Unsupported Operand type(s) for {operator}: {', '.join(t.__name__ for t in operands_types)}"
+    raise VarTypeError(msg)
+
+
+class NumberVar(Var[NUMBER_T], python_types=(int, float, Decimal)):
+    """Type marker for immutable number vars.
+
+    The behavior (operators, methods) is implemented by ``RustVar``; this class
+    survives only to anchor the type registration and serve as an isinstance /
+    ``.to(...)`` / annotation target.
+    """
+
+
+class BooleanVar(NumberVar[bool], python_types=bool):
+    """Type marker for immutable boolean vars (see ``NumberVar``)."""
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class LiteralNumberVar(LiteralVar[NUMBER_T], NumberVar[NUMBER_T]):
+    """Registry anchor for literal number vars; instances are ``RustLiteralVar``."""
+
+    _var_value: float | int | Decimal = dataclasses.field(default=0)
+
+    def json(self) -> str:
+        """Get the JSON representation of the var.
+
+        Returns:
+            The JSON representation of the var.
+
+        Raises:
+            PrimitiveUnserializableToJSONError: If the var is unserializable to JSON.
+        """
+        if isinstance(self._var_value, Decimal):
+            return json.dumps(float(self._var_value))
+        if math.isinf(self._var_value) or math.isnan(self._var_value):
+            msg = f"No valid JSON representation for {self}"
+            raise PrimitiveUnserializableToJSONError(msg)
+        return json.dumps(self._var_value)
+
+    def __hash__(self) -> int:
+        """Calculate the hash value of the object.
+
+        Returns:
+            int: The hash value of the object.
+        """
+        return hash((type(self).__name__, self._var_value))
+
+    @classmethod
+    def _get_all_var_data_without_creating_var(
+        cls, value: float | int | Decimal
+    ) -> VarData | None:
+        """Get all the var data without creating the var.
+
+        Args:
+            value: The value of the var.
+
+        Returns:
+            The var data.
+        """
+        return None
+
+    @classmethod
+    def create(cls, value: float | int | Decimal, _var_data: VarData | None = None):
+        """Create the number var.
+
+        Args:
+            value: The value of the var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The number var.
+        """
+        if math.isinf(value):
+            js_expr = "Infinity" if value > 0 else "-Infinity"
+        elif math.isnan(value):
+            js_expr = "NaN"
+        else:
+            js_expr = str(value)
+
+        return cls(
+            _js_expr=js_expr,
+            _var_type=type(value),
+            _var_data=_var_data,
+            _var_value=value,
+        )
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class LiteralBooleanVar(LiteralVar[bool], BooleanVar):
+    """Registry anchor for literal boolean vars; instances are ``RustLiteralVar``."""
+
+    _var_value: bool = dataclasses.field(default=False)
+
+    def json(self) -> str:
+        """Get the JSON representation of the var.
+
+        Returns:
+            The JSON representation of the var.
+        """
+        return "true" if self._var_value else "false"
+
+    def __hash__(self) -> int:
+        """Calculate the hash value of the object.
+
+        Returns:
+            int: The hash value of the object.
+        """
+        return hash((type(self).__name__, self._var_value))
+
+    @classmethod
+    def _get_all_var_data_without_creating_var(cls, value: bool) -> VarData | None:
+        """Get all the var data without creating the var.
+
+        Args:
+            value: The value of the var.
+
+        Returns:
+            The var data.
+        """
+        return None
+
+    @classmethod
+    def create(cls, value: bool, _var_data: VarData | None = None):
+        """Create the boolean var.
+
+        Args:
+            value: The value of the var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The boolean var.
+        """
+        return cls(
+            _js_expr="true" if value else "false",
+            _var_type=bool,
+            _var_data=_var_data,
+            _var_value=value,
+        )
+
+
+_IS_TRUE_IMPORT: ImportDict = {
+    f"$/{constants.Dirs.STATE_PATH}": [ImportVar(tag="isTrue")],
+}
+
+_IS_NOT_NULL_OR_UNDEFINED_IMPORT: ImportDict = {
+    f"$/{constants.Dirs.STATE_PATH}": [ImportVar(tag="isNotNullOrUndefined")],
+}
+
+
+def comparison_operator(
+    func: Callable[[Var, Var], str],
+) -> Callable[[Var | Any, Var | Any], BooleanVar]:
+    """Decorator to create a comparison operation.
+
+    Args:
+        func: The comparison operation function.
+
+    Returns:
+        The comparison operation.
+    """
+
+    @var_operation
+    def operation(lhs: Var, rhs: Var):
+        return var_operation_return(
+            js_expression=func(lhs, rhs),
+            var_type=bool,
+        )
+
+    def wrapper(lhs: Var | Any, rhs: Var | Any) -> BooleanVar:
+        """Create the comparison operation.
+
+        Args:
+            lhs: The first value.
+            rhs: The second value.
+
+        Returns:
+            The comparison operation.
+        """
+        return operation(lhs, rhs)
+
+    return wrapper
+
+
+@comparison_operator
+def equal_operation(lhs: Var, rhs: Var):
+    """Equal comparison.
+
+    Args:
+        lhs: The first value.
+        rhs: The second value.
+
+    Returns:
+        The result of the comparison.
+    """
+    return f"({lhs}?.valueOf?.() === {rhs}?.valueOf?.())"
+
+
+@var_operation
+def boolify(value: Var):
+    """Convert the value to a boolean.
+
+    Args:
+        value: The value.
+
+    Returns:
+        The boolean value.
+    """
+    return var_operation_return(
+        js_expression=f"isTrue({value})",
+        var_type=bool,
+        var_data=VarData(imports=_IS_TRUE_IMPORT),
+    )
+
+
+@var_operation
+def is_not_none_operation(value: Var):
+    """Check if the value is not None.
+
+    Args:
+        value: The value.
+
+    Returns:
+        The boolean value.
+    """
+    return var_operation_return(
+        js_expression=f"isNotNullOrUndefined({value})",
+        var_type=bool,
+        var_data=VarData(imports=_IS_NOT_NULL_OR_UNDEFINED_IMPORT),
+    )
+
+
+@var_operation
+def ternary_operation(
+    condition: Var[bool], if_true: Var[T], if_false: Var[U]
+) -> CustomVarOperationReturn[T | U]:
+    """Create a ternary operation.
+
+    Args:
+        condition: The condition.
+        if_true: The value if the condition is true.
+        if_false: The value if the condition is false.
+
+    Returns:
+        The ternary operation.
+    """
+    type_value: type[T] | type[U] = unionize(if_true._var_type, if_false._var_type)
+    value: CustomVarOperationReturn[T | U] = var_operation_return(
+        js_expression=f"({condition} ? {if_true} : {if_false})",
+        var_type=type_value,
+    )
+    return value
+
+
+NUMBER_TYPES = (int, float, Decimal, NumberVar)

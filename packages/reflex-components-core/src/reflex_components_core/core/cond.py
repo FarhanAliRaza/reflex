@@ -13,7 +13,7 @@ from reflex_base.utils import types
 from reflex_base.utils.imports import ImportDict, ImportVar
 from reflex_base.vars import VarData
 from reflex_base.vars.base import LiteralVar, Var
-from reflex_base.vars.number import ternary_operation
+from reflex_base.vars.base import ternary_operation
 
 from reflex_components_core.base.bare import Bare
 from reflex_components_core.base.fragment import Fragment

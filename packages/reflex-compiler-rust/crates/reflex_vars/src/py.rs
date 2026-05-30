@@ -2028,7 +2028,7 @@ fn rebuild_like(
 /// goes through the isinstance bridge, so a numeric RustVar qualifies too.
 fn is_number_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool> {
     let number_types = py
-        .import_bound("reflex_base.vars.number")?
+        .import_bound("reflex_base.vars.base")?
         .getattr("NUMBER_TYPES")?;
     value.is_instance(&number_types)
 }
@@ -2054,7 +2054,7 @@ fn valid_repeat_count(
         )
     } else {
         let number_var = py
-            .import_bound("reflex_base.vars.number")?
+            .import_bound("reflex_base.vars.base")?
             .getattr("NumberVar")?;
         if count.is_instance(&number_var)? {
             (

@@ -16,7 +16,7 @@ from reflex_base.utils.serializers import serializer
 from reflex_base.vars import VarData
 from reflex_base.vars.base import LiteralVar, Var
 from reflex_base.vars.function import FunctionVar
-from reflex_base.vars.number import ternary_operation
+from reflex_base.vars.base import ternary_operation
 from reflex_base.vars.object import ObjectVar
 from reflex_components_lucide.icon import Icon
 

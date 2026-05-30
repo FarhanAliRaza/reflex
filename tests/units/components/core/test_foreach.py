@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import pytest
 from reflex_base.components.component import Component
 from reflex_base.constants.state import FIELD_MARKER
-from reflex_base.vars.number import NumberVar
+from reflex_base.vars.base import NumberVar
 from reflex_base.vars.sequence import ArrayVar
 from reflex_components_core.core.foreach import (
     Foreach,

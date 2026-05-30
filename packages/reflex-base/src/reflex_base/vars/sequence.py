@@ -20,24 +20,22 @@ from reflex_base.utils.exceptions import VarTypeError
 from reflex_base.utils.types import GenericType, get_origin
 
 from .base import (
+    BooleanVar,
     CachedVarOperation,
     CustomVarOperationReturn,
+    LiteralNumberVar,
     LiteralVar,
+    NumberVar,
     Var,
     VarData,
     _global_vars,
     cached_property_no_lock,
     figure_out_type,
     get_unique_variable_name,
+    raise_unsupported_operand_types,
     unionize,
     var_operation,
     var_operation_return,
-)
-from .number import (
-    BooleanVar,
-    LiteralNumberVar,
-    NumberVar,
-    raise_unsupported_operand_types,
 )
 
 if TYPE_CHECKING:

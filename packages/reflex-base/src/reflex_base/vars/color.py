@@ -10,8 +10,8 @@ from reflex_base.vars.base import (
     VarData,
     cached_property_no_lock,
     get_python_literal,
+    ternary_operation,
 )
-from reflex_base.vars.number import ternary_operation
 from reflex_base.vars.sequence import ConcatVarOperation, LiteralStringVar, StringVar
 
 

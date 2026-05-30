@@ -8,7 +8,7 @@ from reflex_base.components.component import Component, ComponentNamespace, fiel
 from reflex_base.event import EventHandler, input_event, key_event
 from reflex_base.utils.types import is_optional
 from reflex_base.vars.base import Var
-from reflex_base.vars.number import ternary_operation
+from reflex_base.vars.base import ternary_operation
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.core.debounce import DebounceInput
 from reflex_components_core.el import elements

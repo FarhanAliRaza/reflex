@@ -56,7 +56,7 @@ from reflex_base.vars.function import (
     FunctionStringVar,
     FunctionVar,
 )
-from reflex_base.vars.number import ternary_operation
+from reflex_base.vars.base import ternary_operation
 from reflex_base.vars.object import ObjectVar
 from reflex_base.vars.sequence import StringVar
 

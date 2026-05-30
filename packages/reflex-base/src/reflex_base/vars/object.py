@@ -30,16 +30,18 @@ from reflex_base.utils.types import (
 )
 
 from .base import (
+    BooleanVar,
     CachedVarOperation,
     LiteralVar,
+    NumberVar,
     Var,
     VarData,
     cached_property_no_lock,
     figure_out_type,
+    raise_unsupported_operand_types,
     var_operation,
     var_operation_return,
 )
-from .number import BooleanVar, NumberVar, raise_unsupported_operand_types
 from .sequence import ArrayVar, LiteralArrayVar, StringVar
 
 OBJECT_TYPE = TypeVar("OBJECT_TYPE", covariant=True)

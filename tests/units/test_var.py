@@ -30,7 +30,7 @@ from reflex_base.vars.function import (
     DestructuredArg,
     FunctionStringVar,
 )
-from reflex_base.vars.number import NumberVar
+from reflex_base.vars.base import NumberVar
 from reflex_base.vars.object import ObjectVar
 from reflex_base.vars.sequence import ArrayVar, ConcatVarOperation, LiteralStringVar
 

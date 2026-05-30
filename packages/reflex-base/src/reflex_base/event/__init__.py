@@ -56,7 +56,7 @@ from reflex_base.vars.function import (
     FunctionVar,
     VarOperationCall,
 )
-from reflex_base.vars.number import ternary_operation
+from reflex_base.vars.base import ternary_operation
 from reflex_base.vars.object import ObjectVar
 
 if TYPE_CHECKING:
