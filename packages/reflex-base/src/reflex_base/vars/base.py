@@ -166,6 +166,54 @@ def _rust_var_classify(var_type: GenericType) -> type:
     return ObjectVar if can_use_in_object_var(fixed_type) else Var
 
 
+# The standard typed Var classes whose entire behavior the unified ``RustVar``
+# reproduces (operators + methods dispatched off ``_var_type``). For these,
+# ``guess_type`` is identity. Any *other* registered subclass (e.g.
+# ``ReflexURLCastedVar``) carries bespoke rendering/properties and must be
+# produced as its own casted instance.
+_STANDARD_VAR_CLASS_NAMES = frozenset(
+    {
+        "Var",
+        "NumberVar",
+        "BooleanVar",
+        "StringVar",
+        "ArrayVar",
+        "ObjectVar",
+        "NoneVar",
+        "DateTimeVar",
+        "ColorVar",
+        "FunctionVar",
+        "BuilderFunctionVar",
+        "RangeVar",
+    }
+)
+
+
+def _rust_guess_type(var: RustVar) -> Any:
+    """Resolve a ``RustVar`` to its typed form (the bridge for ``guess_type``).
+
+    Standard typed classes are reproduced by ``RustVar`` itself, so the var is
+    returned unchanged. A custom registered subclass (carrying bespoke
+    behavior, e.g. ``ReflexURLCastedVar``) is produced as its casted instance
+    via the registry, so its custom rendering/properties survive.
+
+    Args:
+        var: The Rust-backed var to resolve.
+
+    Returns:
+        The var itself, or its custom casted-subclass instance.
+    """
+    matched = _rust_var_classify(var._var_type)
+    if matched.__name__ in _STANDARD_VAR_CLASS_NAMES:
+        return var
+    for entry in _var_subclasses:
+        if entry.var_subclass is matched:
+            return entry.to_var_subclass.create(
+                value=var, _var_type=var._var_type
+            )
+    return var
+
+
 def _literal_pair_for(var_subclass: type) -> type | None:
     """Return the ``LiteralVar`` subclass paired with ``var_subclass``, if any.
 

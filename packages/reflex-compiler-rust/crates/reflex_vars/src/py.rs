@@ -210,11 +210,16 @@ impl RustVar {
     }
 
     /// Return this var as its guessed typed form (matches `Var.guess_type`).
-    /// RustVar dispatches every operator/method off its `_var_type` tag, so it
-    /// is already "typed" — guessing is identity (no separate typed class to
-    /// convert to).
-    fn guess_type(slf: PyRef<'_, Self>) -> Py<RustVar> {
-        slf.into()
+    ///
+    /// For the standard typed classes RustVar dispatches every operator/method
+    /// off its `_var_type` tag, so guessing is identity. A custom registered
+    /// subclass (bespoke behavior, e.g. `ReflexURLCastedVar`) is produced as its
+    /// casted instance via the Python registry bridge `_rust_guess_type`.
+    fn guess_type(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        py.import_bound("reflex_base.vars.base")?
+            .getattr("_rust_guess_type")?
+            .call1((slf,))
+            .map(|v| v.unbind())
     }
 
     /// Return a new var with replaced type / var_data / js_expr (matches
@@ -1258,6 +1263,17 @@ impl RustVar {
         }
     }
 
+    /// The object's key type (matches `ObjectVar._key_type`: always `str`).
+    fn _key_type(&self, py: Python<'_>) -> Py<PyAny> {
+        PyString::type_object_bound(py).into_any().unbind()
+    }
+
+    /// The object's value type (matches `ObjectVar._value_type` =
+    /// `_determine_value_type(var_type)`).
+    fn _value_type(&self, py: Python<'_>) -> Py<PyAny> {
+        determine_value_type(py, &self.var_type)
+    }
+
     /// Object values: `Object.values({obj} ?? {})`, `list[value_type]`, doubling.
     fn values(&self, py: Python<'_>) -> RustVar {
         RustVar {
@@ -1311,10 +1327,10 @@ impl RustVar {
     /// NumberVar); objects require a string/int key. A literal string key on an
     /// object resolves as attribute access (field type). Invalid index types
     /// raise the `[]` unsupported-operand error.
-    fn __getitem__(&self, py: Python<'_>, index: Bound<'_, PyAny>) -> PyResult<RustVar> {
+    fn __getitem__(&self, py: Python<'_>, index: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // A slice indexes an array (matches ArrayVar.__getitem__ -> ArraySliceOperation).
         if let Ok(slice) = index.downcast::<pyo3::types::PySlice>() {
-            return self.slice_op(py, slice);
+            return guess_typed(py, self.slice_op(py, slice)?);
         }
         let category = var_category(py, &self.var_type)?;
         if category == "ObjectVar" {
@@ -1332,11 +1348,14 @@ impl RustVar {
                 return self.__getattr__(py, name);
             }
             let (ijs, _it, ivd) = operand_parts(py, &index)?;
-            return Ok(RustVar {
-                js_expr: format!("{}?.[{ijs}]", self.js_expr),
-                var_type: self.value_type(py, 1),
-                var_data: var_op_plain(&[&self.var_data, &ivd]),
-            });
+            return guess_typed(
+                py,
+                RustVar {
+                    js_expr: format!("{}?.[{ijs}]", self.js_expr),
+                    var_type: self.value_type(py, 1),
+                    var_data: var_op_plain(&[&self.var_data, &ivd]),
+                },
+            );
         }
         // String / array receivers: integer (non-strict-float) index required.
         if !valid_repeat_count(py, &index, false)? {
@@ -1353,17 +1372,23 @@ impl RustVar {
         }
         let (ijs, _it, ivd) = operand_parts(py, &index)?;
         if category == "StringVar" || category == "ColorVar" {
-            return Ok(RustVar {
-                js_expr: format!("{}?.at?.({ijs})", self.js_expr),
-                var_type: PyString::type_object_bound(py).into_any().unbind(),
-                var_data: var_op_doubling(&[&self.var_data, &ivd]),
-            });
+            return guess_typed(
+                py,
+                RustVar {
+                    js_expr: format!("{}?.at?.({ijs})", self.js_expr),
+                    var_type: PyString::type_object_bound(py).into_any().unbind(),
+                    var_data: var_op_doubling(&[&self.var_data, &ivd]),
+                },
+            );
         }
-        Ok(RustVar {
-            js_expr: format!("{}?.at?.({ijs})", self.js_expr),
-            var_type: self.value_type(py, 0),
-            var_data: var_op_plain(&[&self.var_data, &ivd]),
-        })
+        guess_typed(
+            py,
+            RustVar {
+                js_expr: format!("{}?.at?.({ijs})", self.js_expr),
+                var_type: self.value_type(py, 0),
+                var_data: var_op_plain(&[&self.var_data, &ivd]),
+            },
+        )
     }
 
     /// Attribute-as-item access on an **object** var: `{o}?.["name"]`. Mirrors
@@ -1371,22 +1396,25 @@ impl RustVar {
     /// var type (and for underscore/dunder names) this raises `AttributeError`
     /// so a missing Var-protocol method surfaces cleanly instead of becoming a
     /// bogus item access.
-    fn __getattr__(&self, py: Python<'_>, name: String) -> PyResult<RustVar> {
-        // Private/internal names never resolve as object items (also keeps
-        // Python's attribute probes failing cleanly).
+    fn __getattr__(&self, py: Python<'_>, name: String) -> PyResult<Py<PyAny>> {
+        guess_typed(py, self.attr_access(py, &name)?)
+    }
+}
+
+impl RustVar {
+    /// The raw object attribute access `{self}?.["name"]` (the pre-`guess_type`
+    /// half of `ObjectVar.__getattr__`). Private/internal names and non-object
+    /// receivers raise `AttributeError`.
+    fn attr_access(&self, py: Python<'_>, name: &str) -> PyResult<RustVar> {
         if name.starts_with('_') {
-            return Err(pyo3::exceptions::PyAttributeError::new_err(name));
+            return Err(pyo3::exceptions::PyAttributeError::new_err(name.to_owned()));
         }
-        // Attribute access is an ObjectVar operation: `{self}?.["name"]`. The
-        // result type is the mapping's value type, or — for a TypedDict / Base /
-        // dataclass / Union object — the field's annotated type (matches
-        // ObjectVar.__getattr__). Non-object receivers have no attribute access.
         if var_category(py, &self.var_type)? != "ObjectVar" {
-            return Err(pyo3::exceptions::PyAttributeError::new_err(name));
+            return Err(pyo3::exceptions::PyAttributeError::new_err(name.to_owned()));
         }
-        let var_type = object_attr_type(py, &self.var_type, &name, &self.js_expr)?;
+        let var_type = object_attr_type(py, &self.var_type, name, &self.js_expr)?;
         Ok(RustVar {
-            js_expr: format!("{}?.[{}]", self.js_expr, render_js_string(&name)),
+            js_expr: format!("{}?.[{}]", self.js_expr, render_js_string(name)),
             var_type,
             var_data: var_op_plain(&[&self.var_data]),
         })
@@ -2007,6 +2035,18 @@ fn is_string_operand(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<bool>
         .import_bound("reflex_base.vars.sequence")?
         .getattr("StringVar")?;
     value.is_instance(&string_var)
+}
+
+/// Resolve a freshly-built `RustVar` to its guessed typed form (the bridge
+/// `_rust_guess_type`): identity for standard types, the casted custom-subclass
+/// instance otherwise. Used where Python calls `.guess_type()` on an operation
+/// result (attribute/item access).
+fn guess_typed(py: Python<'_>, var: RustVar) -> PyResult<Py<PyAny>> {
+    let obj = Bound::new(py, var)?;
+    py.import_bound("reflex_base.vars.base")?
+        .getattr("_rust_guess_type")?
+        .call1((obj,))
+        .map(|v| v.unbind())
 }
 
 /// The result type of an object attribute access (matches the type half of
