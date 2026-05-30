@@ -20,7 +20,6 @@ from reflex_base.components.tags.tag import Tag
 from reflex_base.utils.imports import ImportDict, ImportTypes, ImportVar
 from reflex_base.vars.base import LiteralVar, Var, VarData
 from reflex_base.vars.number import ternary_operation
-from reflex_base.vars.sequence import LiteralArrayVar
 from reflex_components_core.core.markdown_component_map import MarkdownComponentMap
 from reflex_components_core.el.elements.typography import Div
 
@@ -515,7 +514,7 @@ class MarkdownWrapper(Div):
             )
         elif use_gfm:
             builtin_remark_plugins.append(markdown.plugin.gfm)
-        remark_plugins = LiteralArrayVar.create(builtin_remark_plugins)
+        remark_plugins = LiteralVar.create(builtin_remark_plugins)
         if (user_remark_plugins := props.pop("remark_plugins", None)) is not None:
             if not isinstance(user_remark_plugins, Var):
                 user_remark_plugins = Var.create(user_remark_plugins)
@@ -548,7 +547,7 @@ class MarkdownWrapper(Div):
             )
         elif use_unwrap_images:
             builtin_rehype_plugins.append(markdown.plugin.unwrap_images)
-        rehype_plugins = LiteralArrayVar.create(builtin_rehype_plugins)
+        rehype_plugins = LiteralVar.create(builtin_rehype_plugins)
         if (user_rehype_plugins := props.pop("rehype_plugins", None)) is not None:
             if not isinstance(user_rehype_plugins, Var):
                 user_rehype_plugins = Var.create(user_rehype_plugins)

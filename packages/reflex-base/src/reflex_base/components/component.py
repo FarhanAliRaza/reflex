@@ -59,7 +59,7 @@ from reflex_base.vars.function import (
 )
 from reflex_base.vars.number import ternary_operation
 from reflex_base.vars.object import ObjectVar
-from reflex_base.vars.sequence import LiteralArrayVar, LiteralStringVar, StringVar
+from reflex_base.vars.sequence import LiteralArrayVar, StringVar
 
 if TYPE_CHECKING:
     import reflex.state
@@ -1668,7 +1668,7 @@ class Component(BaseComponent, ABC):
                 vars.append(comp_prop)
             elif isinstance(comp_prop, str):
                 # Collapse VarData encoded in f-strings.
-                var = LiteralStringVar.create(comp_prop)
+                var = LiteralVar.create(comp_prop)
                 if var._get_all_var_data() is not None:
                     vars.append(var)
 
@@ -2622,7 +2622,7 @@ def render_dict_to_var(tag: dict | Component | str) -> Var:
         return Var(tag["contents"])
 
     if "iterable" in tag:
-        function_return = LiteralArrayVar.create([
+        function_return = LiteralVar.create([
             render_dict_to_var(child.render()) for child in tag["children"]
         ])
 
