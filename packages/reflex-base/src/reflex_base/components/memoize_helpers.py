@@ -28,8 +28,7 @@ from reflex_base.constants import EventTriggers
 from reflex_base.event import EventChain, EventSpec
 from reflex_base.utils.imports import ImportVar
 from reflex_base.vars import VarData
-from reflex_base.vars.base import LiteralVar, Var
-from reflex_base.vars.sequence import ArrayVar
+from reflex_base.vars.base import ArrayVar, LiteralVar, Var
 
 if TYPE_CHECKING:
     from reflex_base.plugins.compiler import PageContext
@@ -242,7 +241,12 @@ def passthrough_children_var(
         and isinstance(children[0].contents, Var)
         and children[0].contents._js_expr == "children"
     ):
-        return children[0].contents.to(list[BaseComponent])
+        contents = children[0].contents
+        return Var(
+            _js_expr=contents._js_expr,
+            _var_type=list[BaseComponent],
+            _var_data=contents._get_all_var_data(),
+        ).guess_type()
     return None
 
 

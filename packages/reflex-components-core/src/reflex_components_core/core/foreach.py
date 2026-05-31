@@ -14,7 +14,7 @@ from reflex_base.constants import MemoizationMode
 from reflex_base.constants.state import FIELD_MARKER
 from reflex_base.utils import types
 from reflex_base.utils.exceptions import UntypedVarError
-from reflex_base.vars.base import LiteralVar, Var
+from reflex_base.vars.base import LiteralVar, Var, var_isinstance
 
 from reflex_components_core.base.fragment import Fragment
 from reflex_components_core.core.cond import cond
@@ -89,13 +89,13 @@ class Foreach(Component):
             msg = "Using a ComponentState as `render_fn` inside `rx.foreach` is not supported yet."
             raise TypeError(msg)
 
-        if isinstance(iterable, ObjectVar):
+        if var_isinstance(iterable, ObjectVar):
             iterable = iterable.entries()
 
-        if isinstance(iterable, StringVar):
+        if var_isinstance(iterable, StringVar):
             iterable = iterable.split()
 
-        if not isinstance(iterable, ArrayVar):
+        if not var_isinstance(iterable, ArrayVar):
             msg = (
                 f"Could not foreach over var `{iterable!s}` of type {iterable._var_type}. "
                 "See https://reflex.dev/docs/library/dynamic-rendering/foreach/"

@@ -14,7 +14,7 @@ def VarOperations():
 
     import pydantic
     from reflex_base.vars.base import LiteralVar
-    from reflex_base.vars.sequence import ArrayVar
+    from reflex_base.vars.base import ArrayVar
 
     import reflex as rx
 

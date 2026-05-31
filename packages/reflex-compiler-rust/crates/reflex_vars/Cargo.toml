@@ -1,0 +1,16 @@
+[package]
+name = "reflex_vars"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# pyo3 without `extension-module` here: the final cdylib (reflex_py) turns that
+# feature on for the wheel build, while standalone `cargo test -p reflex_vars`
+# links libpython normally.
+pyo3 = { version = "0.22", features = ["abi3-py310"] }

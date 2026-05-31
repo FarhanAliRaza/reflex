@@ -24,8 +24,7 @@ from reflex_base.constants.state import FIELD_MARKER
 from reflex_base.style import Style
 from reflex_base.utils import format, imports
 from reflex_base.utils.imports import ImportVar, ParsedImportDict
-from reflex_base.vars.base import Field, Var, VarData
-from reflex_base.vars.function import DestructuredArg
+from reflex_base.vars.base import DestructuredArg, Field, Var, VarData
 from reflex_components_core.base import Description, Image, Scripts
 from reflex_components_core.base.document import Links, ScrollRestoration
 from reflex_components_core.base.document import Meta as ReactMeta

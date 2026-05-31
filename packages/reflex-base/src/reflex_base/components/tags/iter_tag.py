@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 
 from reflex_base.components.tags.tag import Tag
 from reflex_base.utils.types import GenericType
-from reflex_base.vars import LiteralArrayVar, Var, get_unique_variable_name
-from reflex_base.vars.sequence import _determine_value_of_array_index
+from reflex_base.vars import Var, get_unique_variable_name
+from reflex_base.vars.base import LiteralVar, _determine_value_of_array_index
 
 if TYPE_CHECKING:
     from reflex_base.components.component import Component
@@ -22,7 +22,7 @@ class IterTag(Tag):
 
     # The var to iterate over.
     iterable: Var[Iterable] = dataclasses.field(
-        default_factory=lambda: LiteralArrayVar.create([])
+        default_factory=lambda: LiteralVar.create([])
     )
 
     # The component render function for each item in the iterable.

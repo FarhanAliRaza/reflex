@@ -13,9 +13,13 @@ from reflex_base.utils.exceptions import ReflexError
 from reflex_base.utils.imports import ImportVar
 from reflex_base.utils.types import typehint_issubclass
 from reflex_base.vars import VarData
-from reflex_base.vars.base import LiteralVar, Var
-from reflex_base.vars.function import FunctionVar
-from reflex_base.vars.object import ObjectVar
+from reflex_base.vars.base import (
+    FunctionVar,
+    LiteralVar,
+    ObjectVar,
+    Var,
+    var_isinstance,
+)
 
 SYSTEM_COLOR_MODE: str = "system"
 LIGHT_COLOR_MODE: str = "light"
@@ -185,14 +189,14 @@ def convert(
     for key, value in style_dict.items():
         keys = (
             format_style_key(key)
-            if not isinstance(value, (dict, ObjectVar, list))
+            if not (isinstance(value, (dict, list)) or var_isinstance(value, ObjectVar))
             or (
                 isinstance(value, Breakpoints)
                 and all(not isinstance(v, dict) for v in value.values())
             )
             or (isinstance(value, list) and all(not isinstance(v, dict) for v in value))
             or (
-                isinstance(value, ObjectVar)
+                var_isinstance(value, ObjectVar)
                 and not typehint_issubclass(value._var_type, Mapping)
             )
             else (key,)

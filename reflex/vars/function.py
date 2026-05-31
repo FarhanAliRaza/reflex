@@ -1,4 +1,24 @@
-# pyright: reportWildcardImportFromLibrary=false
-"""Re-export from reflex_base."""
+"""Re-export from reflex_base.
 
-from reflex_base.vars.function import *  # pragma: no cover
+The Python function-var implementation has been replaced by the Rust
+``RustVar`` (which provides ``call``); the surviving function-construction
+machinery now lives in ``reflex_base.vars.base``.
+"""
+
+from reflex_base.vars.base import (
+    ArgsFunctionOperation,
+    ArgsFunctionOperationBuilder,
+    DestructuredArg,
+    FunctionStringVar,
+    FunctionVar,
+    VarOperationCall,
+)
+
+__all__ = [
+    "ArgsFunctionOperation",
+    "ArgsFunctionOperationBuilder",
+    "DestructuredArg",
+    "FunctionStringVar",
+    "FunctionVar",
+    "VarOperationCall",
+]

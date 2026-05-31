@@ -27,8 +27,7 @@ from reflex_base.style import (
     set_color_mode,
     toggle_color_mode,
 )
-from reflex_base.vars.base import Var
-from reflex_base.vars.sequence import LiteralArrayVar
+from reflex_base.vars.base import LiteralVar, Var
 from reflex_components_core.core.cond import Cond, color_mode_cond, cond
 from reflex_components_lucide.icon import Icon
 
@@ -80,7 +79,7 @@ position_map: dict[str, list[str]] = {
 
 # needed to inverse contains for find
 def _find(const: list[str], var: Any):
-    return LiteralArrayVar.create(const).contains(var)
+    return LiteralVar.create(const).contains(var)
 
 
 def _set_var_default(

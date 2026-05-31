@@ -28,8 +28,7 @@ from reflex_base.utils.imports import (
     parse_imports,
 )
 from reflex_base.vars import VarData
-from reflex_base.vars.base import LiteralVar, Var
-from reflex_base.vars.object import ObjectVar
+from reflex_base.vars.base import LiteralVar, ObjectVar, Var
 from reflex_components_core.base.bare import Bare
 from reflex_components_core.base.fragment import Fragment
 from reflex_components_radix.mappings import RADIX_MAPPING

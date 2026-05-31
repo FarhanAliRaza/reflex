@@ -9,10 +9,7 @@ from reflex_base.constants.compiler import CompileVars
 from reflex_base.environment import environment
 from reflex_base.utils.imports import ImportVar
 from reflex_base.vars import VarData
-from reflex_base.vars.base import LiteralVar, Var
-from reflex_base.vars.function import FunctionStringVar
-from reflex_base.vars.number import BooleanVar
-from reflex_base.vars.sequence import LiteralArrayVar
+from reflex_base.vars.base import BooleanVar, FunctionStringVar, LiteralVar, Var
 from reflex_components_lucide.icon import Icon
 from reflex_components_sonner.toast import ToastProps, toast_ref
 
@@ -168,7 +165,7 @@ setTimeout(() => {{
 }}
 """
                 ),
-                LiteralArrayVar.create([connect_errors, Var("waitedForBackend")]),
+                LiteralVar.create([connect_errors, Var("waitedForBackend")]),
             ),
         ]
 

@@ -162,7 +162,7 @@ def test_create_map_fn_var_subclass(cls, fn_body, fn_args, explicit_return, expe
                     value, **props
                 )
             },
-            r"""(({node, ...rest}) => { const {node: childNode, className, children: components, ...props} = rest.children.props; const children = String(Array.isArray(components) ? components.join('\n') : components).replace(/\n$/, ''); const match = (className || '').match(/language-(?<lang>.*)/); let _language = match ? match[1] : ''; ;             return jsx(RadixThemesBox,{css:({ ["pre"] : ({ ["margin"] : "0", ["padding"] : "24px", ["background"] : "transparent", ["overflowX"] : "auto", ["borderRadius"] : "6px" }) }),...props},jsx(ShikiCode,{code:children,decorations:[],language:_language,theme:((resolvedColorMode?.valueOf?.() === "light"?.valueOf?.()) ? "one-light" : "one-dark-pro"),transformers:[]},));         })""",
+            r"""(({node, ...rest}) => { const {node: childNode, className, children: components, ...props} = rest.children.props; const children = String(Array.isArray(components) ? components.join('\n') : components).replace(/\n$/, ''); const match = (className || '').match(/language-(?<lang>.*)/); let _language = match ? match[1] : ''; ;             return jsx(RadixThemesBox,{css:({ ["pre"] : ({ ["margin"] : "0", ["padding"] : "24px", ["background"] : "transparent", ["overflowX"] : "auto", ["borderRadius"] : "6px" }) }),...props},jsx(ShikiCode,{code:children,decorations:[],language:_language,theme:(("light"?.valueOf?.() === resolvedColorMode?.valueOf?.()) ? "one-light" : "one-dark-pro"),transformers:[]},));         })""",
         ),
         (
             "h1",

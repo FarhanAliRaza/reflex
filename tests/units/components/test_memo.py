@@ -26,8 +26,7 @@ from reflex_base.utils import console
 from reflex_base.utils import format as format_utils
 from reflex_base.utils.imports import ImportVar
 from reflex_base.vars import VarData
-from reflex_base.vars.base import Var
-from reflex_base.vars.function import FunctionVar
+from reflex_base.vars.base import FunctionVar, Var
 
 import reflex as rx
 from reflex.compiler import compiler

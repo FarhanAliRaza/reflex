@@ -6,8 +6,7 @@ import dataclasses
 from collections.abc import Sequence
 from typing import ClassVar
 
-from reflex_base.vars.base import Var, VarData
-from reflex_base.vars.function import ArgsFunctionOperation, DestructuredArg
+from reflex_base.vars.base import ArgsFunctionOperation, DestructuredArg, Var, VarData
 
 # Special vars used in the component map.
 _CHILDREN = Var(_js_expr="children", _var_type=str)
