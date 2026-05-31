@@ -172,7 +172,7 @@
     "var_type": "list"
   },
   "bool_and": {
-    "js_expr": "(reflex___state____state__tests___units___vars____var_corpus_____golden_state.flag_rx_state_ && (reflex___state____state__tests___units___vars____var_corpus_____golden_state.count_rx_state_ > 0))",
+    "js_expr": "pyAnd(reflex___state____state__tests___units___vars____var_corpus_____golden_state.flag_rx_state_, () => ((reflex___state____state__tests___units___vars____var_corpus_____golden_state.count_rx_state_ > 0)))",
     "var_data": {
       "deps": [],
       "field_name": "flag",
@@ -203,6 +203,10 @@
         [
           "$/utils/context",
           "StateContexts"
+        ],
+        [
+          "$/utils/state",
+          "pyAnd"
         ],
         [
           "react",
@@ -264,7 +268,7 @@
     "var_type": "bool"
   },
   "bool_or": {
-    "js_expr": "(reflex___state____state__tests___units___vars____var_corpus_____golden_state.flag_rx_state_ || (reflex___state____state__tests___units___vars____var_corpus_____golden_state.count_rx_state_ > 0))",
+    "js_expr": "pyOr(reflex___state____state__tests___units___vars____var_corpus_____golden_state.flag_rx_state_, () => ((reflex___state____state__tests___units___vars____var_corpus_____golden_state.count_rx_state_ > 0)))",
     "var_data": {
       "deps": [],
       "field_name": "flag",
@@ -295,6 +299,10 @@
         [
           "$/utils/context",
           "StateContexts"
+        ],
+        [
+          "$/utils/state",
+          "pyOr"
         ],
         [
           "react",

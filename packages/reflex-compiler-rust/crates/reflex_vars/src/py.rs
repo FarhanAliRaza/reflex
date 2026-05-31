@@ -831,39 +831,42 @@ impl RustVar {
         }
     }
 
+    /// Logical AND (matches `and_operation`): `pyAnd({self}, () => ({other}))` —
+    /// a lazy, Python-semantics helper (returns an operand, not a coerced bool).
     fn __and__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
         let (ojs, ot, ovd) = operand_parts(py, &other)?;
         Ok(RustVar {
-            js_expr: format!("({} && {ojs})", self.js_expr),
+            js_expr: format!("pyAnd({}, () => ({ojs}))", self.js_expr),
             var_type: unionize(py, &self.var_type, &ot),
-            var_data: binary_var_data(&self.var_data, &ovd),
+            var_data: binary_var_data_with_import(&self.var_data, &ovd, "pyAnd"),
         })
     }
 
     fn __rand__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
         let (ojs, ot, ovd) = operand_parts(py, &other)?;
         Ok(RustVar {
-            js_expr: format!("({ojs} && {})", self.js_expr),
+            js_expr: format!("pyAnd({ojs}, () => ({}))", self.js_expr),
             var_type: unionize(py, &ot, &self.var_type),
-            var_data: binary_var_data(&ovd, &self.var_data),
+            var_data: binary_var_data_with_import(&ovd, &self.var_data, "pyAnd"),
         })
     }
 
+    /// Logical OR (matches `or_operation`): `pyOr({self}, () => ({other}))`.
     fn __or__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
         let (ojs, ot, ovd) = operand_parts(py, &other)?;
         Ok(RustVar {
-            js_expr: format!("({} || {ojs})", self.js_expr),
+            js_expr: format!("pyOr({}, () => ({ojs}))", self.js_expr),
             var_type: unionize(py, &self.var_type, &ot),
-            var_data: binary_var_data(&self.var_data, &ovd),
+            var_data: binary_var_data_with_import(&self.var_data, &ovd, "pyOr"),
         })
     }
 
     fn __ror__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<RustVar> {
         let (ojs, ot, ovd) = operand_parts(py, &other)?;
         Ok(RustVar {
-            js_expr: format!("({ojs} || {})", self.js_expr),
+            js_expr: format!("pyOr({ojs}, () => ({}))", self.js_expr),
             var_type: unionize(py, &ot, &self.var_type),
-            var_data: binary_var_data(&ovd, &self.var_data),
+            var_data: binary_var_data_with_import(&ovd, &self.var_data, "pyOr"),
         })
     }
 
@@ -1952,6 +1955,25 @@ fn var_op_plain(args: &[&Option<VarData>]) -> Option<VarData> {
 /// The aggregate var_data of a binary doubling op (both operands embedded).
 fn binary_var_data(a: &Option<VarData>, b: &Option<VarData>) -> Option<VarData> {
     var_op_doubling(&[a, b])
+}
+
+/// var_data for a two-arg var_operation whose `_return` carries an extra
+/// `$/utils/state` import (the `pyAnd`/`pyOr` helpers): the doubled operand
+/// var_data plus the import (matches `_and_operation` / `_or_operation`, whose
+/// `var_operation_return` passes `VarData(imports=...)`).
+fn binary_var_data_with_import(
+    a: &Option<VarData>,
+    b: &Option<VarData>,
+    tag: &str,
+) -> Option<VarData> {
+    let base = var_op_doubling(&[a, b]);
+    let import_vd = VarData {
+        imports: vec![("$/utils/state".to_owned(), vec![ImportVar::new(tag)])],
+        ..VarData::default()
+    };
+    VarData::merge([base.as_ref(), Some(&import_vd)])
+        .ok()
+        .flatten()
 }
 
 /// var_data for a single-arg var_operation whose `_return` carries an extra

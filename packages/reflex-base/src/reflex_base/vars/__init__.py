@@ -2,6 +2,8 @@
 
 from . import base, color, datetime
 from .base import (
+    EMPTY_VAR_INT,
+    EMPTY_VAR_STR,
     ArrayVar,
     BaseStateMeta,
     BooleanVar,
@@ -33,6 +35,8 @@ from .color import ColorVar, LiteralColorVar
 from .datetime import DateTimeVar
 
 __all__ = [
+    "EMPTY_VAR_INT",
+    "EMPTY_VAR_STR",
     "ArrayVar",
     "BaseStateMeta",
     "BooleanVar",
