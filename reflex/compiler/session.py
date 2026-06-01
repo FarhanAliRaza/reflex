@@ -47,6 +47,18 @@ class CompilerSession:
     def clear_cache(self) -> None:
         self._inner.clear_cache()
 
+    def set_emit_cache_enabled(self, enabled: bool) -> None:
+        """Toggle the content-addressed page-emit cache (PR F).
+
+        Off by default. When on, a page whose snapshot + params hash is
+        unchanged returns the cached ``(page_js, memo_bodies)`` without
+        re-running the memoize + emit tail — the hot-reload fast path.
+
+        Args:
+            enabled: whether to consult/populate the page-emit cache.
+        """
+        self._inner.set_emit_cache_enabled(bool(enabled))
+
     def cache_len(self) -> int:
         return int(self._inner.cache_len())
 
@@ -229,6 +241,29 @@ class CompilerSession:
         """
         return dict(self._inner.snapshot_stats(component))
 
+    def dump_snapshot(self, component: object) -> dict:
+        """Freeze ``component`` and return its ``Snapshot`` as a plain dict.
+
+        This is the parity-oracle vehicle for the Python-freezer work: the
+        dump is a lossless, deterministic serialization of every
+        emit-relevant snapshot field (``id()`` values are omitted). Two
+        snapshots compare equal iff their dumps do, so the eventual
+        gather-path snapshot can be proven byte-identical to the Rust
+        freeze walk via ``dump_snapshot`` on both. The snapshot is dumped
+        before the memoize pass, so it reflects the pure frozen tree.
+
+        Args:
+            component: the root ``BaseComponent`` instance to freeze.
+
+        Returns:
+            A nested dict mirroring the ``Snapshot`` arena: ``root``,
+            ``nodes`` (per-node fields), the ``var_data`` table + dense
+            backings, ``control_flow`` side tables, ``rename_props``,
+            ``special_props``, ``app_style_map``, ``app_wraps``, and
+            ``page_meta``.
+        """
+        return dict(self._inner.dump_snapshot(component))
+
     def should_memoize(self, component: object) -> bool:
         """Run the Rust memoize-decision walk on a Reflex ``Component``.
 
@@ -379,6 +414,62 @@ class CompilerSession:
             hooks_body,
         )
         return str(page_js), [(str(n), str(j)) for n, j in bodies], imports_dict
+
+    def compile_page_from_arena(
+        self,
+        bundle: dict,
+        route_ident: str,
+        route: str,
+        *,
+        title: str | None = None,
+        meta_tags: list[tuple[str, str]] | None = None,
+        custom_code: list[str] | None = None,
+        hooks_body: str | None = None,
+        compute_close: bool = False,
+    ) -> tuple[str, list[tuple[str, str]]]:
+        """Compile a page from a pre-gathered snapshot wire bundle (PR A).
+
+        The Rust side rebuilds the ``Snapshot`` from ``bundle`` (the
+        inverse of :meth:`dump_snapshot`), then runs the same memoize +
+        emit tail as :meth:`compile_page_from_component_arena`. For a
+        bundle equal to ``dump_snapshot(component)`` the returned page JSX
+        and memo bodies are byte-identical to the freeze path.
+
+        Unlike the freeze entrypoint this returns no page-level imports
+        dict — the bundle carries per-node imports inside the snapshot;
+        the ``bun install`` dict is gathered separately on the Python side
+        alongside the bundle.
+
+        Args:
+            bundle: a snapshot wire dict as produced by
+                :meth:`dump_snapshot` (or the future Python gatherer).
+            route_ident: JS identifier exported as ``__reflex_route_ident``.
+            route: URL path emitted as ``__reflex_route``.
+            title: optional document title.
+            meta_tags: optional ``[(name_or_property, content), …]``.
+            custom_code: caller-supplied custom-code blocks.
+            hooks_body: caller-supplied hooks string.
+            compute_close: recompute ``subtree_hash`` / ``PROPAGATES_HOOKS``
+                Rust-side. Pass ``False`` for a :meth:`dump_snapshot` bundle
+                (those fields are present); ``True`` for a native gatherer
+                bundle that omits them.
+
+        Returns:
+            ``(page_js, memo_bodies)`` where ``memo_bodies`` is a list of
+            ``(name, jsx_source)`` for each unique memo body.
+        """
+        meta = list(meta_tags) if meta_tags else None
+        page_js, bodies = self._inner.compile_page_from_arena(
+            bundle,
+            route_ident,
+            route,
+            title,
+            meta,
+            list(custom_code) if custom_code else None,
+            hooks_body,
+            compute_close,
+        )
+        return str(page_js), [(str(n), str(j)) for n, j in bodies]
 
     def write_if_changed(self, out_path: str, content: str) -> bool:
         """PR0 skip-if-unchanged write.

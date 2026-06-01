@@ -20,7 +20,7 @@ pub mod kinds;
 pub mod node;
 pub mod tables;
 
-pub use builder::SnapshotBuilder;
+pub use builder::{close_snapshot, SnapshotBuilder};
 pub use flags::{MemoizationDisposition, NodeFlags};
 pub use kinds::NodeKind;
 pub use node::{HookEntry, ImportEntry, NodeIdx, NodeSnapshot, VarDataRef};

@@ -25,6 +25,7 @@ the PyO3 component reader (``reflex_pyread``).
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -234,20 +235,52 @@ def compile_pages(
         #   emit_memo_body modules → harvest imports.
         # GIL released for the in-arena transform + emit; freeze is
         # the only PyO3 surface and runs once per page.
-        (
-            rust_js,
-            arena_memo_bodies,
-            page_imports,
-        ) = sess.compile_page_from_component_arena(
-            component,
-            ident,
-            route,
-            title=None,
-            meta_tags=None,
-            custom_code=page_custom_code,
-            hooks_body=page_hooks_body,
-        )
-        sess.merge_imports_into(all_imports, page_imports)
+        #
+        # PR E cutover (opt-in): with ``REFLEX_FREEZE=record`` the native
+        # Python gatherer (``gather_arena``) builds the snapshot wire
+        # bundle without the Rust freeze walk, and ``compile_page_from_arena``
+        # rebuilds + emits it. The gatherer raises ``GatherUnsupportedError``
+        # for any shape it can't yet reproduce byte-identically, in which
+        # case we fall back to the freeze path. Page-level imports are
+        # harvested by ``collect_all_imports_into`` above for both paths.
+        arena_bundle = None
+        if os.environ.get("REFLEX_FREEZE") == "record":
+            from reflex.compiler.arena_record import (
+                GatherUnsupportedError,
+                gather_arena,
+            )
+
+            try:
+                arena_bundle = gather_arena(component)
+            except GatherUnsupportedError:
+                arena_bundle = None
+
+        if arena_bundle is not None:
+            rust_js, arena_memo_bodies = sess.compile_page_from_arena(
+                arena_bundle,
+                ident,
+                route,
+                title=None,
+                meta_tags=None,
+                custom_code=page_custom_code,
+                hooks_body=page_hooks_body,
+                compute_close=True,
+            )
+        else:
+            (
+                rust_js,
+                arena_memo_bodies,
+                page_imports,
+            ) = sess.compile_page_from_component_arena(
+                component,
+                ident,
+                route,
+                title=None,
+                meta_tags=None,
+                custom_code=page_custom_code,
+                hooks_body=page_hooks_body,
+            )
+            sess.merge_imports_into(all_imports, page_imports)
         for name, jsx in arena_memo_bodies:
             memo_bodies.setdefault(name, jsx)
 

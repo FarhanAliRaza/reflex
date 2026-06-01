@@ -20,9 +20,8 @@ use reflex_codegen::{
 use reflex_db::CompilerDb;
 use reflex_pyread::{
     collect_all_imports as pyread_collect_all_imports,
-    collect_all_imports_into as pyread_collect_all_imports_into,
-    freeze_component, freeze_component_with_class_cache,
-    merge_imports_into as pyread_merge_imports_into,
+    collect_all_imports_into as pyread_collect_all_imports_into, freeze_component,
+    freeze_component_with_class_cache, merge_imports_into as pyread_merge_imports_into,
     should_memoize as memoize_should_memoize, ClassMetadataCache, MemoRefs, PyRefs,
 };
 
@@ -54,6 +53,19 @@ pub struct CompilerSession {
     /// suppress.
     direct_get_props_calls: std::rc::Rc<std::cell::Cell<u64>>,
     direct_rename_props_reads: std::rc::Rc<std::cell::Cell<u64>>,
+    /// PR F incremental compile: content-addressed page-emit cache keyed
+    /// on a complete hash of the snapshot's emit inputs + the page params.
+    /// On a hot-reload where a page's content is unchanged, the memoize +
+    /// emit tail is skipped and the cached `(page_js, memo_bodies)` is
+    /// returned. Keyed soundly (see `compute_emit_cache_key`), so a cache
+    /// hit is byte-identical to a fresh emit.
+    page_emit_cache: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u64, (String, Vec<(String, String)>)>>,
+    >,
+    /// Whether the page-emit cache is consulted. Off by default so the
+    /// default pipeline behaviour (and the parity tests) re-emit every
+    /// call; hot-reload drivers opt in via `set_emit_cache_enabled(True)`.
+    emit_cache_enabled: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 #[pymethods]
@@ -69,7 +81,18 @@ impl CompilerSession {
             freeze_trivial_skips: std::rc::Rc::new(std::cell::Cell::new(0)),
             direct_get_props_calls: std::rc::Rc::new(std::cell::Cell::new(0)),
             direct_rename_props_reads: std::rc::Rc::new(std::cell::Cell::new(0)),
+            page_emit_cache: std::rc::Rc::new(std::cell::RefCell::new(
+                std::collections::HashMap::new(),
+            )),
+            emit_cache_enabled: std::rc::Rc::new(std::cell::Cell::new(false)),
         }
+    }
+
+    /// Enable/disable the content-addressed page-emit cache (PR F). Off by
+    /// default; hot-reload drivers turn it on so unchanged pages skip the
+    /// memoize + emit tail.
+    fn set_emit_cache_enabled(&self, enabled: bool) {
+        self.emit_cache_enabled.set(enabled);
     }
 
     /// B: direct-from-Rust `get_props` invocations this session. Lets
@@ -142,6 +165,7 @@ impl CompilerSession {
     /// Drop all cached page renders. Equivalent to creating a new session.
     fn clear_cache(&self) {
         self.db.clear();
+        self.page_emit_cache.borrow_mut().clear();
     }
 
     /// Number of cached page renders. Useful for tests + diagnostics.
@@ -161,11 +185,7 @@ impl CompilerSession {
     ///         tuples.
     ///     out_path: absolute filesystem path the index gets written to.
     ///         Parent directory must already exist.
-    fn compile_memo_index(
-        &self,
-        reexports: Vec<(String, String)>,
-        out_path: &str,
-    ) -> PyResult<()> {
+    fn compile_memo_index(&self, reexports: Vec<(String, String)>, out_path: &str) -> PyResult<()> {
         let pairs: Vec<(&str, &str)> = reexports
             .iter()
             .map(|(n, s)| (n.as_str(), s.as_str()))
@@ -178,11 +198,7 @@ impl CompilerSession {
     /// Ports `styles_template` — wraps every stylesheet in an
     /// `@import url('…');` line under a single
     /// `@layer __reflex_base;` header.
-    fn compile_styles_root(
-        &self,
-        stylesheets: Vec<String>,
-        out_path: &str,
-    ) -> PyResult<()> {
+    fn compile_styles_root(&self, stylesheets: Vec<String>, out_path: &str) -> PyResult<()> {
         let refs: Vec<&str> = stylesheets.iter().map(String::as_str).collect();
         write_to_file(out_path, |w| emit_styles_root(&refs, w))
     }
@@ -201,11 +217,7 @@ impl CompilerSession {
     /// Mirrors `App._write_stateful_pages_marker`. Python decides which
     /// routes are stateful (it requires a state walk we haven't ported);
     /// Rust just serializes the list as JSON and writes the file.
-    fn compile_stateful_pages_marker(
-        &self,
-        routes: Vec<String>,
-        out_path: &str,
-    ) -> PyResult<()> {
+    fn compile_stateful_pages_marker(&self, routes: Vec<String>, out_path: &str) -> PyResult<()> {
         let refs: Vec<&str> = routes.iter().map(String::as_str).collect();
         write_to_file(out_path, |w| emit_stateful_pages_json(&refs, w))
     }
@@ -312,7 +324,10 @@ impl CompilerSession {
         if snapshot.nodes.is_empty() {
             return Ok(false);
         }
-        Ok(reflex_codegen::should_memoize_arena(&snapshot, snapshot.root))
+        Ok(reflex_codegen::should_memoize_arena(
+            &snapshot,
+            snapshot.root,
+        ))
     }
 
     /// PR7 verification helper. Returns a stats dict from a freshly
@@ -347,6 +362,28 @@ impl CompilerSession {
         d.set_item("vars_used_total", vars_used_total)?;
         d.set_item("unique_var_ids", unique_var_ids)?;
         Ok(d)
+    }
+
+    /// Freeze a Component tree and return its `Snapshot` as a plain dict.
+    ///
+    /// The dump is the parity-oracle vehicle for the Python-freezer work
+    /// (refine-local plan, PR A): comparing
+    /// `dump_snapshot(build_from_wire(gather(c)))` against
+    /// `dump_snapshot(component)` proves the gather path matches the Rust
+    /// freeze walk byte-for-byte without re-implementing rendering in
+    /// Python. The snapshot is dumped *before* `memoize_arena_pass`, so it
+    /// is the pure frozen tree (no wrapper redirects / memo bodies).
+    ///
+    /// `id(component)` values (`node_pyids`) are intentionally omitted —
+    /// see `snapshot_dump`.
+    fn dump_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+        component: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let refs = PyRefs::new(py)?;
+        let snapshot = freeze_component(py, component, &refs)?;
+        crate::snapshot_dump::snapshot_to_pydict(py, &snapshot)
     }
 
     /// Run the memoize-decision walk on a Component PyObject.
@@ -502,24 +539,7 @@ impl CompilerSession {
         custom_code: Option<Vec<String>>,
         hooks_body: Option<&str>,
     ) -> PyResult<(String, Vec<(String, String)>, Bound<'py, PyDict>)> {
-        let meta_pairs: Vec<(String, String)> = match meta_tags {
-            Some(list) => {
-                let mut out = Vec::with_capacity(list.len());
-                for item in list.iter() {
-                    let tup: Bound<PyTuple> = item.downcast_into()?;
-                    if tup.len() != 2 {
-                        return Err(pyo3::exceptions::PyValueError::new_err(
-                            "meta_tags entries must be (name, content) tuples",
-                        ));
-                    }
-                    let n: String = tup.get_item(0)?.extract()?;
-                    let c: String = tup.get_item(1)?.extract()?;
-                    out.push((n, c));
-                }
-                out
-            }
-            None => Vec::new(),
-        };
+        let meta_pairs = parse_meta_tags(meta_tags)?;
 
         let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
         let hooks_owned = hooks_body.unwrap_or("").to_string();
@@ -552,58 +572,117 @@ impl CompilerSession {
         // Release the GIL for the in-arena memoize + emit. None of the
         // following calls touch Python state — they read Snapshot,
         // write to `CodeBuffer`s, and return owned `String`s.
+        let (page_js, memo_bodies) = self.emit_page_and_memo_bodies(
+            py,
+            snapshot,
+            route_ident,
+            route,
+            title,
+            meta_pairs,
+            custom_code_owned,
+            hooks_owned,
+        );
+
+        Ok((page_js, memo_bodies, imports_dict))
+    }
+
+    /// Arena page compile from a pre-gathered wire bundle (refine-local
+    /// plan, PR A). Identical to [`Self::compile_page_from_component_arena`]
+    /// from the snapshot onward — it just sources the `Snapshot` by
+    /// rebuilding it from the `bundle` dict (the inverse of
+    /// `dump_snapshot`) instead of freezing a live Component tree. The
+    /// emit tail is shared (`emit_page_and_memo_bodies`), so the page JSX +
+    /// memo bodies are byte-identical to the freeze path for an equivalent
+    /// snapshot.
+    ///
+    /// Unlike the freeze entrypoint this does not return a page-level
+    /// imports dict: the bundle carries per-node imports inside the
+    /// snapshot, but the page-level `bun install` dict is harvested
+    /// separately by the caller (it is gathered alongside the bundle on
+    /// the Python side, mirroring the freeze path's `bun_imports`).
+    ///
+    /// `compute_close` controls the `subtree_hash` / `PROPAGATES_HOOKS`
+    /// close pass: pass `False` for a `dump_snapshot` bundle (those fields
+    /// are already present and restored verbatim), `True` for a native
+    /// gatherer bundle that omits them so Rust recomputes them.
+    #[pyo3(signature = (bundle, route_ident, route, title=None, meta_tags=None, custom_code=None, hooks_body=None, compute_close=false))]
+    #[allow(clippy::too_many_arguments)]
+    fn compile_page_from_arena(
+        &self,
+        py: Python<'_>,
+        bundle: &Bound<'_, PyDict>,
+        route_ident: &str,
+        route: &str,
+        title: Option<&str>,
+        meta_tags: Option<&Bound<'_, PyList>>,
+        custom_code: Option<Vec<String>>,
+        hooks_body: Option<&str>,
+        compute_close: bool,
+    ) -> PyResult<(String, Vec<(String, String)>)> {
+        let meta_pairs = parse_meta_tags(meta_tags)?;
+        let custom_code_owned: Vec<String> = custom_code.unwrap_or_default();
+        let hooks_owned = hooks_body.unwrap_or("").to_string();
+        let snapshot = crate::from_wire::build_snapshot_from_wire(bundle, compute_close)?;
+        Ok(self.emit_page_and_memo_bodies(
+            py,
+            snapshot,
+            route_ident,
+            route,
+            title,
+            meta_pairs,
+            custom_code_owned,
+            hooks_owned,
+        ))
+    }
+
+    /// Profiling variant of [`Self::compile_page_from_arena`]: returns a
+    /// `dict[str, int]` of nanosecond timings for each internal Rust stage
+    /// (`build_snapshot`, `memoize`, `emit_page`, `emit_memo`) alongside the
+    /// page JS, so the Rust compile tail can be broken down per phase. The
+    /// emit cache is bypassed so every stage runs cold.
+    #[pyo3(signature = (bundle, route_ident, route, compute_close=true))]
+    fn compile_page_from_arena_profiled<'py>(
+        &self,
+        py: Python<'py>,
+        bundle: &Bound<'_, PyDict>,
+        route_ident: &str,
+        route: &str,
+        compute_close: bool,
+    ) -> PyResult<(String, Bound<'py, PyDict>)> {
+        use std::time::Instant;
+        let t0 = Instant::now();
+        let snapshot = crate::from_wire::build_snapshot_from_wire(bundle, compute_close)?;
+        let build_ns = t0.elapsed().as_nanos() as u64;
+
         let route_ident_owned = route_ident.to_string();
         let route_owned = route.to_string();
-        let title_owned = title.map(|s| s.to_owned());
-        let (page_js, memo_bodies) = py.allow_threads(move || {
+        let (page_js, memoize_ns, emit_page_ns, emit_memo_ns) = py.allow_threads(move || {
             let mut snap = snapshot;
-            memoize_arena_pass(&mut snap);
+            let t = Instant::now();
+            reflex_codegen::memoize_arena_pass(&mut snap);
+            let memoize_ns = t.elapsed().as_nanos() as u64;
 
-            // Emit the page module.
+            let t = Instant::now();
             let mut page_buf = CodeBuffer::with_capacity(4096);
-            let custom_code_refs: Vec<&str> =
-                custom_code_owned.iter().map(String::as_str).collect();
             emit_page_module_from_snapshot(
                 &mut page_buf,
                 &snap,
                 &route_ident_owned,
                 &route_owned,
-                title_owned.as_deref(),
-                &meta_pairs,
-                &custom_code_refs,
-                &hooks_owned,
+                None,
+                &[],
+                &[],
+                "",
             );
             let page_js = String::from_utf8(page_buf.into_bytes()).unwrap_or_default();
+            let emit_page_ns = t.elapsed().as_nanos() as u64;
 
-            // Emit each unique memo body.
-            let mut bodies: Vec<(String, String)> = Vec::with_capacity(snap.memo_bodies.len());
-            // Clone the (name, root) pairs out so we can release the
-            // borrow on `snap.memo_bodies` before re-borrowing for the
-            // emit walk (which reads `snap.wrap_redirects` etc.).
-            let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> = snap
-                .memo_bodies
-                .iter()
-                .map(|b| (b.name, b.root))
-                .collect();
+            let t = Instant::now();
+            let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> =
+                snap.memo_bodies.iter().map(|b| (b.name, b.root)).collect();
             for (name_sym, root_idx) in body_specs {
                 let mut body_buf = CodeBuffer::with_capacity(2048);
                 let name_str = reflex_intern::resolve_unchecked(name_sym).to_owned();
-                // Passthrough signature is the default. Snapshot
-                // bodies would use `"()"` — for now we always use
-                // `"{ children }"` since the freeze path always
-                // produces passthrough wrappers. The snapshot-body
-                // variant is a follow-on once the freeze pass
-                // captures `is_snapshot_boundary` per memo candidate.
-                // Passthrough signature is wrapped in `()` so the
-                // emitted shell is `memo(({ children }) => …)` —
-                // matches the Python `_signature_for(definition)`
-                // output for `passthrough_hole_child is not None`.
-                // Snapshot bodies (definition.passthrough_hole_child
-                // is None in Python) want `"()"`; the arena freeze
-                // currently produces passthrough wrappers only, so
-                // this default is correct. Snapshot-body detection is
-                // a follow-on PR (carry `is_snapshot_boundary` per
-                // memo candidate from freeze).
                 emit_memo_module_from_snapshot(
                     &mut body_buf,
                     &snap,
@@ -612,14 +691,255 @@ impl CompilerSession {
                     "({ children })",
                     "",
                 );
-                let body_js = String::from_utf8(body_buf.into_bytes()).unwrap_or_default();
-                bodies.push((name_str, body_js));
             }
-            (page_js, bodies)
+            let emit_memo_ns = t.elapsed().as_nanos() as u64;
+            (page_js, memoize_ns, emit_page_ns, emit_memo_ns)
         });
 
-        Ok((page_js, memo_bodies, imports_dict))
+        let d = PyDict::new_bound(py);
+        d.set_item("build_snapshot_ns", build_ns)?;
+        d.set_item("memoize_ns", memoize_ns)?;
+        d.set_item("emit_page_ns", emit_page_ns)?;
+        d.set_item("emit_memo_ns", emit_memo_ns)?;
+        Ok((page_js, d))
     }
+}
+
+/// Parse the optional `meta_tags` list of `(name, content)` tuples into
+/// owned `(String, String)` pairs. Shared by both arena entrypoints.
+fn parse_meta_tags(meta_tags: Option<&Bound<'_, PyList>>) -> PyResult<Vec<(String, String)>> {
+    match meta_tags {
+        Some(list) => {
+            let mut out = Vec::with_capacity(list.len());
+            for item in list.iter() {
+                let tup: Bound<PyTuple> = item.downcast_into()?;
+                if tup.len() != 2 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "meta_tags entries must be (name, content) tuples",
+                    ));
+                }
+                let n: String = tup.get_item(0)?.extract()?;
+                let c: String = tup.get_item(1)?.extract()?;
+                out.push((n, c));
+            }
+            Ok(out)
+        }
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Memoize + emit a frozen snapshot into `(page_js, memo_bodies)`.
+///
+/// Shared, GIL-released tail of both arena entrypoints
+/// (`compile_page_from_component_arena` and `compile_page_from_arena`) so
+/// the page module + memo body emit is byte-identical regardless of how
+/// the `Snapshot` was sourced (live freeze vs wire rebuild). None of the
+/// work here touches Python state.
+impl CompilerSession {
+    /// Memoize + emit a frozen snapshot into `(page_js, memo_bodies)`,
+    /// short-circuiting through the content-addressed page-emit cache
+    /// (PR F). On a cache hit the GIL-released memoize + emit is skipped
+    /// entirely and the stored output is cloned out; the key
+    /// (`compute_emit_cache_key`) hashes every emit input so a hit is
+    /// byte-identical to a fresh emit.
+    fn emit_page_and_memo_bodies(
+        &self,
+        py: Python<'_>,
+        snapshot: reflex_ir::Snapshot,
+        route_ident: &str,
+        route: &str,
+        title: Option<&str>,
+        meta_pairs: Vec<(String, String)>,
+        custom_code: Vec<String>,
+        hooks_body: String,
+    ) -> (String, Vec<(String, String)>) {
+        if !self.emit_cache_enabled.get() {
+            return emit_page_and_memo_bodies_uncached(
+                py,
+                snapshot,
+                route_ident,
+                route,
+                title,
+                meta_pairs,
+                custom_code,
+                hooks_body,
+            );
+        }
+        let cache_key = compute_emit_cache_key(
+            &snapshot,
+            route_ident,
+            route,
+            title,
+            &meta_pairs,
+            &custom_code,
+            &hooks_body,
+        );
+        if let Some(hit) = self.page_emit_cache.borrow().get(&cache_key) {
+            return hit.clone();
+        }
+        let result = emit_page_and_memo_bodies_uncached(
+            py,
+            snapshot,
+            route_ident,
+            route,
+            title,
+            meta_pairs,
+            custom_code,
+            hooks_body,
+        );
+        self.page_emit_cache
+            .borrow_mut()
+            .insert(cache_key, result.clone());
+        result
+    }
+}
+
+/// Hash every input the page + memo-body emit reads: the root
+/// `subtree_hash` (which recursively folds each node's emit fields), the
+/// per-node `vars_used` + `flags` that the close pass doesn't fold, the
+/// `var_data` table + dense backings, the side tables emit consults
+/// (`app_style_map`, `rename_props`, `special_props`,
+/// `add_custom_code_extra`), and the page params. Sound by construction:
+/// any change that could alter the emitted JS changes the key.
+fn compute_emit_cache_key(
+    snap: &reflex_ir::Snapshot,
+    route_ident: &str,
+    route: &str,
+    title: Option<&str>,
+    meta_pairs: &[(String, String)],
+    custom_code: &[String],
+    hooks_body: &str,
+) -> u64 {
+    use xxhash_rust::xxh3::Xxh3;
+    let mut h = Xxh3::new();
+    h.update(&(snap.nodes.len() as u64).to_le_bytes());
+    h.update(&snap.root.to_le_bytes());
+    for node in &snap.nodes {
+        h.update(&node.subtree_hash.to_le_bytes());
+        h.update(&node.flags.bits().to_le_bytes());
+        for r in &node.vars_used {
+            h.update(&r.0.to_le_bytes());
+        }
+    }
+    // var_data table + dense backings (content emit references via hooks).
+    for e in &snap.var_data {
+        h.update(&e.state.as_u32().to_le_bytes());
+        h.update(&[e.position]);
+    }
+    for s in &snap.var_hooks {
+        h.update(&s.as_u32().to_le_bytes());
+    }
+    for (m, n) in &snap.var_imports {
+        h.update(&m.as_u32().to_le_bytes());
+        h.update(&n.as_u32().to_le_bytes());
+    }
+    for s in snap.var_deps.iter().chain(snap.var_components.iter()) {
+        h.update(&s.as_u32().to_le_bytes());
+    }
+    // Side tables (sorted for determinism) emit consults.
+    let mut style_keys: Vec<_> = snap.app_style_map.iter().collect();
+    style_keys.sort_by_key(|(k, _)| k.as_u32());
+    for (k, v) in style_keys {
+        h.update(&k.as_u32().to_le_bytes());
+        h.update(&v.as_u32().to_le_bytes());
+    }
+    let mut rename_keys: Vec<_> = snap.rename_props.iter().collect();
+    rename_keys.sort_by_key(|(k, _)| **k);
+    for (idx, pairs) in rename_keys {
+        h.update(&idx.to_le_bytes());
+        for (a, b) in pairs {
+            h.update(&a.as_u32().to_le_bytes());
+            h.update(&b.as_u32().to_le_bytes());
+        }
+    }
+    let mut special_keys: Vec<_> = snap.special_props.iter().collect();
+    special_keys.sort_by_key(|(k, _)| **k);
+    for (idx, syms) in special_keys {
+        h.update(&idx.to_le_bytes());
+        for s in syms {
+            h.update(&s.as_u32().to_le_bytes());
+        }
+    }
+    let mut extra_keys: Vec<_> = snap.add_custom_code_extra.iter().collect();
+    extra_keys.sort_by_key(|(k, _)| **k);
+    for (idx, syms) in extra_keys {
+        h.update(&idx.to_le_bytes());
+        for s in syms {
+            h.update(&s.as_u32().to_le_bytes());
+        }
+    }
+    // Page params (NUL-separated so concatenations can't alias).
+    for part in [route_ident, route, title.unwrap_or(""), hooks_body] {
+        h.update(part.as_bytes());
+        h.update(&[0]);
+    }
+    for (k, v) in meta_pairs {
+        h.update(k.as_bytes());
+        h.update(&[0]);
+        h.update(v.as_bytes());
+        h.update(&[0]);
+    }
+    for c in custom_code {
+        h.update(c.as_bytes());
+        h.update(&[0]);
+    }
+    h.digest()
+}
+
+fn emit_page_and_memo_bodies_uncached(
+    py: Python<'_>,
+    snapshot: reflex_ir::Snapshot,
+    route_ident: &str,
+    route: &str,
+    title: Option<&str>,
+    meta_pairs: Vec<(String, String)>,
+    custom_code: Vec<String>,
+    hooks_body: String,
+) -> (String, Vec<(String, String)>) {
+    let route_ident_owned = route_ident.to_string();
+    let route_owned = route.to_string();
+    let title_owned = title.map(|s| s.to_owned());
+    py.allow_threads(move || {
+        let mut snap = snapshot;
+        memoize_arena_pass(&mut snap);
+
+        // Emit the page module.
+        let mut page_buf = CodeBuffer::with_capacity(4096);
+        let custom_code_refs: Vec<&str> = custom_code.iter().map(String::as_str).collect();
+        emit_page_module_from_snapshot(
+            &mut page_buf,
+            &snap,
+            &route_ident_owned,
+            &route_owned,
+            title_owned.as_deref(),
+            &meta_pairs,
+            &custom_code_refs,
+            &hooks_body,
+        );
+        let page_js = String::from_utf8(page_buf.into_bytes()).unwrap_or_default();
+
+        // Emit each unique memo body. Passthrough signature `"({ children })"`
+        // is the default — the arena freeze produces passthrough wrappers
+        // only (snapshot-body detection is a follow-on).
+        let mut bodies: Vec<(String, String)> = Vec::with_capacity(snap.memo_bodies.len());
+        let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> =
+            snap.memo_bodies.iter().map(|b| (b.name, b.root)).collect();
+        for (name_sym, root_idx) in body_specs {
+            let mut body_buf = CodeBuffer::with_capacity(2048);
+            let name_str = reflex_intern::resolve_unchecked(name_sym).to_owned();
+            emit_memo_module_from_snapshot(
+                &mut body_buf,
+                &snap,
+                root_idx,
+                &name_str,
+                "({ children })",
+                "",
+            );
+            let body_js = String::from_utf8(body_buf.into_bytes()).unwrap_or_default();
+            bodies.push((name_str, body_js));
+        }
+        (page_js, bodies)
+    })
 }
 
 /// Open `out_path` for buffered write and run `f` on the writer, mapping

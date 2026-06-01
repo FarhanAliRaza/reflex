@@ -56,16 +56,21 @@ fn merge_imports_dict_into_bun<'py>(
     imports_dict: &Bound<'py, pyo3::types::PyDict>,
     refs: &PyRefs<'py>,
 ) {
-    let Some(target_unbound) = refs.bun_imports.borrow().as_ref().map(|d| d.clone_ref(py))
-    else {
+    let Some(target_unbound) = refs.bun_imports.borrow().as_ref().map(|d| d.clone_ref(py)) else {
         return;
     };
     let target = target_unbound.bind(py);
     for (lib_obj, items_obj) in imports_dict.iter() {
-        let Ok(lib_py) = lib_obj.downcast::<PyString>() else { continue };
-        let Ok(lib_str) = lib_py.to_str() else { continue };
+        let Ok(lib_py) = lib_obj.downcast::<PyString>() else {
+            continue;
+        };
+        let Ok(lib_str) = lib_py.to_str() else {
+            continue;
+        };
         let new_lib = apply_alias_prefix(lib_str);
-        let Ok(items_list) = items_obj.downcast::<pyo3::types::PyList>() else { continue };
+        let Ok(items_list) = items_obj.downcast::<pyo3::types::PyList>() else {
+            continue;
+        };
         match target.get_item(&new_lib).ok().flatten() {
             Some(existing) => {
                 if let Ok(existing_list) = existing.downcast::<pyo3::types::PyList>() {
@@ -121,17 +126,24 @@ fn merge_prop_components_imports<'py>(
         if !refs.imports_seen.borrow_mut().insert(id) {
             continue;
         }
-        let Ok(imports_obj) = refs.call_cached0(
-            &c,
-            refs.attrs.m_get_imports.bind(py),
-            |h| &mut h.get_imports,
-        ) else { continue };
-        let Ok(imports_dict) = imports_obj.downcast::<pyo3::types::PyDict>() else { continue };
+        let Ok(imports_obj) = refs.call_cached0(&c, refs.attrs.m_get_imports.bind(py), |h| {
+            &mut h.get_imports
+        }) else {
+            continue;
+        };
+        let Ok(imports_dict) = imports_obj.downcast::<pyo3::types::PyDict>() else {
+            continue;
+        };
         merge_imports_dict_into_bun(py, &imports_dict, refs);
         // Recurse: prop-components can themselves have prop-components.
         merge_prop_components_imports(py, &c, refs)?;
     }
-    record_method_result(component, refs, SkippableMethod::GetComponentsInProps, !saw_any);
+    record_method_result(
+        component,
+        refs,
+        SkippableMethod::GetComponentsInProps,
+        !saw_any,
+    );
     Ok(())
 }
 
@@ -184,12 +196,10 @@ fn class_get_prop_names<'py>(
         let cache = cache_rc.borrow();
         if let Some(meta) = cache.get(&key) {
             if let Some(names) = &meta.prop_names {
-                return Ok(
-                    names
-                        .iter()
-                        .map(|(s, p)| (s.clone(), p.clone_ref(py)))
-                        .collect(),
-                );
+                return Ok(names
+                    .iter()
+                    .map(|(s, p)| (s.clone(), p.clone_ref(py)))
+                    .collect());
             }
         }
     }
@@ -292,10 +302,14 @@ fn class_get_rename_props<'py>(
 /// `method` for `component`'s class. Bumps the trivial-skip counter
 /// when returning `true` so tests can verify the cache engaged.
 fn skip_method(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>, method: SkippableMethod) -> bool {
-    let Some(cache_rc) = &refs.class_cache else { return false };
+    let Some(cache_rc) = &refs.class_cache else {
+        return false;
+    };
     let cache = cache_rc.borrow();
     let key = component.get_type().as_ptr() as usize;
-    let Some(meta) = cache.get(&key) else { return false };
+    let Some(meta) = cache.get(&key) else {
+        return false;
+    };
     if (meta.skip_flags & method.bit()) != 0 {
         refs.bump_trivial_skip();
         true
@@ -316,7 +330,9 @@ fn record_method_result(
     method: SkippableMethod,
     trivial: bool,
 ) {
-    let Some(cache_rc) = &refs.class_cache else { return };
+    let Some(cache_rc) = &refs.class_cache else {
+        return;
+    };
     let mut cache = cache_rc.borrow_mut();
     let key = component.get_type().as_ptr() as usize;
     let meta = cache.entry(key).or_default();
@@ -340,7 +356,9 @@ fn record_method_result(
 /// state) every `REVALIDATE_EVERY_N` visits. Called once per
 /// Component visited by freeze.
 fn class_visit_tick(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) {
-    let Some(cache_rc) = &refs.class_cache else { return };
+    let Some(cache_rc) = &refs.class_cache else {
+        return;
+    };
     let mut cache = cache_rc.borrow_mut();
     let key = component.get_type().as_ptr() as usize;
     let meta = cache.entry(key).or_default();
@@ -402,26 +420,27 @@ fn lookup_memo_mode(
     if let Some(cached) = refs.memo_mode_cache.borrow().get(&ty_key) {
         return Ok(*cached);
     }
-    let (disposition_byte, recursive) = match component.getattr(refs.attrs.memoization_mode.bind(py)) {
-        Ok(mode) if !mode.is_none() => {
-            let disp_str = mode
-                .getattr(refs.attrs.disposition.bind(py))
-                .and_then(|d| d.getattr(refs.attrs.value.bind(py)))
-                .and_then(|v| v.extract::<String>())
-                .unwrap_or_else(|_| "stateful".to_owned());
-            let recursive: bool = mode
-                .getattr(refs.attrs.recursive.bind(py))
-                .and_then(|r| r.extract())
-                .unwrap_or(true);
-            let disp = match disp_str.as_str() {
-                "never" => 1u8,
-                "always" => 2u8,
-                _ => 0u8,
-            };
-            (disp, recursive)
-        }
-        _ => (0u8, true),
-    };
+    let (disposition_byte, recursive) =
+        match component.getattr(refs.attrs.memoization_mode.bind(py)) {
+            Ok(mode) if !mode.is_none() => {
+                let disp_str = mode
+                    .getattr(refs.attrs.disposition.bind(py))
+                    .and_then(|d| d.getattr(refs.attrs.value.bind(py)))
+                    .and_then(|v| v.extract::<String>())
+                    .unwrap_or_else(|_| "stateful".to_owned());
+                let recursive: bool = mode
+                    .getattr(refs.attrs.recursive.bind(py))
+                    .and_then(|r| r.extract())
+                    .unwrap_or(true);
+                let disp = match disp_str.as_str() {
+                    "never" => 1u8,
+                    "always" => 2u8,
+                    _ => 0u8,
+                };
+                (disp, recursive)
+            }
+            _ => (0u8, true),
+        };
     let cls_name = ty.name().map(|n| n.to_string()).unwrap_or_default();
     let is_foreach = cls_name == "Foreach";
     let cached = MemoModeCached {
@@ -542,24 +561,30 @@ fn freeze_into_slot<'py>(
     // `_render()` call because their JSX shape doesn't carry props.
     let mut props_have_reactive_var = false;
     let mut vars_used: SmallVec<[VarDataRef; 4]> = SmallVec::new();
-    let (rendered_props, event_callbacks, style, rename_props) = if matches!(kind, NodeKind::Element) {
-        let props = read_rendered_props(
-            component,
-            refs,
-            builder,
-            &mut props_have_reactive_var,
-            &mut vars_used,
-        )?;
-        let events = read_event_callbacks(component, refs)?;
-        let style_sym = read_style(component, refs)?;
-        // B: rename_props cached per class on session metadata so
-        // every same-class instance skips the `_rename_props`
-        // getattr.
-        let renames = class_get_rename_props(component, refs)?;
-        (props, events, style_sym, renames)
-    } else {
-        (SmallVec::new(), SmallVec::new(), Symbol::EMPTY, SmallVec::new())
-    };
+    let (rendered_props, event_callbacks, style, rename_props) =
+        if matches!(kind, NodeKind::Element) {
+            let props = read_rendered_props(
+                component,
+                refs,
+                builder,
+                &mut props_have_reactive_var,
+                &mut vars_used,
+            )?;
+            let events = read_event_callbacks(component, refs)?;
+            let style_sym = read_style(component, refs)?;
+            // B: rename_props cached per class on session metadata so
+            // every same-class instance skips the `_rename_props`
+            // getattr.
+            let renames = class_get_rename_props(component, refs)?;
+            (props, events, style_sym, renames)
+        } else {
+            (
+                SmallVec::new(),
+                SmallVec::new(),
+                Symbol::EMPTY,
+                SmallVec::new(),
+            )
+        };
     let has_events = !event_callbacks.is_empty();
 
     // PR2 + PR7: Bare-contents reactivity + var-data dedup. The Bare
@@ -676,11 +701,9 @@ fn read_imports_summary<'py>(
     // class resolves the unbound method on the type; subsequent same-
     // class nodes call it via the cached handle, skipping the
     // bound-method allocation + MRO walk that `call_method0` does.
-    let imports_obj = match refs.cached_method(
-        component,
-        refs.attrs.m_get_imports.bind(py),
-        |c| &mut c.get_imports,
-    ) {
+    let imports_obj = match refs.cached_method(component, refs.attrs.m_get_imports.bind(py), |c| {
+        &mut c.get_imports
+    }) {
         Some(unbound) => match unbound.bind(py).call1((component,)) {
             Ok(v) => v,
             Err(_) => return Ok(out),
@@ -699,7 +722,11 @@ fn read_imports_summary<'py>(
     // arena entry doesn't need a separate `collect_all_imports`
     // tree walk. `imports_seen` dedup happens at the caller
     // (per-node freeze loop guarantees one call per snapshot node).
-    if refs.imports_seen.borrow_mut().insert(component.as_ptr() as usize) {
+    if refs
+        .imports_seen
+        .borrow_mut()
+        .insert(component.as_ptr() as usize)
+    {
         merge_imports_dict_into_bun(py, &imports_dict, refs);
     }
     for (lib_obj, items_obj) in imports_dict.iter() {
@@ -721,8 +748,14 @@ fn read_imports_summary<'py>(
             continue;
         };
         for entry in items_list.iter() {
-            let tag = entry.getattr(refs.attrs.tag.bind(py)).ok().filter(|v| !v.is_none());
-            let alias = entry.getattr(refs.attrs.alias.bind(py)).ok().filter(|v| !v.is_none());
+            let tag = entry
+                .getattr(refs.attrs.tag.bind(py))
+                .ok()
+                .filter(|v| !v.is_none());
+            let alias = entry
+                .getattr(refs.attrs.alias.bind(py))
+                .ok()
+                .filter(|v| !v.is_none());
             let render = entry
                 .getattr(refs.attrs.render.bind(py))
                 .ok()
@@ -772,11 +805,9 @@ fn read_custom_code<'py>(
     if skip_method(component, refs, SkippableMethod::GetCustomCode) {
         return Ok(Symbol::EMPTY);
     }
-    let v = match refs.call_cached0(
-        component,
-        refs.attrs.m_get_custom_code.bind(py),
-        |c| &mut c.get_custom_code,
-    ) {
+    let v = match refs.call_cached0(component, refs.attrs.m_get_custom_code.bind(py), |c| {
+        &mut c.get_custom_code
+    }) {
         Ok(v) => v,
         Err(_) => {
             record_method_result(component, refs, SkippableMethod::GetCustomCode, true);
@@ -811,11 +842,9 @@ fn read_dynamic_imports<'py>(
     if skip_method(component, refs, SkippableMethod::GetDynamicImports) {
         return Ok(out);
     }
-    let v = match refs.call_cached0(
-        component,
-        refs.attrs.m_get_dynamic_imports.bind(py),
-        |c| &mut c.get_dynamic_imports,
-    ) {
+    let v = match refs.call_cached0(component, refs.attrs.m_get_dynamic_imports.bind(py), |c| {
+        &mut c.get_dynamic_imports
+    }) {
         Ok(v) => v,
         Err(_) => {
             record_method_result(component, refs, SkippableMethod::GetDynamicImports, true);
@@ -844,7 +873,12 @@ fn read_dynamic_imports<'py>(
             }
         }
     }
-    record_method_result(component, refs, SkippableMethod::GetDynamicImports, out.is_empty());
+    record_method_result(
+        component,
+        refs,
+        SkippableMethod::GetDynamicImports,
+        out.is_empty(),
+    );
     Ok(out)
 }
 
@@ -878,11 +912,9 @@ where
 {
     let py = component.py();
     let mut out: SmallVec<[HookEntry; N]> = SmallVec::new();
-    let v = match refs.call_cached0(
-        component,
-        refs.attrs.m_get_hooks_internal.bind(py),
-        |c| &mut c.get_hooks_internal,
-    ) {
+    let v = match refs.call_cached0(component, refs.attrs.m_get_hooks_internal.bind(py), |c| {
+        &mut c.get_hooks_internal
+    }) {
         Ok(v) => v,
         Err(_) => return Ok(out),
     };
@@ -915,11 +947,9 @@ fn read_hooks_user<'py>(
     let mut out: SmallVec<[HookEntry; 1]> = SmallVec::new();
     // `_get_hooks()` → str | Var | None. C: skip-list.
     if !skip_method(component, refs, SkippableMethod::GetHooks) {
-        if let Ok(v) = refs.call_cached0(
-            component,
-            refs.attrs.m_get_hooks.bind(py),
-            |c| &mut c.get_hooks,
-        ) {
+        if let Ok(v) = refs.call_cached0(component, refs.attrs.m_get_hooks.bind(py), |c| {
+            &mut c.get_hooks
+        }) {
             if v.is_none() {
                 record_method_result(component, refs, SkippableMethod::GetHooks, true);
             } else {
@@ -939,11 +969,9 @@ fn read_hooks_user<'py>(
     if skip_method(component, refs, SkippableMethod::GetAddedHooks) {
         return Ok(out);
     }
-    if let Ok(v) = refs.call_cached0(
-        component,
-        refs.attrs.m_get_added_hooks.bind(py),
-        |c| &mut c.get_added_hooks,
-    ) {
+    if let Ok(v) = refs.call_cached0(component, refs.attrs.m_get_added_hooks.bind(py), |c| {
+        &mut c.get_added_hooks
+    }) {
         if v.is_none() {
             record_method_result(component, refs, SkippableMethod::GetAddedHooks, true);
         } else if let Ok(d) = v.downcast::<PyDict>() {
@@ -1202,16 +1230,11 @@ fn read_event_callbacks(
 /// expression. Reflex's `_get_style()` returns either `{}` (no style)
 /// or `{"css": <Var of pre-rendered emotion JS>}` — extract the Var's
 /// `_js_expr` so codegen can splice it as a `style={...}` prop.
-fn read_style(
-    component: &Bound<'_, PyAny>,
-    refs: &PyRefs<'_>,
-) -> Result<Symbol, PyReadError> {
+fn read_style(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<Symbol, PyReadError> {
     let py = component.py();
-    let style_obj = match refs.call_cached0(
-        component,
-        refs.attrs.m_get_style.bind(py),
-        |c| &mut c.get_style,
-    ) {
+    let style_obj = match refs.call_cached0(component, refs.attrs.m_get_style.bind(py), |c| {
+        &mut c.get_style
+    }) {
         Ok(s) => s,
         Err(_) => return Ok(Symbol::EMPTY),
     };
@@ -1265,11 +1288,9 @@ fn register_var_data(
         return Ok(Some(VarDataRef(*idx)));
     }
     let py = value.py();
-    let var_data = match refs.call_cached0(
-        value,
-        refs.attrs.m_get_all_var_data.bind(py),
-        |c| &mut c.get_all_var_data,
-    ) {
+    let var_data = match refs.call_cached0(value, refs.attrs.m_get_all_var_data.bind(py), |c| {
+        &mut c.get_all_var_data
+    }) {
         Ok(v) => v,
         Err(_) => return Ok(None),
     };
@@ -1345,7 +1366,9 @@ fn pull_dict_keys(var_data: &Bound<'_, PyAny>, attr: &str) -> Vec<Symbol> {
 fn pull_imports<'py>(var_data: &Bound<'py, PyAny>, refs: &PyRefs<'py>) -> Vec<(Symbol, Symbol)> {
     let py = var_data.py();
     let mut out = Vec::new();
-    let Ok(obj) = var_data.getattr(refs.attrs.imports.bind(py)) else { return out };
+    let Ok(obj) = var_data.getattr(refs.attrs.imports.bind(py)) else {
+        return out;
+    };
     if obj.is_none() {
         return out;
     }
@@ -1356,12 +1379,18 @@ fn pull_imports<'py>(var_data: &Bound<'py, PyAny>, refs: &PyRefs<'py>) -> Vec<(S
     if let Ok(keys_iter) = obj.call_method0("items") {
         if let Ok(it) = keys_iter.iter() {
             for kv in it.flatten() {
-                let Ok(tup) = kv.downcast::<pyo3::types::PyTuple>() else { continue };
+                let Ok(tup) = kv.downcast::<pyo3::types::PyTuple>() else {
+                    continue;
+                };
                 if tup.len() != 2 {
                     continue;
                 }
-                let Ok(module_obj) = tup.get_item(0) else { continue };
-                let Ok(module) = py_str(&module_obj) else { continue };
+                let Ok(module_obj) = tup.get_item(0) else {
+                    continue;
+                };
+                let Ok(module) = py_str(&module_obj) else {
+                    continue;
+                };
                 let Ok(items) = tup.get_item(1) else { continue };
                 if items.is_none() {
                     continue;
@@ -1410,11 +1439,15 @@ fn pull_iter_symbols(var_data: &Bound<'_, PyAny>, attr: &str) -> Vec<Symbol> {
 
 fn pull_state_symbol<'py>(var_data: &Bound<'py, PyAny>, refs: &PyRefs<'py>) -> Symbol {
     let py = var_data.py();
-    let Ok(obj) = var_data.getattr(refs.attrs.state.bind(py)) else { return Symbol::EMPTY };
+    let Ok(obj) = var_data.getattr(refs.attrs.state.bind(py)) else {
+        return Symbol::EMPTY;
+    };
     if obj.is_none() {
         return Symbol::EMPTY;
     }
-    let Ok(s) = py_str(&obj) else { return Symbol::EMPTY };
+    let Ok(s) = py_str(&obj) else {
+        return Symbol::EMPTY;
+    };
     if s.is_empty() {
         Symbol::EMPTY
     } else {
@@ -1427,7 +1460,9 @@ fn pull_u8(var_data: &Bound<'_, PyAny>, attr: &str) -> Option<u8> {
     if let Ok(p) = obj.extract::<u8>() {
         return Some(p);
     }
-    obj.getattr("value").ok().and_then(|v| v.extract::<u8>().ok())
+    obj.getattr("value")
+        .ok()
+        .and_then(|v| v.extract::<u8>().ok())
 }
 
 /// Check whether `value` is a `Var` whose `_get_all_var_data()` carries
@@ -1448,10 +1483,7 @@ fn pull_u8(var_data: &Bound<'_, PyAny>, attr: &str) -> Option<u8> {
 ///
 /// `_get_all_var_data` is `@functools.cache`-decorated on the Var class,
 /// so repeated calls for the same Var are sub-µs after the first.
-fn var_has_reactive_data(
-    value: &Bound<'_, PyAny>,
-    refs: &PyRefs<'_>,
-) -> Result<bool, PyReadError> {
+fn var_has_reactive_data(value: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<bool, PyReadError> {
     let is_var = match value.is_instance(&refs.var_cls) {
         Ok(b) => b,
         Err(_) => return Ok(false),
@@ -1460,11 +1492,9 @@ fn var_has_reactive_data(
         return Ok(false);
     }
     let py = value.py();
-    let var_data = match refs.call_cached0(
-        value,
-        refs.attrs.m_get_all_var_data.bind(py),
-        |c| &mut c.get_all_var_data,
-    ) {
+    let var_data = match refs.call_cached0(value, refs.attrs.m_get_all_var_data.bind(py), |c| {
+        &mut c.get_all_var_data
+    }) {
         Ok(v) => v,
         Err(_) => return Ok(false),
     };
@@ -1615,7 +1645,11 @@ fn render_value_as_js<'py>(
         // `extract::<bool>()` accepts ints too in older pyo3 versions;
         // gate on the real `bool` type so we don't misclassify 0/1.
         if value.is_instance_of::<pyo3::types::PyBool>() {
-            return Ok(if b { "true".to_owned() } else { "false".to_owned() });
+            return Ok(if b {
+                "true".to_owned()
+            } else {
+                "false".to_owned()
+            });
         }
     }
     if value.is_instance_of::<pyo3::types::PyInt>() {
@@ -1736,11 +1770,20 @@ mod render_value_primitive_tests {
 
     #[test]
     fn format_library_name_strips_version() {
-        assert_eq!(format_library_name_str("@radix-ui/themes@3.3.0"), "@radix-ui/themes");
+        assert_eq!(
+            format_library_name_str("@radix-ui/themes@3.3.0"),
+            "@radix-ui/themes"
+        );
         assert_eq!(format_library_name_str("react@18.2.0"), "react");
         assert_eq!(format_library_name_str("react"), "react");
-        assert_eq!(format_library_name_str("@radix-ui/themes"), "@radix-ui/themes");
-        assert_eq!(format_library_name_str("https://cdn.example/x@1"), "https://cdn.example/x@1");
+        assert_eq!(
+            format_library_name_str("@radix-ui/themes"),
+            "@radix-ui/themes"
+        );
+        assert_eq!(
+            format_library_name_str("https://cdn.example/x@1"),
+            "https://cdn.example/x@1"
+        );
         assert_eq!(format_library_name_str(""), "");
     }
 
@@ -1807,11 +1850,7 @@ fn collect_app_wraps_into_queue<'py>(
         if tup.len() != 2 {
             continue;
         }
-        let priority: i32 = match tup
-            .get_item(0)
-            .ok()
-            .and_then(|v| v.extract::<i32>().ok())
-        {
+        let priority: i32 = match tup.get_item(0).ok().and_then(|v| v.extract::<i32>().ok()) {
             Some(p) => p,
             None => continue,
         };
@@ -1852,9 +1891,7 @@ fn populate_control_flow<'py>(
             // verbatim instead of the glyph (e.g. `"−"` vs `"−"`).
             if let Ok(contents) = component.getattr(refs.attrs.contents.bind(py)) {
                 if !contents.is_none() {
-                    let is_var = contents
-                        .is_instance(&refs.var_cls)
-                        .unwrap_or(false);
+                    let is_var = contents.is_instance(&refs.var_cls).unwrap_or(false);
                     let s = if is_var {
                         contents
                             .getattr(refs.attrs.js_expr.bind(py))
@@ -2176,8 +2213,14 @@ fn classify_bare<'py>(
 /// pre-quoted tag literals.
 fn read_tag(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<Symbol, PyReadError> {
     let py = component.py();
-    let alias = component.getattr(refs.attrs.alias.bind(py)).ok().filter(|v| !v.is_none());
-    let tag = component.getattr(refs.attrs.tag.bind(py)).ok().filter(|v| !v.is_none());
+    let alias = component
+        .getattr(refs.attrs.alias.bind(py))
+        .ok()
+        .filter(|v| !v.is_none());
+    let tag = component
+        .getattr(refs.attrs.tag.bind(py))
+        .ok()
+        .filter(|v| !v.is_none());
     let raw_name = match (alias, tag) {
         (Some(a), _) => py_str(&a)?,
         (None, Some(t)) => py_str(&t)?,
@@ -2187,7 +2230,10 @@ fn read_tag(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<Symbol, P
     if trimmed.is_empty() {
         return Ok(Symbol::EMPTY);
     }
-    let library = component.getattr(refs.attrs.library.bind(py)).ok().filter(|v| !v.is_none());
+    let library = component
+        .getattr(refs.attrs.library.bind(py))
+        .ok()
+        .filter(|v| !v.is_none());
     let is_global_scope = match component.getattr(refs.attrs.is_tag_in_global_scope.bind(py)) {
         Ok(v) => v.is_truthy().unwrap_or(false),
         Err(_) => false,

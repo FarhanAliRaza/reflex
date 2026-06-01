@@ -8,8 +8,13 @@ from typing import Any, ClassVar, Literal, cast
 
 from reflex_base.components.component import Component, field
 from reflex_base.event import EventHandler
-from reflex_base.vars.base import CustomVarOperationReturn, Var, var_operation
-from reflex_base.vars.sequence import ArrayVar, LiteralArrayVar
+from reflex_base.vars.base import (
+    ArrayVar,
+    CustomVarOperationReturn,
+    LiteralVar,
+    Var,
+    var_operation,
+)
 from reflex_components_core.core.breakpoints import Responsive
 from reflex_components_core.core.foreach import Foreach
 
@@ -56,7 +61,7 @@ def _collect_item_values(children: Sequence[Any]) -> ArrayVar | None:
 
     if not all(isinstance(c, SegmentedControlItem) for c in children):
         return None
-    return LiteralArrayVar.create([c.value for c in children])
+    return LiteralVar.create([c.value for c in children])
 
 
 @var_operation

@@ -25,6 +25,7 @@ from typing import (
     overload,
 )
 
+from reflex_compiler_rust import _native
 from typing_extensions import Self, TypeAliasType, TypedDict, TypeVarTuple, Unpack
 
 from reflex_base import constants
@@ -45,18 +46,21 @@ from reflex_base.utils.types import (
     typehint_issubclass,
 )
 from reflex_base.vars import VarData
-from reflex_base.vars.base import LiteralVar, Var
-from reflex_base.vars.function import (
+from reflex_base.vars.base import (
     ArgsFunctionOperation,
     ArgsFunctionOperationBuilder,
     BuilderFunctionVar,
     FunctionArgs,
     FunctionStringVar,
     FunctionVar,
+    LiteralVar,
+    ObjectVar,
+    Var,
     VarOperationCall,
+    cached_property_no_lock,
+    ternary_operation,
+    var_isinstance,
 )
-from reflex_base.vars.number import ternary_operation
-from reflex_base.vars.object import ObjectVar
 
 if TYPE_CHECKING:
     from reflex.state import BaseState
@@ -692,7 +696,7 @@ class EventChain(EventActionsMixin):
                         stacklevel=2,
                     )
                 return value
-            if isinstance(value, (EventVar, FunctionVar)):
+            if var_isinstance(value, EventVar) or var_isinstance(value, FunctionVar):
                 value = [value]
             elif safe_issubclass(value._var_type, (EventChain, EventSpec)):
                 return cls.create(
@@ -720,9 +724,9 @@ class EventChain(EventActionsMixin):
                 if isinstance(v, (EventHandler, EventSpec)):
                     # Call the event handler to get the event.
                     events.append(call_event_handler(v, args_spec, key=key))
-                elif isinstance(v, (EventVar, EventChainVar)):
+                elif var_isinstance(v, EventVar) or var_isinstance(v, EventChainVar):
                     events.append(v)
-                elif isinstance(v, FunctionVar):
+                elif var_isinstance(v, FunctionVar):
                     # Apply the args_spec transformations as partial arguments to the function.
                     events.append(v.partial(*parse_args_spec(args_spec)[0]))
                 elif isinstance(v, Callable):
@@ -2141,14 +2145,14 @@ def call_event_fn(
 
         if (
             isinstance(e, Var)
-            and not isinstance(e, (EventVar, FunctionVar))
+            and not (var_isinstance(e, EventVar) or var_isinstance(e, FunctionVar))
             and get_origin(e._var_type) in (Union, types.UnionType)
             and typehint_issubclass(e._var_type, EventSpec | Callable)
         ):
             e = _dispatch_mixed_event_var(e)
 
         # Make sure the event spec is valid.
-        if not isinstance(e, (EventSpec, FunctionVar, EventVar)):
+        if not (isinstance(e, EventSpec) or var_isinstance(e, FunctionVar) or var_isinstance(e, EventVar)):
             hint = ""
             if isinstance(e, VarOperationCall):
                 hint = " Hint: use `fn.partial(...)` instead of calling the FunctionVar directly."
@@ -2382,6 +2386,15 @@ class LiteralEventChainVar(ArgsFunctionOperationBuilder, LiteralVar, EventChainV
         """
         return hash((type(self).__name__, self._js_expr))
 
+    @cached_property_no_lock
+    def _cached_var_name(self) -> str:
+        """The rendered ``(args) => addEvents(...)`` source, assembled in Rust.
+
+        Returns:
+            The rendered event-chain JS.
+        """
+        return _native.rust_assemble_event_chain(self._var_value)
+
     @classmethod
     def create(
         cls,
@@ -2390,15 +2403,18 @@ class LiteralEventChainVar(ArgsFunctionOperationBuilder, LiteralVar, EventChainV
     ) -> "LiteralEventChainVar":
         """Create a new LiteralEventChainVar instance.
 
+        The chain JS is assembled entirely in Rust (no per-event Var-tree
+        composition — the former ~3ms Python hotspot) and the var_data is
+        gathered in Rust; both are byte-identical to the former composition
+        across the event grammar (single/multi/empty events, per-spec and
+        chain-level event actions, FunctionVar events, and no-arg triggers).
+
         Args:
             value: The value of the var.
             _var_data: The data of the var.
 
         Returns:
             The created LiteralEventChainVar instance.
-
-        Raises:
-            ValueError: If the invocation is not a FunctionVar.
         """
         arg_spec = (
             value.args_spec[0]
@@ -2406,84 +2422,15 @@ class LiteralEventChainVar(ArgsFunctionOperationBuilder, LiteralVar, EventChainV
             else value.args_spec
         )
         sig = inspect.signature(arg_spec)  # pyright: ignore [reportArgumentType]
-        arg_vars = ()
-        if sig.parameters:
-            arg_def = tuple(f"_{p}" for p in sig.parameters)
-            arg_vars = tuple(Var(_js_expr=arg) for arg in arg_def)
-            arg_def_expr = LiteralVar.create(list(arg_vars))
-        else:
-            # add a default argument for addEvents if none were specified in value.args_spec
-            # used to trigger the preventDefault() on the event.
-            arg_def = ("...args",)
-            arg_def_expr = Var(_js_expr="args")
-
-        if value.invocation is None:
-            invocation = FunctionStringVar.create(
-                CompileVars.ADD_EVENTS,
-                _var_data=VarData(
-                    imports=Imports.EVENTS,
-                    hooks={Hooks.EVENTS: None},
-                ),
-            )
-        else:
-            invocation = value.invocation
-
-        if invocation is not None and not isinstance(invocation, FunctionVar):
-            msg = f"EventChain invocation must be a FunctionVar, got {invocation!s} of type {invocation._var_type!s}."
-            raise ValueError(msg)
-        assert invocation is not None
-
-        call_args = arg_vars if sig.parameters else (Var(_js_expr="...args"),)
-        statements = [
-            (
-                event.call(*call_args)
-                if isinstance(event, FunctionVar)
-                else invocation.call(
-                    LiteralVar.create([LiteralVar.create(event)]),
-                    arg_def_expr,
-                    _EMPTY_EVENT_ACTIONS,
-                )
-            )
-            for event in value.events
-        ]
-
-        if not statements:
-            statements.append(
-                invocation.call(
-                    _EMPTY_EVENTS,
-                    arg_def_expr,
-                    _EMPTY_EVENT_ACTIONS,
-                )
-            )
-
-        if len(statements) == 1 and not value.event_actions:
-            return_expr = statements[0]
-        else:
-            statement_block = Var(
-                _js_expr=f"{{{''.join(f'{statement};' for statement in statements)}}}",
-            )
-            if value.event_actions:
-                apply_event_actions = FunctionStringVar.create(
-                    CompileVars.APPLY_EVENT_ACTIONS,
-                    _var_data=VarData(
-                        imports=Imports.EVENTS,
-                        hooks={Hooks.EVENTS: None},
-                    ),
-                )
-                return_expr = apply_event_actions.call(
-                    ArgsFunctionOperation.create((), statement_block),
-                    value.event_actions,
-                    *call_args,
-                )
-            else:
-                return_expr = statement_block
-
+        arg_def = (
+            tuple(f"_{p}" for p in sig.parameters) if sig.parameters else ("...args",)
+        )
         return cls(
             _js_expr="",
             _var_type=EventChain,
-            _var_data=_var_data,
+            _var_data=_native.rust_event_chain_var_data(value, _var_data),
             _args=FunctionArgs(arg_def),
-            _return_expr=return_expr,
+            _return_expr=None,
             _var_value=value,
         )
 

@@ -6,6 +6,7 @@ import inspect
 import json
 import os
 import re
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from reflex_base import constants
@@ -174,11 +175,16 @@ def to_snake_case(text: str) -> str:
     return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower().replace("-", "_")
 
 
+@lru_cache(maxsize=4096)
 def to_camel_case(text: str, treat_hyphens_as_underscores: bool = True) -> str:
     """Convert a string to camel case.
 
     The first word in the text is converted to lowercase and
     the rest of the words are converted to title case, removing underscores.
+
+    Pure function over a small, bounded vocabulary of prop names, so it is
+    memoized — it is called once per prop on every compile (PR B
+    construction-cost cut).
 
     Args:
         text: The string to convert.
@@ -433,10 +439,10 @@ def format_props(*single_props, **key_value_props) -> list[str]:
         The formatted props list.
     """
     # Format all the props.
-    from reflex_base.vars import LiteralStringVar, LiteralVar, Var
+    from reflex_base.vars import LiteralVar, Var
 
     return [
-        (str(LiteralStringVar.create(name)) if "-" in name else name)
+        (str(LiteralVar.create(name)) if "-" in name else name)
         + ":"
         + str(format_prop(prop if isinstance(prop, Var) else LiteralVar.create(prop)))
         for name, prop in sorted(key_value_props.items())

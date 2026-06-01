@@ -19,11 +19,13 @@ pub mod visitor;
 
 pub use parse::{parse_global_state, parse_page, parse_plugin_manifest, parse_theme, ParseError};
 pub use snapshot::{
-    AppWrap, ControlFlowExtras, HookEntry, ImportEntry, MemoizationDisposition, MemoizeBody,
-    NodeFlags, NodeIdx, NodeKind, NodeSnapshot, PageMeta, Snapshot, SnapshotBuilder, VarDataEntry,
-    VarDataRef,
+    close_snapshot, AppWrap, ControlFlowExtras, HookEntry, ImportEntry, MemoizationDisposition,
+    MemoizeBody, NodeFlags, NodeIdx, NodeKind, NodeSnapshot, PageMeta, Snapshot, SnapshotBuilder,
+    VarDataEntry, VarDataRef,
 };
-pub use visitor::{walk_component, walk_event_handler, walk_match_arm, walk_page, walk_value, IrVisitor};
+pub use visitor::{
+    walk_component, walk_event_handler, walk_match_arm, walk_page, walk_value, IrVisitor,
+};
 
 /// Stable hash of a node's canonical bytes. Used as the Salsa cache key and as
 /// the React `key=` value for memoized subtrees.
@@ -366,8 +368,16 @@ mod tests {
     fn component_kind_matches_discriminant() {
         let id = NodeId(0);
         let loc = SourceLoc::SYNTHETIC;
-        let text = Component::Text { value: "hi", id, source_loc: loc };
-        let frag = Component::Fragment { children: &[], id, source_loc: loc };
+        let text = Component::Text {
+            value: "hi",
+            id,
+            source_loc: loc,
+        };
+        let frag = Component::Fragment {
+            children: &[],
+            id,
+            source_loc: loc,
+        };
         assert_eq!(text.kind(), 1);
         assert_eq!(frag.kind(), 6);
     }

@@ -172,8 +172,7 @@ mod tests {
         let mut node = NodeSnapshot::default();
         node.kind = NodeKind::Element;
         for (pos, code) in hooks {
-            node.hooks_internal
-                .push(HookEntry::new(intern(code), *pos));
+            node.hooks_internal.push(HookEntry::new(intern(code), *pos));
         }
         b.push(node);
         b.finish()

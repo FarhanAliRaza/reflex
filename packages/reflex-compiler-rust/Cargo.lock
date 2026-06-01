@@ -276,10 +276,13 @@ dependencies = [
  "reflex_intern",
  "reflex_ir",
  "reflex_pyread",
+ "reflex_vars",
  "rmp",
  "rmp-serde",
  "serde",
+ "smallvec",
  "thiserror",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -306,6 +309,9 @@ dependencies = [
 [[package]]
 name = "reflex_vars"
 version = "0.0.0"
+dependencies = [
+ "pyo3",
+]
 
 [[package]]
 name = "rmp"

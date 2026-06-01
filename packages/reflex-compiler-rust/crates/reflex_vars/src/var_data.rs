@@ -97,6 +97,20 @@ pub struct VarData {
     pub components: Vec<String>,
 }
 
+/// Prefix framework-internal lib paths with `$`, matching `merge_imports`.
+///
+/// A lib whose path starts with one of the internal roots (`/utils/`,
+/// `/components/`, `/styles/`, `/public/`) is rewritten to `$<lib>`; everything
+/// else (npm packages, already-`$`-prefixed paths) is returned unchanged.
+pub(crate) fn normalize_import_lib(lib: &str) -> String {
+    const INTERNAL_ROOTS: [&str; 4] = ["/utils/", "/components/", "/styles/", "/public/"];
+    if INTERNAL_ROOTS.iter().any(|p| lib.starts_with(p)) {
+        format!("${lib}")
+    } else {
+        lib.to_owned()
+    }
+}
+
 impl VarData {
     /// True when every field is at its default value — matches `__bool__`
     /// semantics at `vars/base.py:272-286`.
@@ -121,7 +135,9 @@ impl VarData {
     /// Semantics match `VarData.merge` at `vars/base.py:200-270`:
     ///
     /// * `state` / `field_name` come from the **first** non-empty entry.
-    /// * `hooks` and `imports` are unioned, preserving first-seen order.
+    /// * `hooks` are unioned (deduped), preserving first-seen order.
+    /// * `imports` are concatenated per-module (NO dedup — Python keeps
+    ///   duplicates), preserving first-seen module order.
     /// * `deps` and `components` are concatenated in input order.
     /// * `position` collapses to the single non-`None` position, or `None`
     ///   when there is none. Returns `Err` when two entries disagree.
@@ -166,23 +182,24 @@ impl VarData {
             }
         }
 
-        // Imports: per-module dedup, preserve first-seen module order. Within
-        // a module, dedup imports by full equality.
+        // Imports: concatenate per-module (NO dedup), preserve first-seen
+        // module order. Mirrors `merge_imports` (imports.py), which `.extend()`s
+        // each module's list — Python keeps duplicate ImportVars, and the Var
+        // must reproduce that exactly to be a byte-identical drop-in. Libs that
+        // point at framework-internal paths are `$`-prefixed (also per
+        // `merge_imports`).
         let mut imports: Vec<(String, Vec<ImportVar>)> = Vec::new();
         for d in &parts {
             for (module, vars) in &d.imports {
-                let slot = match imports.iter_mut().find(|(m, _)| m == module) {
-                    Some(s) => &mut s.1,
+                let module = normalize_import_lib(module);
+                let slot = match imports.iter().position(|(m, _)| *m == module) {
+                    Some(i) => &mut imports[i].1,
                     None => {
-                        imports.push((module.clone(), Vec::new()));
+                        imports.push((module, Vec::new()));
                         &mut imports.last_mut().unwrap().1
                     }
                 };
-                for v in vars {
-                    if !slot.contains(v) {
-                        slot.push(v.clone());
-                    }
-                }
+                slot.extend(vars.iter().cloned());
             }
         }
 
@@ -342,7 +359,10 @@ mod tests {
     }
 
     #[test]
-    fn merge_imports_dedupes_per_module() {
+    fn merge_imports_concatenates_per_module() {
+        // Python's merge_imports `.extend()`s — duplicates are kept. The
+        // duplicate `useState` from both sides must survive (3 react entries),
+        // matching the import multiplicity the Python Var produces.
         let a = VarData {
             imports: vec![import("react", "useState"), import("react", "useEffect")],
             ..VarData::default()
@@ -355,10 +375,25 @@ mod tests {
         assert_eq!(merged.imports.len(), 2);
         let react = &merged.imports[0];
         assert_eq!(react.0, "react");
-        assert_eq!(react.1.len(), 2);
+        assert_eq!(react.1.len(), 3);
         let foo = &merged.imports[1];
         assert_eq!(foo.0, "./foo");
         assert_eq!(foo.1.len(), 1);
+    }
+
+    #[test]
+    fn merge_prefixes_internal_import_libs() {
+        let a = VarData {
+            imports: vec![import("/utils/context", "StateContexts")],
+            ..VarData::default()
+        };
+        let b = VarData {
+            imports: vec![import("react", "useContext")],
+            ..VarData::default()
+        };
+        let merged = VarData::merge([Some(&a), Some(&b)]).unwrap().unwrap();
+        assert_eq!(merged.imports[0].0, "$/utils/context");
+        assert_eq!(merged.imports[1].0, "react");
     }
 
     #[test]

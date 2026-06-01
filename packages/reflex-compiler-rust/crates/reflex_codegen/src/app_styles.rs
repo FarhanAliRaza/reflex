@@ -84,15 +84,9 @@ mod tests {
 
         assert_eq!(overlaid, 1);
         // Pre-existing style is preserved.
-        assert_eq!(
-            snap.node(with_style).style,
-            intern("{color: \"blue\"}")
-        );
+        assert_eq!(snap.node(with_style).style, intern("{color: \"blue\"}"));
         // Empty style + matching key gets overlaid.
-        assert_eq!(
-            snap.node(without_style).style,
-            intern("{font: \"bold\"}")
-        );
+        assert_eq!(snap.node(without_style).style, intern("{font: \"bold\"}"));
         // Node with no style_key is left alone.
         assert_eq!(snap.node(no_key).style, Symbol::EMPTY);
     }

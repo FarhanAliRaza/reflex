@@ -9,6 +9,7 @@ import datetime
 import functools
 import inspect
 import json
+import math
 import re
 import string
 import uuid
@@ -17,6 +18,7 @@ from abc import ABCMeta
 from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import _MISSING_TYPE, MISSING
 from decimal import Decimal
+from importlib.util import find_spec
 from types import CodeType, FunctionType
 from typing import (
     TYPE_CHECKING,
@@ -33,34 +35,29 @@ from typing import (
     cast,
     get_args,
     get_type_hints,
+    is_typeddict,
     overload,
 )
 
 from rich.markup import escape
 from typing_extensions import LiteralString, dataclass_transform, override
+from typing_extensions import TypeVar as TypeVarExt
 
 from reflex_base import constants
-from reflex_base.constants.compiler import Hooks
 from reflex_base.constants.state import FIELD_MARKER
-from reflex_base.utils import console, exceptions, imports, serializers, types
+from reflex_base.utils import console, exceptions, format, imports, serializers, types
 from reflex_base.utils.compat import annotations_from_namespace
 from reflex_base.utils.decorator import once
 from reflex_base.utils.exceptions import (
     ComputedVarSignatureError,
+    PrimitiveUnserializableToJSONError,
     UntypedComputedVarError,
     VarAttributeError,
     VarDependencyError,
     VarTypeError,
 )
 from reflex_base.utils.format import format_state_name
-from reflex_base.utils.imports import (
-    ImmutableImportDict,
-    ImmutableParsedImportDict,
-    ImportDict,
-    ImportVar,
-    ParsedImportTuple,
-    parse_imports,
-)
+from reflex_base.utils.imports import ImportDict, ImportVar
 from reflex_base.utils.types import (
     GenericType,
     Self,
@@ -73,13 +70,9 @@ from reflex_base.utils.types import (
 
 if TYPE_CHECKING:
     from reflex.state import BaseState
-    from reflex_base.components.component import BaseComponent
     from reflex_base.constants.colors import Color
 
     from .color import LiteralColorVar
-    from .number import BooleanVar, LiteralBooleanVar, LiteralNumberVar, NumberVar
-    from .object import LiteralObjectVar, ObjectVar
-    from .sequence import ArrayVar, LiteralArrayVar, LiteralStringVar, StringVar
 
 
 VAR_TYPE = TypeVar("VAR_TYPE", covariant=True)
@@ -113,205 +106,134 @@ _var_subclasses: list[VarSubclassEntry] = []
 _var_literal_subclasses: list[tuple[type[LiteralVar], VarSubclassEntry]] = []
 
 
-@dataclasses.dataclass(
-    eq=True,
-    frozen=True,
-)
-class VarData:
-    """Metadata associated with a x."""
+# VarData is now the Rust-backed RustVarData (hard cutover, no Python impl).
+from reflex_compiler_rust._native import LiteralVar as RustLiteralVar, Var as RustVar  # noqa: E402
+from reflex_compiler_rust._native import RustVarData as VarData
 
-    # The name of the enclosing state.
-    state: str = dataclasses.field(default="")
 
-    # The name of the field in the state.
-    field_name: str = dataclasses.field(default="")
+def _rust_var_classify(var_type: GenericType) -> type:
+    """Return the typed ``Var`` subclass that ``var_type`` classifies as.
 
-    # Imports needed to render this var
-    imports: ParsedImportTuple = dataclasses.field(default_factory=tuple)
+    Mirrors ``Var.guess_type``'s ``_var_subclasses`` registry matching, but
+    returns the matched class instead of converting a var — the single source of
+    truth for the ``isinstance`` bridge (so a ``RustVar`` is recognized as the
+    right typed ``Var`` based on its ``_var_type``).
 
-    # Hooks that need to be present in the component to render this var
-    hooks: tuple[str, ...] = dataclasses.field(default_factory=tuple)
+    Args:
+        var_type: The var's Python type.
 
-    # Dependencies of the var
-    deps: tuple[Var, ...] = dataclasses.field(default_factory=tuple)
+    Returns:
+        The matched typed ``Var`` subclass (``Var`` when nothing matches).
+    """
+    if var_type is None:
+        return NoneVar
+    if var_type is NoReturn or var_type is Any:
+        return Var
+    var_type = types.value_inside_optional(var_type)
+    if var_type is Any:
+        return Var
+    fixed_type = get_origin(var_type) or var_type
+    if fixed_type in types.UnionTypes:
+        fixed_inner = [
+            get_origin(t) or t
+            for t in (types.value_inside_optional(a) for a in get_args(var_type))
+        ]
+        for entry in reversed(_var_subclasses):
+            if all(safe_issubclass(t, entry.python_types) for t in fixed_inner):
+                return entry.var_subclass
+        return ObjectVar if can_use_in_object_var(var_type) else Var
+    if fixed_type is Literal:
+        fixed_type = unionize(*(type(arg) for arg in get_args(var_type)))
+    if not isinstance(fixed_type, type):
+        return Var
+    if fixed_type is None:
+        return NoneVar
+    for entry in reversed(_var_subclasses):
+        if safe_issubclass(fixed_type, entry.python_types):
+            return entry.var_subclass
+    return ObjectVar if can_use_in_object_var(fixed_type) else Var
 
-    # Position of the hook in the component
-    position: Hooks.HookPosition | None = None
 
-    # Components that are part of this var
-    components: tuple[BaseComponent, ...] = dataclasses.field(default_factory=tuple)
+# The standard typed Var classes whose entire behavior the unified ``RustVar``
+# reproduces (operators + methods dispatched off ``_var_type``). For these,
+# ``guess_type`` is identity. Any *other* registered subclass (e.g.
+# ``ReflexURLCastedVar``) carries bespoke rendering/properties and must be
+# produced as its own casted instance.
+_STANDARD_VAR_CLASS_NAMES = frozenset({
+    "Var",
+    "NumberVar",
+    "BooleanVar",
+    "StringVar",
+    "ArrayVar",
+    "ObjectVar",
+    "NoneVar",
+    "DateTimeVar",
+    "ColorVar",
+    "FunctionVar",
+    "BuilderFunctionVar",
+    "RangeVar",
+})
 
-    def __init__(
-        self,
-        state: str = "",
-        field_name: str = "",
-        imports: ImmutableImportDict | ImmutableParsedImportDict | None = None,
-        hooks: Mapping[str, VarData | None] | Sequence[str] | str | None = None,
-        deps: list[Var] | None = None,
-        position: Hooks.HookPosition | None = None,
-        components: Iterable[BaseComponent] | None = None,
-    ):
-        """Initialize the var data.
 
-        Args:
-            state: The name of the enclosing state.
-            field_name: The name of the field in the state.
-            imports: Imports needed to render this var.
-            hooks: Hooks that need to be present in the component to render this var.
-            deps: Dependencies of the var for useCallback.
-            position: Position of the hook in the component.
-            components: Components that are part of this var.
-        """
-        if isinstance(hooks, str):
-            hooks = [hooks]
-        if not isinstance(hooks, dict):
-            hooks = dict.fromkeys(hooks or [])
-        immutable_imports: ParsedImportTuple = tuple(
-            (k, tuple(v)) for k, v in parse_imports(imports or {}).items()
-        )
-        object.__setattr__(self, "state", state)
-        object.__setattr__(self, "field_name", field_name)
-        object.__setattr__(self, "imports", immutable_imports)
-        object.__setattr__(self, "hooks", tuple(hooks or {}))
-        object.__setattr__(self, "deps", tuple(deps or []))
-        object.__setattr__(self, "position", position or None)
-        object.__setattr__(self, "components", tuple(components or []))
+def _rust_guess_type(var: RustVar) -> Any:
+    """Resolve a ``RustVar`` to its typed form (the bridge for ``guess_type``).
 
-        if hooks and any(hooks.values()):
-            # Merge our dependencies first, so they can be referenced.
-            merged_var_data = VarData.merge(*hooks.values(), self)
-            if merged_var_data is not None:
-                object.__setattr__(self, "state", merged_var_data.state)
-                object.__setattr__(self, "field_name", merged_var_data.field_name)
-                object.__setattr__(self, "imports", merged_var_data.imports)
-                object.__setattr__(self, "hooks", merged_var_data.hooks)
-                object.__setattr__(self, "deps", merged_var_data.deps)
-                object.__setattr__(self, "position", merged_var_data.position)
-                object.__setattr__(self, "components", merged_var_data.components)
+    Standard typed classes are reproduced by ``RustVar`` itself, so the var is
+    returned unchanged. A custom registered subclass (carrying bespoke
+    behavior, e.g. ``ReflexURLCastedVar``) is produced as its casted instance
+    via the registry, so its custom rendering/properties survive.
 
-    def old_school_imports(self) -> ImportDict:
-        """Return the imports as a mutable dict.
+    Args:
+        var: The Rust-backed var to resolve.
 
-        Returns:
-            The imports as a mutable dict.
-        """
-        return {k: list(v) for k, v in self.imports}
+    Returns:
+        The var itself, or its custom casted-subclass instance.
+    """
+    matched = _rust_var_classify(var._var_type)
+    if matched.__name__ in _STANDARD_VAR_CLASS_NAMES:
+        return var
+    for entry in _var_subclasses:
+        if entry.var_subclass is matched:
+            return entry.to_var_subclass.create(value=var, _var_type=var._var_type)
+    return var
 
-    def merge(*all: VarData | None) -> VarData | None:
-        """Merge multiple var data objects.
 
-        Args:
-            *all: The var data objects to merge.
+def _literal_pair_for(var_subclass: type) -> type | None:
+    """Return the ``LiteralVar`` subclass paired with ``var_subclass``, if any.
 
-        Returns:
-            The merged var data object.
+    Args:
+        var_subclass: A typed ``Var`` subclass (e.g. ``NumberVar``).
 
-        Raises:
-            ReflexError: If trying to merge VarData with different positions.
+    Returns:
+        The paired literal subclass (e.g. ``LiteralNumberVar``) or ``None``.
+    """
+    for literal_subclass, entry in _var_literal_subclasses:
+        if entry.var_subclass is var_subclass:
+            return literal_subclass
+    return None
 
-        # noqa: DAR102 *all
-        """
-        all_var_datas = list(filter(None, all))
 
-        if not all_var_datas:
-            return None
+def _rust_var_isinstance(instance: RustVar, cls: type) -> bool:
+    """Whether a ``RustVar`` should be considered an instance of ``cls``.
 
-        if len(all_var_datas) == 1:
-            return all_var_datas[0]
+    Classifies the var's ``_var_type`` against the typed-``Var`` registry. For a
+    ``LiteralVar``-family target, the var must additionally be a
+    ``RustLiteralVar``.
 
-        # Get the first non-empty field name or default to empty string.
-        field_name = next(
-            (var_data.field_name for var_data in all_var_datas if var_data.field_name),
-            "",
-        )
+    Args:
+        instance: The Rust-backed var.
+        cls: The (Var-family) class being tested.
 
-        # Get the first non-empty state or default to empty string.
-        state = next(
-            (var_data.state for var_data in all_var_datas if var_data.state), ""
-        )
-
-        hooks: dict[str, VarData | None] = {
-            hook: None for var_data in all_var_datas for hook in var_data.hooks
-        }
-
-        imports_ = imports.merge_imports(
-            *(var_data.imports for var_data in all_var_datas)
-        )
-
-        deps = [dep for var_data in all_var_datas for dep in var_data.deps]
-
-        positions = list(
-            dict.fromkeys(
-                var_data.position
-                for var_data in all_var_datas
-                if var_data.position is not None
-            )
-        )
-        if positions:
-            if len(positions) > 1:
-                msg = f"Cannot merge var data with different positions: {positions}"
-                raise exceptions.ReflexError(msg)
-            position = positions[0]
-        else:
-            position = None
-
-        components = tuple(
-            component for var_data in all_var_datas for component in var_data.components
-        )
-
-        return VarData(
-            state=state,
-            field_name=field_name,
-            imports=imports_,
-            hooks=hooks,
-            deps=deps,
-            position=position,
-            components=components,
-        )
-
-    def __bool__(self) -> bool:
-        """Check if the var data is non-empty.
-
-        Returns:
-            True if any field is set to a non-default value.
-        """
-        return bool(
-            self.state
-            or self.imports
-            or self.hooks
-            or self.field_name
-            or self.deps
-            or self.position
-            or self.components
-        )
-
-    @classmethod
-    def from_state(cls, state: type[BaseState] | str, field_name: str = "") -> VarData:
-        """Set the state of the var.
-
-        Args:
-            state: The state to set or the full name of the state.
-            field_name: The name of the field in the state. Optional.
-
-        Returns:
-            The var with the set state.
-        """
-        from reflex_base.utils import format
-
-        state_name = state if isinstance(state, str) else state.get_full_name()
-        return VarData(
-            state=state_name,
-            field_name=field_name,
-            hooks={
-                "const {0} = useContext(StateContexts.{0})".format(
-                    format.format_state_name(state_name)
-                ): None
-            },
-            imports={
-                f"$/{constants.Dirs.CONTEXTS_PATH}": [ImportVar(tag="StateContexts")],
-                "react": [ImportVar(tag="useContext")],
-            },
-        )
+    Returns:
+        ``True`` if ``instance`` matches ``cls``.
+    """
+    matched = _rust_var_classify(instance._var_type)
+    if type.__subclasscheck__(LiteralVar, cls):
+        if not isinstance(instance, RustLiteralVar):
+            return False
+        literal = _literal_pair_for(matched)
+        return literal is not None and type.__subclasscheck__(cls, literal)
+    return type.__subclasscheck__(cls, matched)
 
 
 def _decode_var_immutable(value: str) -> tuple[VarData | None, str]:
@@ -362,7 +284,7 @@ def can_use_in_object_var(cls: GenericType) -> bool:
         Whether the class can be used in an ObjectVar.
     """
     if types.is_union(cls):
-        return all(can_use_in_object_var(t) for t in types.get_args(cls))
+        return all(can_use_in_object_var(t) for t in get_args(cls))
     return (
         isinstance(cls, type)
         and not safe_issubclass(cls, Var)
@@ -370,8 +292,29 @@ def can_use_in_object_var(cls: GenericType) -> bool:
     )
 
 
-class MetaclassVar(type):
-    """Metaclass for the Var class."""
+_BASE_VAR: list[type] = []
+
+
+class MetaclassVar(ABCMeta):
+    """Metaclass for the Var class.
+
+    Subclasses ``ABCMeta`` so the Rust ``Var`` / ``LiteralVar`` can be
+    registered as virtual subclasses (``Var.register(RustVar)``) — making
+    ``isinstance(rust_var, Var)`` a native, cached check with no per-call
+    bridge. Typed-category membership (``StringVar``/``ArrayVar``/…), which
+    depends on a Rust var's runtime ``_var_type`` rather than its class, is
+    answered by the explicit :func:`var_isinstance` helper instead.
+    """
+
+    def __call__(cls, *args, **kwargs):  # noqa: D102
+        if _BASE_VAR and cls is _BASE_VAR[0]:
+            # Supply the dataclass `Any` default when no `_var_type` is given
+            # (RustVar keeps an explicitly-passed `None`, which pyo3 cannot
+            # distinguish from absent on its own).
+            if len(args) < 2 and "_var_type" not in kwargs:
+                kwargs["_var_type"] = Any
+            return RustVar(*args, **kwargs)
+        return super().__call__(*args, **kwargs)
 
     def __setattr__(cls, name: str, value: Any):
         """Set an attribute on the class.
@@ -383,6 +326,27 @@ class MetaclassVar(type):
         super().__setattr__(
             name, value if name != _PYDANTIC_VALIDATE_VALUES else _pydantic_validator
         )
+
+
+def var_isinstance(value: Any, cls: type) -> bool:
+    """Whether ``value`` is a var that classifies as the typed ``Var`` ``cls``.
+
+    ``isinstance(x, Var)`` / ``isinstance(x, LiteralVar)`` are native (the Rust
+    classes are registered virtual subclasses). This helper covers the
+    *typed-category* questions (``isinstance(x, StringVar)`` etc.) that depend on
+    a Rust var's runtime ``_var_type`` — a Rust var is classified by its
+    ``_var_type``; any other object falls back to a plain ``isinstance``.
+
+    Args:
+        value: The object to test.
+        cls: The typed ``Var`` subclass to test against.
+
+    Returns:
+        Whether ``value`` matches ``cls``.
+    """
+    if isinstance(value, RustVar):
+        return _rust_var_isinstance(value, cls)
+    return isinstance(value, cls)
 
 
 @dataclasses.dataclass(
@@ -794,8 +758,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             The converted var.
         """
-        from .object import ObjectVar
-
         fixed_output_type = get_origin(output) or output
 
         # If the first argument is a python type, we map it to the corresponding Var type.
@@ -864,8 +826,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Raises:
             TypeError: If the type is not supported for guessing.
         """
-        from .object import ObjectVar
-
         var_type = self._var_type
         if var_type is None:
             return self.to(None)
@@ -1002,8 +962,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             BooleanVar: A BooleanVar object representing the result of the equality check.
         """
-        from .number import equal_operation
-
         return equal_operation(self, other)
 
     def __ne__(self, other: Var | Any) -> BooleanVar:
@@ -1015,8 +973,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             BooleanVar: A BooleanVar object representing the result of the comparison.
         """
-        from .number import equal_operation
-
         return ~equal_operation(self, other)
 
     def bool(self) -> BooleanVar:
@@ -1025,8 +981,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             The boolean var.
         """
-        from .number import boolify
-
         return boolify(self)
 
     def is_none(self) -> BooleanVar:
@@ -1035,8 +989,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             A BooleanVar object representing the result of the check.
         """
-        from .number import is_not_none_operation
-
         return ~is_not_none_operation(self)
 
     def is_not_none(self) -> BooleanVar:
@@ -1045,8 +997,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             A BooleanVar object representing the result of the check.
         """
-        from .number import is_not_none_operation
-
         return is_not_none_operation(self)
 
     def __and__(
@@ -1118,9 +1068,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             The string var.
         """
-        from .function import JSON_STRINGIFY, PROTOTYPE_TO_STRING
-        from .sequence import StringVar
-
         return (
             JSON_STRINGIFY.call(self).to(StringVar)
             if use_json
@@ -1151,9 +1098,6 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             StringVar: A string variable representing the type of the object.
         """
-        from .function import FunctionStringVar
-        from .sequence import StringVar
-
         type_of = FunctionStringVar("typeof")
         return type_of.call(self).to(StringVar)
 
@@ -1222,9 +1166,7 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
         Returns:
             The range of numbers.
         """
-        from .sequence import ArrayVar
-
-        return ArrayVar.range(first_endpoint, second_endpoint, step)
+        return RustVar.range(first_endpoint, second_endpoint, step)
 
     if not TYPE_CHECKING:
 
@@ -1320,6 +1262,9 @@ class Var(Generic[VAR_TYPE], metaclass=MetaclassVar):
             raise VarTypeError(msg)
 
 
+_BASE_VAR.append(Var)
+
+
 OUTPUT = TypeVar("OUTPUT", bound=Var)
 
 VAR_SUBCLASS = TypeVar("VAR_SUBCLASS", bound=Var)
@@ -1338,9 +1283,7 @@ class ToOperation:
         Returns:
             The attribute of the var.
         """
-        from .object import ObjectVar
-
-        if isinstance(self, ObjectVar) and name != "_js_expr":
+        if var_isinstance(self, ObjectVar) and name != "_js_expr":
             return ObjectVar.__getattr__(self, name)
         return getattr(self._original, name)
 
@@ -1464,13 +1407,33 @@ class LiteralVar(Var[VAR_TYPE]):
         Raises:
             TypeError: If the value is not a supported type for LiteralVar.
         """
-        from .object import LiteralObjectVar
-        from .sequence import ArrayVar, LiteralStringVar
-
         if isinstance(value, Var):
             if _var_data is None:
                 return value
             return value._replace(merge_var_data=_var_data)
+
+        # Scalars (incl. strings, with f-string marker decode + folding) and
+        # plain list/dict literals (with element-type inference, recursive json,
+        # and embedded-var var_data aggregation) are produced by the Rust literal
+        # var — byte-identical to the Python literal subclasses. Exotic types
+        # (datetime/Color/range/serializer-backed/dataclasses) and non-exact
+        # types (int/str subclasses, tuples, sets, custom Mappings) stay on the
+        # Python dispatch below.
+        if type(value) in (
+            bool,
+            int,
+            float,
+            str,
+            type(None),
+            list,
+            dict,
+            tuple,
+            set,
+            Decimal,
+            datetime.datetime,
+            datetime.date,
+        ):
+            return RustLiteralVar.create(value, _var_data=_var_data)
 
         for literal_subclass, var_subclass in _var_literal_subclasses[::-1]:
             if isinstance(value, var_subclass.python_types):
@@ -1491,20 +1454,16 @@ class LiteralVar(Var[VAR_TYPE]):
 
         serialized_value = serializers.serialize(value)
         if serialized_value is not None:
-            if isinstance(serialized_value, Mapping):
-                return LiteralObjectVar.create(
+            if isinstance(serialized_value, (Mapping, str)):
+                return RustLiteralVar.create(
                     serialized_value,
                     _var_type=type(value),
                     _var_data=_var_data,
                 )
-            if isinstance(serialized_value, str):
-                return LiteralStringVar.create(
-                    serialized_value, _var_type=type(value), _var_data=_var_data
-                )
             return LiteralVar.create(serialized_value, _var_data=_var_data)
 
         if dataclasses.is_dataclass(value) and not isinstance(value, type):
-            return LiteralObjectVar.create(
+            return RustLiteralVar.create(
                 {
                     k.name: (None if callable(v := getattr(value, k.name)) else v)
                     for k in dataclasses.fields(value)
@@ -1514,7 +1473,7 @@ class LiteralVar(Var[VAR_TYPE]):
             )
 
         if isinstance(value, range):
-            return ArrayVar.range(value.start, value.stop, value.step)
+            return RustVar.range(value.start, value.stop, value.step)
 
         msg = f"Unsupported type {type(value)} for LiteralVar. Tried to create a LiteralVar from {value}."
         raise TypeError(msg)
@@ -1548,9 +1507,6 @@ class LiteralVar(Var[VAR_TYPE]):
         Raises:
             TypeError: If the value is not a supported type for LiteralVar.
         """
-        from .object import LiteralObjectVar
-        from .sequence import LiteralStringVar
-
         if isinstance(value, Var):
             return value._get_all_var_data()
 
@@ -1627,6 +1583,23 @@ def serialize_literal(value: LiteralVar):
     return value._var_value
 
 
+@serializers.serializer
+def serialize_rust_literal(value: RustLiteralVar):
+    """Serialize a Rust-backed literal var (the cutover target of LiteralVar).
+
+    Registered separately because ``RustLiteralVar`` is not a Python
+    ``LiteralVar`` subclass, so ``get_serializer`` cannot reach
+    ``serialize_literal`` via ``issubclass``.
+
+    Args:
+        value: The Rust literal var to serialize.
+
+    Returns:
+        The serialized literal value.
+    """
+    return value._var_value
+
+
 def get_python_literal(value: LiteralVar | Any) -> Any | None:
     """Get the Python literal value.
 
@@ -1645,6 +1618,7 @@ def get_python_literal(value: LiteralVar | Any) -> Any | None:
 
 P = ParamSpec("P")
 T = TypeVar("T")
+U = TypeVar("U")
 
 
 # NoReturn is used to match CustomVarOperationReturn with no type hint.
@@ -1955,6 +1929,15 @@ class CachedVarOperation:
         ))
 
 
+_PY_AND_IMPORT: ImportDict = {
+    f"$/{constants.Dirs.STATE_PATH}": [ImportVar(tag="pyAnd")],
+}
+
+_PY_OR_IMPORT: ImportDict = {
+    f"$/{constants.Dirs.STATE_PATH}": [ImportVar(tag="pyOr")],
+}
+
+
 def and_operation(
     a: Var[VAR_TYPE] | Any, b: Var[OTHER_VAR_TYPE] | Any
 ) -> Var[VAR_TYPE | OTHER_VAR_TYPE]:
@@ -1982,8 +1965,9 @@ def _and_operation(a: Var, b: Var):
         The result of the logical AND operation.
     """
     return var_operation_return(
-        js_expression=f"({a} && {b})",
+        js_expression=f"pyAnd({a}, () => ({b}))",
         var_type=unionize(a._var_type, b._var_type),
+        var_data=VarData(imports=_PY_AND_IMPORT),
     )
 
 
@@ -2014,8 +1998,9 @@ def _or_operation(a: Var, b: Var):
         The result of the logical OR operation.
     """
     return var_operation_return(
-        js_expression=f"({a} || {b})",
+        js_expression=f"pyOr({a}, () => ({b}))",
         var_type=unionize(a._var_type, b._var_type),
+        var_data=VarData(imports=_PY_OR_IMPORT),
     )
 
 
@@ -2372,7 +2357,6 @@ class ComputedVar(Var[RETURN_TYPE]):
                 field_name,
                 var_data=VarData.from_state(state_where_defined, self._name),
                 result_var_type=self._var_type,
-                existing_var=self,
             )
 
         if not self._cache:
@@ -2912,16 +2896,21 @@ class CustomVarOperation(CachedVarOperation, Var[T]):
             _var_data: Additional hooks and imports associated with the Var.
 
         Returns:
-            The CustomVarOperation.
+            The CustomVarOperation (a RustVar).
         """
-        return CustomVarOperation(
-            _js_expr="",
-            _var_type=return_var._var_type,
-            _var_data=_var_data,
-            _name=name,
-            _args=args,
-            _return=return_var,
+        # A var operation's rendered name is the (already marker-decoded) return
+        # expression; its var_data is the merge of each arg, the return, and any
+        # extra. Build the Rust var directly — the operation result is a RustVar.
+        var_data = VarData.merge(
+            *(arg[1]._get_all_var_data() for arg in args),
+            return_var._get_all_var_data(),
+            _var_data,
         )
+        return Var(
+            _js_expr=str(return_var),
+            _var_type=return_var._var_type,
+            _var_data=var_data,
+        ).guess_type()
 
 
 class NoneVar(Var[None], python_types=type(None)):
@@ -3164,7 +3153,6 @@ def dispatch(
     field_name: str,
     var_data: VarData,
     result_var_type: GenericType,
-    existing_var: Var | None = None,
 ) -> Var:
     """Dispatch a Var to the appropriate transformation function.
 
@@ -3172,7 +3160,6 @@ def dispatch(
         field_name: The name of the field.
         var_data: The VarData associated with the Var.
         result_var_type: The type of the Var.
-        existing_var: The existing Var to transform. Optional.
 
     Returns:
         The transformed Var.
@@ -3220,28 +3207,14 @@ def dispatch(
 
         fn_return_type = fn_return_generic_args[0]
 
-        var = (
-            Var(
-                field_name,
-                _var_data=var_data,
-                _var_type=fn_return_type,
-            ).guess_type()
-            if existing_var is None
-            else existing_var._replace(
-                _var_type=fn_return_type,
-                _var_data=var_data,
-                _js_expr=field_name,
-            ).guess_type()
-        )
+        var = Var(
+            field_name,
+            _var_data=var_data,
+            _var_type=fn_return_type,
+        ).guess_type()
 
         return fn(var)
 
-    if existing_var is not None:
-        return existing_var._replace(
-            _js_expr=field_name,
-            _var_data=var_data,
-            _var_type=result_var_type,
-        ).guess_type()
     return Var(
         field_name,
         _var_data=var_data,
@@ -3691,3 +3664,1256 @@ class EvenMoreBasicBaseState(metaclass=BaseStateMeta):
                 annotated_type=var._var_type,
             )
         cls.__fields__[name] = new_field
+
+
+NUMBER_T = TypeVarExt(
+    "NUMBER_T",
+    bound=(int | float | Decimal),
+    default=(int | float | Decimal),
+    covariant=True,
+)
+
+
+def raise_unsupported_operand_types(
+    operator: str, operands_types: tuple[type, ...]
+) -> NoReturn:
+    """Raise an unsupported operand types error.
+
+    Args:
+        operator: The operator.
+        operands_types: The types of the operands.
+
+    Raises:
+        VarTypeError: The operand types are unsupported.
+    """
+    msg = f"Unsupported Operand type(s) for {operator}: {', '.join(t.__name__ for t in operands_types)}"
+    raise VarTypeError(msg)
+
+
+class NumberVar(Var[NUMBER_T], python_types=(int, float, Decimal)):
+    """Type marker for immutable number vars.
+
+    The behavior (operators, methods) is implemented by ``RustVar``; this class
+    survives only to anchor the type registration and serve as an isinstance /
+    ``.to(...)`` / annotation target.
+    """
+
+
+class BooleanVar(NumberVar[bool], python_types=bool):
+    """Type marker for immutable boolean vars (see ``NumberVar``)."""
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class LiteralNumberVar(LiteralVar[NUMBER_T], NumberVar[NUMBER_T]):
+    """Registry anchor for literal number vars; instances are ``RustLiteralVar``."""
+
+    _var_value: float | int | Decimal = dataclasses.field(default=0)
+
+    def json(self) -> str:
+        """Get the JSON representation of the var.
+
+        Returns:
+            The JSON representation of the var.
+
+        Raises:
+            PrimitiveUnserializableToJSONError: If the var is unserializable to JSON.
+        """
+        if isinstance(self._var_value, Decimal):
+            return json.dumps(float(self._var_value))
+        if math.isinf(self._var_value) or math.isnan(self._var_value):
+            msg = f"No valid JSON representation for {self}"
+            raise PrimitiveUnserializableToJSONError(msg)
+        return json.dumps(self._var_value)
+
+    def __hash__(self) -> int:
+        """Calculate the hash value of the object.
+
+        Returns:
+            int: The hash value of the object.
+        """
+        return hash((type(self).__name__, self._var_value))
+
+    @classmethod
+    def _get_all_var_data_without_creating_var(
+        cls, value: float | int | Decimal
+    ) -> VarData | None:
+        """Get all the var data without creating the var.
+
+        Args:
+            value: The value of the var.
+
+        Returns:
+            The var data.
+        """
+        return None
+
+    @classmethod
+    def create(cls, value: float | int | Decimal, _var_data: VarData | None = None):
+        """Create the number var.
+
+        Args:
+            value: The value of the var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The number var.
+        """
+        if math.isinf(value):
+            js_expr = "Infinity" if value > 0 else "-Infinity"
+        elif math.isnan(value):
+            js_expr = "NaN"
+        else:
+            js_expr = str(value)
+
+        return cls(
+            _js_expr=js_expr,
+            _var_type=type(value),
+            _var_data=_var_data,
+            _var_value=value,
+        )
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class LiteralBooleanVar(LiteralVar[bool], BooleanVar):
+    """Registry anchor for literal boolean vars; instances are ``RustLiteralVar``."""
+
+    _var_value: bool = dataclasses.field(default=False)
+
+    def json(self) -> str:
+        """Get the JSON representation of the var.
+
+        Returns:
+            The JSON representation of the var.
+        """
+        return "true" if self._var_value else "false"
+
+    def __hash__(self) -> int:
+        """Calculate the hash value of the object.
+
+        Returns:
+            int: The hash value of the object.
+        """
+        return hash((type(self).__name__, self._var_value))
+
+    @classmethod
+    def _get_all_var_data_without_creating_var(cls, value: bool) -> VarData | None:
+        """Get all the var data without creating the var.
+
+        Args:
+            value: The value of the var.
+
+        Returns:
+            The var data.
+        """
+        return None
+
+    @classmethod
+    def create(cls, value: bool, _var_data: VarData | None = None):
+        """Create the boolean var.
+
+        Args:
+            value: The value of the var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The boolean var.
+        """
+        return cls(
+            _js_expr="true" if value else "false",
+            _var_type=bool,
+            _var_data=_var_data,
+            _var_value=value,
+        )
+
+
+_IS_TRUE_IMPORT: ImportDict = {
+    f"$/{constants.Dirs.STATE_PATH}": [ImportVar(tag="isTrue")],
+}
+
+_IS_NOT_NULL_OR_UNDEFINED_IMPORT: ImportDict = {
+    f"$/{constants.Dirs.STATE_PATH}": [ImportVar(tag="isNotNullOrUndefined")],
+}
+
+
+def comparison_operator(
+    func: Callable[[Var, Var], str],
+) -> Callable[[Var | Any, Var | Any], BooleanVar]:
+    """Decorator to create a comparison operation.
+
+    Args:
+        func: The comparison operation function.
+
+    Returns:
+        The comparison operation.
+    """
+
+    @var_operation
+    def operation(lhs: Var, rhs: Var):
+        return var_operation_return(
+            js_expression=func(lhs, rhs),
+            var_type=bool,
+        )
+
+    def wrapper(lhs: Var | Any, rhs: Var | Any) -> BooleanVar:
+        """Create the comparison operation.
+
+        Args:
+            lhs: The first value.
+            rhs: The second value.
+
+        Returns:
+            The comparison operation.
+        """
+        return operation(lhs, rhs)
+
+    return wrapper
+
+
+@comparison_operator
+def equal_operation(lhs: Var, rhs: Var):
+    """Equal comparison.
+
+    Args:
+        lhs: The first value.
+        rhs: The second value.
+
+    Returns:
+        The result of the comparison.
+    """
+    return f"({lhs}?.valueOf?.() === {rhs}?.valueOf?.())"
+
+
+@var_operation
+def boolify(value: Var):
+    """Convert the value to a boolean.
+
+    Args:
+        value: The value.
+
+    Returns:
+        The boolean value.
+    """
+    return var_operation_return(
+        js_expression=f"isTrue({value})",
+        var_type=bool,
+        var_data=VarData(imports=_IS_TRUE_IMPORT),
+    )
+
+
+@var_operation
+def is_not_none_operation(value: Var):
+    """Check if the value is not None.
+
+    Args:
+        value: The value.
+
+    Returns:
+        The boolean value.
+    """
+    return var_operation_return(
+        js_expression=f"isNotNullOrUndefined({value})",
+        var_type=bool,
+        var_data=VarData(imports=_IS_NOT_NULL_OR_UNDEFINED_IMPORT),
+    )
+
+
+@var_operation
+def ternary_operation(
+    condition: Var[bool], if_true: Var[T], if_false: Var[U]
+) -> CustomVarOperationReturn[T | U]:
+    """Create a ternary operation.
+
+    Args:
+        condition: The condition.
+        if_true: The value if the condition is true.
+        if_false: The value if the condition is false.
+
+    Returns:
+        The ternary operation.
+    """
+    type_value: type[T] | type[U] = unionize(if_true._var_type, if_false._var_type)
+    value: CustomVarOperationReturn[T | U] = var_operation_return(
+        js_expression=f"({condition} ? {if_true} : {if_false})",
+        var_type=type_value,
+    )
+    return value
+
+
+NUMBER_TYPES = (int, float, Decimal, NumberVar)
+
+
+OBJECT_TYPE = TypeVar("OBJECT_TYPE", covariant=True)
+
+
+def _determine_value_type(var_type: GenericType):
+    """Resolve the value type of a mapping/dataclass/typeddict var type.
+
+    Args:
+        var_type: The object var's type.
+
+    Returns:
+        The unionized value type (``Any`` when undeterminable).
+    """
+    origin_var_type = get_origin(var_type) or var_type
+
+    if origin_var_type in types.UnionTypes:
+        return unionize(*[
+            _determine_value_type(arg)
+            for arg in get_args(var_type)
+            if arg is not type(None)
+        ])
+
+    if is_typeddict(origin_var_type) or dataclasses.is_dataclass(origin_var_type):
+        annotations = get_type_hints(origin_var_type)
+        return unionize(*annotations.values())
+
+    if origin_var_type in (dict, Mapping):
+        args = get_args(var_type)
+        return args[1] if args else Any
+
+    return Any
+
+
+_OBJECT_PYTHON_TYPES = (Mapping,)
+if find_spec("pydantic"):
+    import pydantic
+
+    _OBJECT_PYTHON_TYPES += (pydantic.BaseModel,)
+
+
+class ObjectVar(Var[OBJECT_TYPE], python_types=_OBJECT_PYTHON_TYPES):
+    """Type marker for immutable object vars (behavior is in ``RustVar``)."""
+
+
+class RestProp(ObjectVar[dict[str, Any]]):
+    """A special object var representing forwarded rest props."""
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class LiteralObjectVar(
+    CachedVarOperation, ObjectVar[OBJECT_TYPE], LiteralVar[OBJECT_TYPE]
+):
+    """Registry anchor for literal object vars; plain dicts mint a RustLiteralVar."""
+
+    _var_value: Mapping[Var | Any, Var | Any] = dataclasses.field(default_factory=dict)
+
+    @cached_property_no_lock
+    def _cached_var_name(self) -> str:
+        """The name of the var.
+
+        Returns:
+            The name of the var.
+        """
+        return (
+            "({ "
+            + ", ".join([
+                f"[{LiteralVar.create(key)!s}] : {LiteralVar.create(value)!s}"
+                for key, value in self._var_value.items()
+            ])
+            + " })"
+        )
+
+    def json(self) -> str:
+        """Get the JSON representation of the object.
+
+        Returns:
+            The JSON representation of the object.
+
+        Raises:
+            TypeError: The keys and values of the object must be literal vars to get the JSON representation
+        """
+        keys_and_values = []
+        for key, value in self._var_value.items():
+            key = LiteralVar.create(key)
+            value = LiteralVar.create(value)
+            if not isinstance(key, LiteralVar) or not isinstance(value, LiteralVar):
+                msg = "The keys and values of the object must be literal vars to get the JSON representation."
+                raise TypeError(msg)
+            keys_and_values.append(f"{key.json()}:{value.json()}")
+        return "{" + ", ".join(keys_and_values) + "}"
+
+    def __hash__(self) -> int:
+        """Get the hash of the var.
+
+        Returns:
+            The hash of the var.
+        """
+        return hash((type(self).__name__, self._js_expr))
+
+    @classmethod
+    def _get_all_var_data_without_creating_var(
+        cls,
+        value: Mapping,
+    ) -> VarData | None:
+        """Get all the var data without creating a var.
+
+        Args:
+            value: The value to get the var data from.
+
+        Returns:
+            The var data.
+        """
+        return VarData.merge(
+            LiteralArrayVar._get_all_var_data_without_creating_var(value),
+            LiteralArrayVar._get_all_var_data_without_creating_var(value.values()),
+        )
+
+    @cached_property_no_lock
+    def _cached_get_all_var_data(self) -> VarData | None:
+        """Get all the var data.
+
+        Returns:
+            The var data.
+        """
+        return VarData.merge(
+            LiteralArrayVar._get_all_var_data_without_creating_var(self._var_value),
+            LiteralArrayVar._get_all_var_data_without_creating_var(
+                self._var_value.values()
+            ),
+            self._var_data,
+        )
+
+    @classmethod
+    def create(
+        cls,
+        _var_value: Mapping,
+        _var_type: type[OBJECT_TYPE] | None = None,
+        _var_data: VarData | None = None,
+    ) -> LiteralObjectVar[OBJECT_TYPE]:
+        """Create the literal object var.
+
+        Args:
+            _var_value: The value of the var.
+            _var_type: The type of the var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The literal object var.
+
+        Raises:
+            TypeError: If the value is not a mapping type or a dataclass.
+        """
+        if not isinstance(_var_value, Mapping):
+            from reflex_base.utils.serializers import serialize
+
+            serialized = serialize(_var_value, get_type=False)
+            if not isinstance(serialized, Mapping):
+                msg = f"Expected a mapping type or a dataclass, got {_var_value!r} of type {type(_var_value).__name__}."
+                raise TypeError(msg)
+
+            return LiteralObjectVar(
+                _js_expr="",
+                _var_type=(type(_var_value) if _var_type is None else _var_type),
+                _var_data=_var_data,
+                _var_value=serialized,
+            )
+
+        return LiteralObjectVar(
+            _js_expr="",
+            _var_type=(figure_out_type(_var_value) if _var_type is None else _var_type),
+            _var_data=_var_data,
+            _var_value=_var_value,
+        )
+
+
+ARRAY_VAR_TYPE = TypeVar("ARRAY_VAR_TYPE", bound=Sequence, covariant=True)
+OTHER_ARRAY_VAR_TYPE = TypeVar("OTHER_ARRAY_VAR_TYPE", bound=Sequence, covariant=True)
+STRING_TYPE = TypeVarExt("STRING_TYPE", default=str, covariant=True)
+
+
+class ArrayVar(Var[ARRAY_VAR_TYPE], python_types=(Sequence, set)):
+    """Type marker for immutable array vars (behavior is in ``RustVar``)."""
+
+
+class StringVar(Var[STRING_TYPE], python_types=str):
+    """Type marker for immutable string vars (behavior is in ``RustVar``)."""
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class LiteralArrayVar(
+    CachedVarOperation, LiteralVar[ARRAY_VAR_TYPE], ArrayVar[ARRAY_VAR_TYPE]
+):
+    """Registry anchor for literal array vars; plain lists mint a RustLiteralVar."""
+
+    _var_value: Sequence[Var | Any] = dataclasses.field(default=())
+
+    @cached_property_no_lock
+    def _cached_var_name(self) -> str:
+        """The name of the var.
+
+        Returns:
+            The name of the var.
+        """
+        return (
+            "["
+            + ", ".join([
+                str(LiteralVar.create(element)) for element in self._var_value
+            ])
+            + "]"
+        )
+
+    @classmethod
+    def _get_all_var_data_without_creating_var(cls, value: Iterable) -> VarData | None:
+        """Get all the VarData associated with the Var without creating a Var.
+
+        Args:
+            value: The value to get the VarData for.
+
+        Returns:
+            The VarData associated with the Var.
+        """
+        return VarData.merge(*[
+            LiteralVar._get_all_var_data_without_creating_var_dispatch(element)
+            for element in value
+        ])
+
+    @cached_property_no_lock
+    def _cached_get_all_var_data(self) -> VarData | None:
+        """Get all the VarData associated with the Var.
+
+        Returns:
+            The VarData associated with the Var.
+        """
+        return VarData.merge(
+            *[
+                LiteralVar._get_all_var_data_without_creating_var_dispatch(element)
+                for element in self._var_value
+            ],
+            self._var_data,
+        )
+
+    def __hash__(self) -> int:
+        """Get the hash of the var.
+
+        Returns:
+            The hash of the var.
+        """
+        return hash((self.__class__.__name__, self._js_expr))
+
+    def json(self) -> str:
+        """Get the JSON representation of the var.
+
+        Returns:
+            The JSON representation of the var.
+
+        Raises:
+            TypeError: If the array elements are not of type LiteralVar.
+        """
+        elements = []
+        for element in self._var_value:
+            element_var = LiteralVar.create(element)
+            if not isinstance(element_var, LiteralVar):
+                msg = f"Array elements must be of type LiteralVar, not {type(element_var)}"
+                raise TypeError(msg)
+            elements.append(element_var.json())
+
+        return "[" + ", ".join(elements) + "]"
+
+    @classmethod
+    def create(
+        cls,
+        value: OTHER_ARRAY_VAR_TYPE,
+        _var_type: type[OTHER_ARRAY_VAR_TYPE] | None = None,
+        _var_data: VarData | None = None,
+    ) -> LiteralArrayVar[OTHER_ARRAY_VAR_TYPE]:
+        """Create a var from a string value.
+
+        Args:
+            value: The value to create the var from.
+            _var_type: The type of the var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The var.
+        """
+        return LiteralArrayVar(
+            _js_expr="",
+            _var_type=figure_out_type(value) if _var_type is None else _var_type,
+            _var_data=_var_data,
+            _var_value=value,
+        )
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class LiteralStringVar(LiteralVar[STRING_TYPE], StringVar[STRING_TYPE]):
+    """Registry anchor for literal string vars; plain strings mint a RustLiteralVar."""
+
+    _var_value: str = dataclasses.field(default="")
+
+    @classmethod
+    def _get_all_var_data_without_creating_var(cls, value: str) -> VarData | None:
+        """Get all the VarData associated with the Var without creating a Var.
+
+        Args:
+            value: The value to get the VarData for.
+
+        Returns:
+            The VarData associated with the Var.
+        """
+        if constants.REFLEX_VAR_OPENING_TAG not in value:
+            return None
+        return cls.create(value)._get_all_var_data()
+
+    @classmethod
+    def create(
+        cls,
+        value: str,
+        _var_type: GenericType | None = None,
+        _var_data: VarData | None = None,
+    ) -> StringVar:
+        """Create a var from a string value.
+
+        Args:
+            value: The value to create the var from.
+            _var_type: The type of the var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The var.
+        """
+        # Determine var type in case the value is inherited from str.
+        _var_type = _var_type or type(value) or str
+
+        if constants.REFLEX_VAR_OPENING_TAG in value:
+            strings_and_vals: list[Var | str] = []
+            offset = 0
+
+            # Find all tags
+            while m := _decode_var_pattern.search(value):
+                start, end = m.span()
+
+                strings_and_vals.append(value[:start])
+
+                serialized_data = m.group(1)
+
+                if serialized_data.isnumeric() or (
+                    serialized_data[0] == "-" and serialized_data[1:].isnumeric()
+                ):
+                    # This is a global immutable var.
+                    var = _global_vars[int(serialized_data)]
+                    strings_and_vals.append(var)
+                    value = value[(end + len(var._js_expr)) :]
+
+                offset += end - start
+
+            strings_and_vals.append(value)
+
+            filtered_strings_and_vals = [
+                s for s in strings_and_vals if isinstance(s, Var) or s
+            ]
+            if len(filtered_strings_and_vals) == 1:
+                only_string = filtered_strings_and_vals[0]
+                if isinstance(only_string, str):
+                    return LiteralVar.create(only_string).to(StringVar, _var_type)
+                return only_string.to(StringVar, only_string._var_type)
+
+            if len(
+                literal_strings := [
+                    s
+                    for s in filtered_strings_and_vals
+                    if isinstance(s, str) or var_isinstance(s, LiteralStringVar)
+                ]
+            ) == len(filtered_strings_and_vals):
+                return LiteralStringVar.create(
+                    "".join(
+                        s._var_value if var_isinstance(s, LiteralStringVar) else s
+                        for s in literal_strings
+                    ),
+                    _var_type=_var_type,
+                    _var_data=VarData.merge(
+                        _var_data,
+                        *(
+                            s._get_all_var_data()
+                            for s in filtered_strings_and_vals
+                            if isinstance(s, Var)
+                        ),
+                    ),
+                )
+
+            concat_result = ConcatVarOperation.create(
+                *filtered_strings_and_vals,
+                _var_data=_var_data,
+            )
+
+            return (
+                concat_result
+                if _var_type is str
+                else concat_result.to(StringVar, _var_type)
+            )
+
+        return LiteralStringVar(
+            _js_expr=json.dumps(value),
+            _var_type=_var_type,
+            _var_data=_var_data,
+            _var_value=value,
+        )
+
+    def __hash__(self) -> int:
+        """Get the hash of the var.
+
+        Returns:
+            The hash of the var.
+        """
+        return hash((type(self).__name__, self._var_value))
+
+    def json(self) -> str:
+        """Get the JSON representation of the var.
+
+        Returns:
+            The JSON representation of the var.
+        """
+        return json.dumps(self._var_value)
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class ConcatVarOperation(CachedVarOperation, StringVar[str]):
+    """Representing a concatenation of literal string vars."""
+
+    _var_value: tuple[Var, ...] = dataclasses.field(default_factory=tuple)
+
+    @cached_property_no_lock
+    def _cached_var_name(self) -> str:
+        """The name of the var.
+
+        Returns:
+            The name of the var.
+        """
+        list_of_strs: list[str | Var] = []
+        last_string = ""
+        for var in self._var_value:
+            if var_isinstance(var, LiteralStringVar):
+                last_string += var._var_value
+            else:
+                if last_string:
+                    list_of_strs.append(last_string)
+                    last_string = ""
+                list_of_strs.append(var)
+
+        if last_string:
+            list_of_strs.append(last_string)
+
+        list_of_strs_filtered = [
+            str(LiteralVar.create(s)) for s in list_of_strs if isinstance(s, Var) or s
+        ]
+
+        if len(list_of_strs_filtered) == 1:
+            return list_of_strs_filtered[0]
+
+        return "(" + "+".join(list_of_strs_filtered) + ")"
+
+    @cached_property_no_lock
+    def _cached_get_all_var_data(self) -> VarData | None:
+        """Get all the VarData associated with the Var.
+
+        Returns:
+            The VarData associated with the Var.
+        """
+        return VarData.merge(
+            *[
+                var._get_all_var_data()
+                for var in self._var_value
+                if isinstance(var, Var)
+            ],
+            self._var_data,
+        )
+
+    @classmethod
+    def create(
+        cls,
+        *value: Var | str,
+        _var_data: VarData | None = None,
+    ) -> ConcatVarOperation:
+        """Create a var from a string value.
+
+        Args:
+            *value: The values to concatenate.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The var.
+        """
+        return cls(
+            _js_expr="",
+            _var_type=str,
+            _var_data=_var_data,
+            _var_value=tuple(map(LiteralVar.create, value)),
+        )
+
+
+def _determine_value_of_array_index(
+    var_type: GenericType, index: int | float | Decimal | None = None
+):
+    """Determine the element type of an array index.
+
+    Args:
+        var_type: The type of the array.
+        index: The index of the array.
+
+    Returns:
+        The value of the array index.
+    """
+    origin_var_type = get_origin(var_type) or var_type
+    if origin_var_type in types.UnionTypes:
+        return unionize(*[
+            _determine_value_of_array_index(t, index)
+            for t in get_args(var_type)
+            if t is not type(None)
+        ])
+    if origin_var_type is range:
+        return int
+    if origin_var_type in (Sequence, Iterable, list, set):
+        args = get_args(var_type)
+        return args[0] if args else Any
+    if origin_var_type is tuple:
+        args = get_args(var_type)
+        if len(args) == 2 and args[1] is ...:
+            return args[0]
+        return (
+            args[int(index) % len(args)]
+            if args and index is not None
+            else (unionize(*args) if args else Any)
+        )
+    return Any
+
+
+@var_operation
+def string_replace_operation(
+    string: StringVar[Any], search_value: StringVar | str, new_value: StringVar | str
+):
+    """Replace a string with a value.
+
+    Args:
+        string: The string.
+        search_value: The string to search.
+        new_value: The value to be replaced with.
+
+    Returns:
+        The string replace operation.
+    """
+    return var_operation_return(
+        js_expression=f"{string}.replaceAll({search_value}, {new_value})",
+        var_type=str,
+    )
+
+
+V1 = TypeVar("V1")
+V2 = TypeVar("V2")
+V3 = TypeVar("V3")
+V4 = TypeVar("V4")
+V5 = TypeVar("V5")
+V6 = TypeVar("V6")
+R = TypeVar("R")
+
+
+class ReflexCallable(Protocol[P, R]):
+    """Protocol for a callable."""
+
+    __call__: Callable[P, R]
+
+
+CALLABLE_TYPE = TypeVar("CALLABLE_TYPE", bound=ReflexCallable, covariant=True)
+OTHER_CALLABLE_TYPE = TypeVar(
+    "OTHER_CALLABLE_TYPE", bound=ReflexCallable, covariant=True
+)
+
+
+def _is_js_identifier_start(char: str) -> bool:
+    """Check whether a character can start a JavaScript identifier.
+
+    Returns:
+        True if the character is valid as the first character of a JS identifier.
+    """
+    return char == "$" or char == "_" or char.isalpha()
+
+
+def _is_js_identifier_char(char: str) -> bool:
+    """Check whether a character can continue a JavaScript identifier.
+
+    Returns:
+        True if the character is valid within a JS identifier.
+    """
+    return _is_js_identifier_start(char) or char.isdigit()
+
+
+def _starts_with_arrow_function(expr: str) -> bool:
+    """Check whether an expression starts with an inline arrow function.
+
+    Returns:
+        True if the expression begins with an arrow function.
+    """
+    if "=>" not in expr:
+        return False
+
+    expr = expr.lstrip()
+    if not expr:
+        return False
+
+    if expr.startswith("async"):
+        async_remainder = expr[len("async") :]
+        if async_remainder[:1].isspace():
+            expr = async_remainder.lstrip()
+
+    if not expr:
+        return False
+
+    if _is_js_identifier_start(expr[0]):
+        end_index = 1
+        while end_index < len(expr) and _is_js_identifier_char(expr[end_index]):
+            end_index += 1
+        return expr[end_index:].lstrip().startswith("=>")
+
+    if not expr.startswith("("):
+        return False
+
+    depth = 0
+    string_delimiter: str | None = None
+    escaped = False
+
+    for index, char in enumerate(expr):
+        if string_delimiter is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == string_delimiter:
+                string_delimiter = None
+            continue
+
+        if char in {"'", '"', "`"}:
+            string_delimiter = char
+            continue
+
+        if char == "(":
+            depth += 1
+            continue
+
+        if char == ")":
+            depth -= 1
+            if depth == 0:
+                return expr[index + 1 :].lstrip().startswith("=>")
+
+    return False
+
+
+class FunctionVar(Var[CALLABLE_TYPE], default_type=ReflexCallable[Any, Any]):
+    """Base class for immutable function vars."""
+
+    def partial(self, *args: Var | Any) -> FunctionVar:
+        """Partially apply the function with the given arguments.
+
+        Args:
+            *args: The arguments to partially apply the function with.
+
+        Returns:
+            The partially applied function.
+        """
+        if not args:
+            return self
+        return ArgsFunctionOperation.create(
+            ("...args",),
+            VarOperationCall.create(self, *args, Var(_js_expr="...args")),
+        )
+
+    def call(self, *args: Var | Any) -> Var:
+        """Call the function with the given arguments.
+
+        Args:
+            *args: The arguments to call the function with.
+
+        Returns:
+            The function call operation.
+        """
+        return VarOperationCall.create(self, *args).guess_type()
+
+    __call__ = call
+
+
+class BuilderFunctionVar(
+    FunctionVar[CALLABLE_TYPE], default_type=ReflexCallable[Any, Any]
+):
+    """Base class for immutable function vars with the builder pattern."""
+
+    __call__ = FunctionVar.partial
+
+
+class FunctionStringVar(FunctionVar[CALLABLE_TYPE]):
+    """Base class for immutable function vars from a string."""
+
+    @classmethod
+    def create(
+        cls,
+        func: str,
+        _var_type: type[OTHER_CALLABLE_TYPE] = ReflexCallable[Any, Any],
+        _var_data: VarData | None = None,
+    ) -> FunctionStringVar[OTHER_CALLABLE_TYPE]:
+        """Create a new function var from a string.
+
+        Args:
+            func: The function to call.
+            _var_type: The type of the Var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The function var.
+        """
+        return FunctionStringVar(
+            _js_expr=func,
+            _var_type=_var_type,
+            _var_data=_var_data,
+        )
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class VarOperationCall(Generic[P, R], CachedVarOperation, Var[R]):
+    """Base class for immutable vars that are the result of a function call."""
+
+    _func: FunctionVar[ReflexCallable[P, R]] | None = dataclasses.field(default=None)
+    _args: tuple[Var | Any, ...] = dataclasses.field(default_factory=tuple)
+
+    @cached_property_no_lock
+    def _cached_var_name(self) -> str:
+        """The name of the var.
+
+        Returns:
+            The name of the var.
+        """
+        func_expr = str(self._func)
+        if _starts_with_arrow_function(func_expr) and not format.is_wrapped(
+            func_expr, "("
+        ):
+            func_expr = format.wrap(func_expr, "(")
+
+        return f"({func_expr}({', '.join([str(LiteralVar.create(arg)) for arg in self._args])}))"
+
+    @cached_property_no_lock
+    def _cached_get_all_var_data(self) -> VarData | None:
+        """Get all the var data associated with the var.
+
+        Returns:
+            All the var data associated with the var.
+        """
+        return VarData.merge(
+            self._func._get_all_var_data() if self._func is not None else None,
+            *[LiteralVar.create(arg)._get_all_var_data() for arg in self._args],
+            self._var_data,
+        )
+
+    @classmethod
+    def create(
+        cls,
+        func: FunctionVar[ReflexCallable[P, R]],
+        *args: Var | Any,
+        _var_type: GenericType = Any,
+        _var_data: VarData | None = None,
+    ) -> VarOperationCall:
+        """Create a new function call var.
+
+        Args:
+            func: The function to call.
+            *args: The arguments to call the function with.
+            _var_type: The type of the Var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The function call var.
+        """
+        function_return_type = (
+            func._var_type.__args__[1]
+            if getattr(func._var_type, "__args__", None)
+            else Any
+        )
+        var_type = _var_type if _var_type is not Any else function_return_type
+        return cls(
+            _js_expr="",
+            _var_type=var_type,
+            _var_data=_var_data,
+            _func=func,
+            _args=args,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class DestructuredArg:
+    """Class for destructured arguments."""
+
+    fields: tuple[str, ...] = ()
+    rest: str | None = None
+
+    def to_javascript(self) -> str:
+        """Convert the destructured argument to JavaScript.
+
+        Returns:
+            The destructured argument in JavaScript.
+        """
+        inner = ", ".join(self.fields)
+        if self.rest:
+            inner = f"{inner}, ...{self.rest}" if inner else f"...{self.rest}"
+        return format.wrap(inner, "{", "}")
+
+
+@dataclasses.dataclass(frozen=True)
+class FunctionArgs:
+    """Class for function arguments."""
+
+    args: tuple[str | DestructuredArg, ...] = ()
+    rest: str | None = None
+
+
+def format_args_function_operation(
+    args: FunctionArgs, return_expr: Var | Any, explicit_return: bool
+) -> str:
+    """Format an args function operation.
+
+    Args:
+        args: The function arguments.
+        return_expr: The return expression.
+        explicit_return: Whether to use explicit return syntax.
+
+    Returns:
+        The formatted args function operation.
+    """
+    arg_parts = [
+        arg if isinstance(arg, str) else arg.to_javascript() for arg in args.args
+    ]
+    if args.rest:
+        arg_parts.append(f"...{args.rest}")
+    arg_names_str = ", ".join(arg_parts)
+
+    return_expr_str = str(LiteralVar.create(return_expr))
+
+    # Wrap return expression in curly braces if explicit return syntax is used.
+    return_expr_str_wrapped = (
+        format.wrap(return_expr_str, "{", "}") if explicit_return else return_expr_str
+    )
+
+    return f"(({arg_names_str}) => {return_expr_str_wrapped})"
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class ArgsFunctionOperation(CachedVarOperation, FunctionVar):
+    """Base class for immutable function defined via arguments and return expression."""
+
+    _args: FunctionArgs = dataclasses.field(default_factory=FunctionArgs)
+    _return_expr: Var | Any = dataclasses.field(default=None)
+    _explicit_return: bool = dataclasses.field(default=False)
+
+    @cached_property_no_lock
+    def _cached_var_name(self) -> str:
+        """The name of the var.
+
+        Returns:
+            The name of the var.
+        """
+        return format_args_function_operation(
+            self._args, self._return_expr, self._explicit_return
+        )
+
+    @classmethod
+    def create(
+        cls,
+        args_names: Sequence[str | DestructuredArg],
+        return_expr: Var | Any,
+        rest: str | None = None,
+        explicit_return: bool = False,
+        _var_type: GenericType = Callable,
+        _var_data: VarData | None = None,
+    ):
+        """Create a new function var.
+
+        Args:
+            args_names: The names of the arguments.
+            return_expr: The return expression of the function.
+            rest: The name of the rest argument.
+            explicit_return: Whether to use explicit return syntax.
+            _var_type: The type of the Var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The function var.
+        """
+        return_expr = Var.create(return_expr)
+        return cls(
+            _js_expr="",
+            _var_type=_var_type,
+            _var_data=_var_data,
+            _args=FunctionArgs(args=tuple(args_names), rest=rest),
+            _return_expr=return_expr,
+            _explicit_return=explicit_return,
+        )
+
+
+@dataclasses.dataclass(eq=False, frozen=True, slots=True)
+class ArgsFunctionOperationBuilder(CachedVarOperation, BuilderFunctionVar):
+    """Base class for immutable function defined via arguments and return expression with the builder pattern."""
+
+    _args: FunctionArgs = dataclasses.field(default_factory=FunctionArgs)
+    _return_expr: Var | Any = dataclasses.field(default=None)
+    _explicit_return: bool = dataclasses.field(default=False)
+
+    @cached_property_no_lock
+    def _cached_var_name(self) -> str:
+        """The name of the var.
+
+        Returns:
+            The name of the var.
+        """
+        return format_args_function_operation(
+            self._args, self._return_expr, self._explicit_return
+        )
+
+    @classmethod
+    def create(
+        cls,
+        args_names: Sequence[str | DestructuredArg],
+        return_expr: Var | Any,
+        rest: str | None = None,
+        explicit_return: bool = False,
+        _var_type: GenericType = Callable,
+        _var_data: VarData | None = None,
+    ):
+        """Create a new function var.
+
+        Args:
+            args_names: The names of the arguments.
+            return_expr: The return expression of the function.
+            rest: The name of the rest argument.
+            explicit_return: Whether to use explicit return syntax.
+            _var_type: The type of the Var.
+            _var_data: Additional hooks and imports associated with the Var.
+
+        Returns:
+            The function var.
+        """
+        return_expr = Var.create(return_expr)
+        return cls(
+            _js_expr="",
+            _var_type=_var_type,
+            _var_data=_var_data,
+            _args=FunctionArgs(args=tuple(args_names), rest=rest),
+            _return_expr=return_expr,
+            _explicit_return=explicit_return,
+        )
+
+
+JSON_STRINGIFY = FunctionStringVar.create(
+    "JSON.stringify", _var_type=ReflexCallable[[Any], str]
+)
+ARRAY_ISARRAY = FunctionStringVar.create(
+    "Array.isArray", _var_type=ReflexCallable[[Any], bool]
+)
+PROTOTYPE_TO_STRING = FunctionStringVar.create(
+    "((__to_string) => __to_string.toString())",
+    _var_type=ReflexCallable[[Any], str],
+)
+
+
+# Register the Rust var implementations as virtual subclasses of the Python
+# ``Var`` / ``LiteralVar`` bases (``MetaclassVar`` is an ``ABCMeta``). This makes
+# ``isinstance(rust_var, Var)`` / ``isinstance(rust_literal, LiteralVar)`` native,
+# cached checks — replacing the former custom ``__instancecheck__`` bridge.
+Var.register(RustVar)
+LiteralVar.register(RustLiteralVar)
+
+
+EMPTY_VAR_STR: Var[str] = LiteralVar.create("")
+EMPTY_VAR_INT: Var[int] = LiteralVar.create(0)

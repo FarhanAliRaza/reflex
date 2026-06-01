@@ -43,12 +43,7 @@ pub fn emit_page(buf: &mut CodeBuffer, page: &Page<'_>, route_ident: &str) {
 
 /// Emit a full page module with a custom JS function name.
 #[inline]
-pub fn emit_page_named(
-    buf: &mut CodeBuffer,
-    page: &Page<'_>,
-    route_ident: &str,
-    fn_name: &str,
-) {
+pub fn emit_page_named(buf: &mut CodeBuffer, page: &Page<'_>, route_ident: &str, fn_name: &str) {
     emit_page_inner(buf, page, route_ident, fn_name, None, &[], "")
 }
 
@@ -132,9 +127,7 @@ fn emit_page_inner(
         // Single shared ref for now; once the bridge tracks per-`id` refs
         // we'll emit one line per id. The legacy renderer uses
         // `ref_<id_or_synthetic>`.
-        buf.write_str(
-            "  const ref_root = useRef(null); refs[\"ref_root\"] = ref_root;\n",
-        );
+        buf.write_str("  const ref_root = useRef(null); refs[\"ref_root\"] = ref_root;\n");
     }
     for binding in page.state_bindings {
         let s = resolve_unchecked(*binding);
@@ -144,9 +137,7 @@ fn emit_page_inner(
         buf.write_str(s);
         buf.write_str(");\n");
     }
-    buf.write_str(
-        "  const [addEvents, connectErrors] = useContext(EventLoopContext);\n",
-    );
+    buf.write_str("  const [addEvents, connectErrors] = useContext(EventLoopContext);\n");
 
     // ---- Hooks block --------------------------------------------------
     // Pre-rendered hook body from the caller — declarations the
@@ -258,10 +249,7 @@ fn emit_combined_imports(buf: &mut CodeBuffer, component_imports: &[(Symbol, Sym
     emit_imports_grouped_by_module(buf, &combined);
 }
 
-fn emit_imports_grouped_by_module(
-    buf: &mut CodeBuffer,
-    imports: &[(Symbol, Symbol)],
-) {
+fn emit_imports_grouped_by_module(buf: &mut CodeBuffer, imports: &[(Symbol, Symbol)]) {
     // Imports are `(module, alias_spec)` pairs where alias_spec is the
     // string spliced inside `import { … }` — either a bare identifier
     // (`"useState"`) or a renamed one (`"Box as RadixThemesBox"`). We
@@ -314,9 +302,7 @@ mod tests {
         emit_page(&mut buf, &page, "Index");
         let s = buf.as_str();
         assert!(s.contains("import { Fragment, useContext, useRef } from \"react\""));
-        assert!(s.contains(
-            "import { EventLoopContext, StateContexts } from \"$/utils/context\""
-        ));
+        assert!(s.contains("import { EventLoopContext, StateContexts } from \"$/utils/context\""));
         assert!(s.contains("export default function Component()"));
         assert!(s.contains("const [addEvents, connectErrors] = useContext(EventLoopContext);"));
         assert!(s.contains("jsx(div, {id: x}, \"hello\")"));
@@ -439,9 +425,7 @@ mod tests {
         // (first-seen order: component_imports come before the trailing
         // baseline aliases, so `refs` slots in after `applyEventActions`).
         assert!(
-            s.contains(
-                "import { ReflexEvent, applyEventActions, refs } from \"$/utils/state\";"
-            ),
+            s.contains("import { ReflexEvent, applyEventActions, refs } from \"$/utils/state\";"),
             "merged state import missing:\n{s}"
         );
     }
@@ -450,7 +434,11 @@ mod tests {
     fn source_map_records_non_synthetic_locs() {
         use reflex_ir::{Component, NodeId, Page as PageIR, PyFileId, SourceLoc};
         let arena = Arena::new();
-        let real_loc = SourceLoc { file: PyFileId(7), line: 42, col: 11 };
+        let real_loc = SourceLoc {
+            file: PyFileId(7),
+            line: 42,
+            col: 11,
+        };
         let text = arena.alloc(Component::Text {
             value: arena.alloc_str("hi"),
             id: NodeId(1),
@@ -471,7 +459,9 @@ mod tests {
         let mut map = crate::SourceMap::new();
         emit_page_with_map(&mut buf, &page, "R", &mut map);
         let s = buf.as_str();
-        let pos = s.find("\"hi\"").expect(r#"the "hi" literal should be in the output"#);
+        let pos = s
+            .find("\"hi\"")
+            .expect(r#"the "hi" literal should be in the output"#);
         let mapped = map.lookup(pos as u32).expect("location recorded");
         assert_eq!(mapped.file.0, 7);
         assert_eq!(mapped.line, 42);

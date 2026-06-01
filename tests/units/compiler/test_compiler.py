@@ -8,8 +8,7 @@ from reflex_base import constants
 from reflex_base.components.dynamic import bundle_library, reset_bundled_libraries
 from reflex_base.constants.compiler import PageNames
 from reflex_base.utils.imports import ImportVar, ParsedImportDict
-from reflex_base.vars.base import Var
-from reflex_base.vars.sequence import LiteralStringVar
+from reflex_base.vars.base import LiteralStringVar, Var, var_isinstance
 from reflex_components_core.base import document
 from reflex_components_core.base.document import Links, Scripts
 from reflex_components_core.el.elements.metadata import Head, Link, Meta
@@ -434,17 +433,17 @@ def test_create_document_root():
     assert isinstance(root.children[0], Head)
     # Default language.
     lang = root.lang  # pyright: ignore [reportAttributeAccessIssue]
-    assert isinstance(lang, LiteralStringVar)
+    assert var_isinstance(lang, LiteralStringVar)
     assert lang.equals(Var.create("en"))
     # No children in head.
     assert len(root.children[0].children) == 6
     assert isinstance(root.children[0].children[1], Meta)
     char_set = root.children[0].children[1].char_set  # pyright: ignore [reportAttributeAccessIssue]
-    assert isinstance(char_set, LiteralStringVar)
+    assert var_isinstance(char_set, LiteralStringVar)
     assert char_set.equals(Var.create("utf-8"))
     assert isinstance(root.children[0].children[2], Meta)
     name = root.children[0].children[2].name  # pyright: ignore [reportAttributeAccessIssue]
-    assert isinstance(name, LiteralStringVar)
+    assert var_isinstance(name, LiteralStringVar)
     assert name.equals(Var.create("viewport"))
     assert isinstance(root.children[0].children[3], document.Meta)
     assert isinstance(root.children[0].children[4], Link)
@@ -476,7 +475,7 @@ def test_create_document_root_with_scripts():
         "Links",
     ]
     lang = root.lang  # pyright: ignore [reportAttributeAccessIssue]
-    assert isinstance(lang, LiteralStringVar)
+    assert var_isinstance(lang, LiteralStringVar)
     assert lang.equals(Var.create("rx"))
     assert isinstance(root.custom_attrs, dict)
     assert root.custom_attrs == {"project": "reflex"}

@@ -78,8 +78,12 @@ pub fn emit_app_root_module<W: Write>(
     w.write_all(b"export function Layout({children}) {\n")?;
     w.write_all(b"  return jsx(AppLayout, {}, jsx(ReflexProviders, {}, children));\n")?;
     w.write_all(b"}\n\n")?;
-    w.write_all(b"// Used by entry.client.js when mount_target is configured: skips the document\n")?;
-    w.write_all(b"// shell (which renders react-router's <Meta>/<Scripts>/<Links> and requires a\n")?;
+    w.write_all(
+        b"// Used by entry.client.js when mount_target is configured: skips the document\n",
+    )?;
+    w.write_all(
+        b"// shell (which renders react-router's <Meta>/<Scripts>/<Links> and requires a\n",
+    )?;
     w.write_all(b"// framework router context) but keeps the runtime providers.\n")?;
     w.write_all(b"export function EmbedLayout({children}) {\n")?;
     w.write_all(b"  return jsx(ReflexProviders, {}, children);\n")?;

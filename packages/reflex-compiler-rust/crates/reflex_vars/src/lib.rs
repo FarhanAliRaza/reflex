@@ -16,8 +16,10 @@
 //!   typed-expression hierarchy (`NumberVar`, `StringVar`, …) lands in
 //!   follow-up iterations.
 
+mod py;
 mod var;
 mod var_data;
 
+pub use py::{register, RustVar};
 pub use var::Var;
 pub use var_data::{HookPosition, ImportVar, VarData};

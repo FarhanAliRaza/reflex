@@ -1,5 +1,23 @@
 """Test fixtures."""
 
+# Python 3.14 / pydantic 2.13 compatibility shim (must run before any reflex /
+# pydantic import below, so annotation evaluation works during collection).
+# pydantic 2.13's `_eval_type_backport` passes `prefer_fwd_module` to
+# `typing._eval_type`, a kwarg Python 3.14 removed. Drop kwargs the installed
+# `_eval_type` no longer accepts. Remove once pydantic supports 3.14 natively.
+import inspect as _inspect
+import typing as _typing
+
+_orig_eval_type = _typing._eval_type
+_eval_type_params = _inspect.signature(_orig_eval_type).parameters
+if "prefer_fwd_module" not in _eval_type_params:
+
+    def _eval_type_compat(*args, **kwargs):
+        kwargs = {k: v for k, v in kwargs.items() if k in _eval_type_params}
+        return _orig_eval_type(*args, **kwargs)
+
+    _typing._eval_type = _eval_type_compat  # type: ignore[assignment]
+
 import platform
 import traceback
 import uuid
@@ -10,14 +28,13 @@ from unittest import mock
 
 import pytest
 import pytest_asyncio
-from reflex_base.components.component import CUSTOM_COMPONENTS
+from reflex_base.components.memo import MEMOS
 from reflex_base.event import Event, EventSpec
 from reflex_base.event.context import EventContext
 from reflex_base.event.processor import BaseStateEventProcessor, EventProcessor
 from reflex_base.registry import RegistrationContext
 
 from reflex.app import App
-from reflex.experimental.memo import EXPERIMENTAL_MEMOS
 from reflex.istate.manager import StateManager
 from reflex.istate.manager.disk import StateManagerDisk
 from reflex.istate.manager.memory import StateManagerMemory
@@ -491,17 +508,14 @@ def clean_registration_context() -> Generator[RegistrationContext, None, None]:
 
 @pytest.fixture
 def preserve_memo_registries():
-    """Save and restore global memo registries around a test.
+    """Save and restore the global memo registry around a test.
 
     Yields:
         None
     """
-    custom_components = dict(CUSTOM_COMPONENTS)
-    experimental_memos = dict(EXPERIMENTAL_MEMOS)
+    memos = dict(MEMOS)
     try:
         yield
     finally:
-        CUSTOM_COMPONENTS.clear()
-        CUSTOM_COMPONENTS.update(custom_components)
-        EXPERIMENTAL_MEMOS.clear()
-        EXPERIMENTAL_MEMOS.update(experimental_memos)
+        MEMOS.clear()
+        MEMOS.update(memos)

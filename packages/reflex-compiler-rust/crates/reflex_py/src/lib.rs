@@ -11,7 +11,9 @@
 //!    blob, runs the parse → JSX-emit pipeline, returns a JS source string.
 //!    Salsa caching lands in D5 — for now every call rebuilds.
 
+mod from_wire;
 mod session;
+mod snapshot_dump;
 
 use std::io::Cursor;
 
@@ -187,7 +189,10 @@ fn manual_walk_emit<'a>(buf: &mut &'a [u8], out: &mut Vec<u8>) -> std::io::Resul
 }
 
 #[pyfunction]
-fn walk_manual_emit<'py>(py: Python<'py>, b: &Bound<'py, PyBytes>) -> PyResult<Bound<'py, PyBytes>> {
+fn walk_manual_emit<'py>(
+    py: Python<'py>,
+    b: &Bound<'py, PyBytes>,
+) -> PyResult<Bound<'py, PyBytes>> {
     let input = b.as_bytes().to_vec(); // copy out before releasing GIL
     let out = py
         .allow_threads(|| -> std::io::Result<Vec<u8>> {
@@ -252,7 +257,11 @@ where
 
 fn arena_emit(node: &ArenaNode<'_>, out: &mut Vec<u8>) {
     match node {
-        ArenaNode::Element { tag, props, children } => {
+        ArenaNode::Element {
+            tag,
+            props,
+            children,
+        } => {
             out.extend_from_slice(b"jsx(");
             out.extend_from_slice(tag.as_bytes());
             out.extend_from_slice(b",{");
@@ -321,16 +330,108 @@ fn serde_emit(n: &SerdeNode, out: &mut Vec<u8>) {
 #[pyfunction]
 fn walk_serde_emit<'py>(py: Python<'py>, b: &Bound<'py, PyBytes>) -> PyResult<Bound<'py, PyBytes>> {
     let input = b.as_bytes().to_vec();
-    let out = py
-        .allow_threads(|| -> PyResult<Vec<u8>> {
-            let mut de = rmp_serde::Deserializer::new(Cursor::new(&input));
-            let root: SerdeNode = SerdeNode::deserialize(&mut de)
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("rmp-serde: {e}")))?;
-            let mut out = Vec::with_capacity(input.len() * 2);
-            serde_emit(&root, &mut out);
-            Ok(out)
-        })?;
+    let out = py.allow_threads(|| -> PyResult<Vec<u8>> {
+        let mut de = rmp_serde::Deserializer::new(Cursor::new(&input));
+        let root: SerdeNode = SerdeNode::deserialize(&mut de)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("rmp-serde: {e}")))?;
+        let mut out = Vec::with_capacity(input.len() * 2);
+        serde_emit(&root, &mut out);
+        Ok(out)
+    })?;
     Ok(PyBytes::new_bound(py, &out))
+}
+
+// ---- Var-in-Rust spike -------------------------------------------------------
+//
+// De-risking spike for "rewrite the Var system in Rust (PyO3) so the framework
+// uses it normally". A minimal Rust-backed Var: a state-field leaf plus a few
+// composing ops, with `_js_expr` rendered in Rust. The point is to measure
+// per-op cost vs the pure-Python Var (~31 µs/op) and prove byte-identical JS —
+// not to be feature-complete. See `tests/units/compiler/test_var_spike.py`.
+
+use pyo3::basic::CompareOp;
+
+#[pyclass]
+#[derive(Clone)]
+struct SpikeVar {
+    js: String,
+}
+
+#[pymethods]
+impl SpikeVar {
+    /// Build a state-field leaf: `<state_full>.<field>_rx_state_` — the
+    /// exact form the Python Var renders for `State.<field>`.
+    #[staticmethod]
+    fn state_field(state_full: &str, field: &str) -> Self {
+        SpikeVar {
+            js: format!("{state_full}.{field}_rx_state_"),
+        }
+    }
+
+    /// Build a literal leaf (number/string already rendered to JS).
+    #[staticmethod]
+    fn literal(js: &str) -> Self {
+        SpikeVar { js: js.to_owned() }
+    }
+
+    #[getter]
+    fn _js_expr(&self) -> &str {
+        &self.js
+    }
+
+    fn __str__(&self) -> &str {
+        &self.js
+    }
+
+    fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<SpikeVar> {
+        self.binop(other, "+", false)
+    }
+
+    fn __radd__(&self, other: &Bound<'_, PyAny>) -> PyResult<SpikeVar> {
+        self.binop(other, "+", true)
+    }
+
+    fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<SpikeVar> {
+        self.binop(other, "*", false)
+    }
+
+    fn __richcmp__(&self, other: &Bound<'_, PyAny>, op: CompareOp) -> PyResult<SpikeVar> {
+        let sym = match op {
+            CompareOp::Lt => "<",
+            CompareOp::Le => "<=",
+            CompareOp::Gt => ">",
+            CompareOp::Ge => ">=",
+            CompareOp::Eq => "===",
+            CompareOp::Ne => "!==",
+        };
+        self.binop(other, sym, false)
+    }
+}
+
+impl SpikeVar {
+    fn binop(&self, other: &Bound<'_, PyAny>, op: &str, reflected: bool) -> PyResult<SpikeVar> {
+        let rhs = render_operand(other)?;
+        let (l, r) = if reflected {
+            (rhs.as_str(), self.js.as_str())
+        } else {
+            (self.js.as_str(), rhs.as_str())
+        };
+        Ok(SpikeVar {
+            js: format!("({l} {op} {r})"),
+        })
+    }
+}
+
+/// Render a Python operand to its JS form: another `SpikeVar` → its `js`;
+/// an int → its decimal; otherwise `str(v)`.
+fn render_operand(v: &Bound<'_, PyAny>) -> PyResult<String> {
+    if let Ok(sv) = v.extract::<SpikeVar>() {
+        return Ok(sv.js);
+    }
+    if let Ok(i) = v.extract::<i64>() {
+        return Ok(i.to_string());
+    }
+    Ok(v.str()?.to_string())
 }
 
 // ---- Module export ----------------------------------------------------------
@@ -349,6 +450,12 @@ fn _native(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // The real compiler session.
     m.add_class::<session::CompilerSession>()?;
+
+    // Var-in-Rust de-risking spike.
+    m.add_class::<SpikeVar>()?;
+
+    // Rust Var cutover: the production Var bindings (scalar-literal slice).
+    reflex_vars::register(m)?;
 
     // A: batched per-Component extractor. Replaces ~15-20 individual
     // ``getattr`` / ``call_method0`` PyO3 crossings per Component
