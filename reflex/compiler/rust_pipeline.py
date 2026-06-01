@@ -209,7 +209,6 @@ def compile_pages(
         # Memoize + emit lives entirely in Rust. One PyO3 round-trip:
         #   freeze → memoize_arena_pass → emit_page module +
         #   emit_memo_body modules → harvest imports.
-        # GIL released for the in-arena transform + emit; freeze is
         # the only PyO3 surface and runs once per page. The snapshot
         # already carries per-node custom_code / dynamic_imports /
         # hooks captured during freeze (via `_get_custom_code`,

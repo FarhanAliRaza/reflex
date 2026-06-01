@@ -196,7 +196,9 @@ fn emit_state_block_with_state<W: Write>(w: &mut W, state_name: &str) -> io::Res
     w.write_all(b"    // Get tracked cookie and local storage vars to send to the backend.\n")?;
     w.write_all(b"    const client_storage_vars = hydrateClientStorage(clientStorage);\n")?;
     w.write_all(b"    // But only send the vars if any are actually set in the browser.\n")?;
-    w.write_all(b"    if (client_storage_vars && Object.keys(client_storage_vars).length !== 0) {\n")?;
+    w.write_all(
+        b"    if (client_storage_vars && Object.keys(client_storage_vars).length !== 0) {\n",
+    )?;
     w.write_all(b"        internal_events.push(\n")?;
     w.write_all(b"            ReflexEvent(\n")?;
     w.write_all(b"                '")?;
@@ -207,7 +209,9 @@ fn emit_state_block_with_state<W: Write>(w: &mut W, state_name: &str) -> io::Res
     w.write_all(b"                {vars: client_storage_vars},\n")?;
     w.write_all(b"            ),\n")?;
     w.write_all(b"        );\n    }\n\n")?;
-    w.write_all(b"    // `on_load_internal` triggers the correct on_load event(s) for the current page.\n")?;
+    w.write_all(
+        b"    // `on_load_internal` triggers the correct on_load event(s) for the current page.\n",
+    )?;
     w.write_all(b"    // If the page does not define any on_load event, this will just set `is_hydrated = true`.\n")?;
     w.write_all(b"    internal_events.push(ReflexEvent('")?;
     w.write_all(state_name.as_bytes())?;
@@ -290,9 +294,7 @@ mod tests {
 
     #[test]
     fn no_state_block_emits_undefined_fallbacks() {
-        let s = render(|w| {
-            emit_context_module(false, "\"system\"", None, &[], "{}", "{}", w)
-        });
+        let s = render(|w| emit_context_module(false, "\"system\"", None, &[], "{}", "{}", w));
         assert!(s.contains("export const state_name = undefined"));
         assert!(s.contains("export const initialEvents = () => []"));
         assert!(s.contains("export const StateContexts = {};"));

@@ -14,7 +14,7 @@ from reflex_base.utils import format
 from reflex_base.utils.exceptions import InvalidPropValueError
 from reflex_base.utils.serializers import serializer
 from reflex_base.utils.types import is_union
-from reflex_base.vars.object import LiteralObjectVar
+from reflex_base.vars.base import LiteralVar
 
 PROPS_FIELD_TYPE = TypeVar("PROPS_FIELD_TYPE")
 
@@ -301,7 +301,7 @@ class PropsBase(metaclass=PropsBaseMeta):
         Returns:
             The object as a Javascript Object literal.
         """
-        return LiteralObjectVar.create({
+        return LiteralVar.create({
             format.to_camel_case(key): value for key, value in self.dict().items()
         }).json()
 

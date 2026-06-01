@@ -15,6 +15,8 @@ from hashlib import md5
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
+from reflex_compiler_rust._native import RustImportVar
+from reflex_compiler_rust._native import Var as RustVar
 from rich.markup import escape
 from typing_extensions import dataclass_transform
 
@@ -39,16 +41,17 @@ from reflex_base.utils.imports import ImportDict, ImportVar, ParsedImportDict
 from reflex_base.vars import VarData
 from reflex_base.vars.base import (
     _PY_OR_IMPORT,
+    ArgsFunctionOperation,
     CachedVarOperation,
-    LiteralNoneVar,
+    FunctionStringVar,
     LiteralVar,
+    ObjectVar,
+    StringVar,
     Var,
     cached_property_no_lock,
+    ternary_operation,
+    var_isinstance,
 )
-from reflex_base.vars.function import ArgsFunctionOperation, FunctionStringVar
-from reflex_base.vars.number import ternary_operation
-from reflex_base.vars.object import ObjectVar
-from reflex_base.vars.sequence import LiteralArrayVar, LiteralStringVar, StringVar
 
 if TYPE_CHECKING:
     import reflex.state
@@ -582,10 +585,32 @@ def _update_deterministic_hash(hasher: Any, value: object) -> None:
         hasher.update(len(value).to_bytes(8, "little"))
         for item in value:
             _update_deterministic_hash(hasher, item)
-    elif isinstance(value, Var):
+    elif isinstance(value, (Var, RustVar)):
         hasher.update(b"v")
         _update_deterministic_hash(hasher, value._js_expr)
         _update_deterministic_hash(hasher, value._get_all_var_data())
+    elif isinstance(value, VarData):
+        hasher.update(b"V")
+        _update_deterministic_hash(hasher, value.state)
+        _update_deterministic_hash(hasher, value.field_name)
+        _update_deterministic_hash(hasher, value.hooks)
+        _update_deterministic_hash(hasher, value.deps)
+        _update_deterministic_hash(hasher, value.position)
+        for lib, import_vars in value.imports:
+            _update_deterministic_hash(hasher, lib)
+            for import_var in import_vars:
+                _update_deterministic_hash(hasher, import_var)
+        for component in value.components:
+            _update_deterministic_hash(hasher, component)
+    elif isinstance(value, RustImportVar):
+        # Hash identically to a Python ``ImportVar`` dataclass (same field set
+        # and order) so Rust- and Python-built imports collide when equal.
+        hasher.update(b"D")
+        fields = ("tag", "is_default", "alias", "install", "render", "package_path")
+        hasher.update(len(fields).to_bytes(8, "little"))
+        for field_name in fields:
+            hasher.update(field_name.encode())
+            _update_deterministic_hash(hasher, getattr(value, field_name))
     elif dataclasses.is_dataclass(value):
         fields = dataclasses.fields(value)
         hasher.update(b"D")
@@ -1035,7 +1060,7 @@ class Component(BaseComponent, ABC):
                 if isinstance(c, str):
                     continue
                 if isinstance(c, Var):
-                    if not isinstance(c, StringVar) and not issubclass(
+                    if not var_isinstance(c, StringVar) and not issubclass(
                         c._var_type, str
                     ):
                         msg = f"Invalid class_name passed for prop {type(self).__name__}.class_name, expected type str, got value {c._js_expr} of type {c._var_type}."
@@ -1045,14 +1070,12 @@ class Component(BaseComponent, ABC):
                     msg = f"Invalid class_name passed for prop {type(self).__name__}.class_name, expected type str, got value {c} of type {type(c)}."
                     raise TypeError(msg)
             if has_var:
-                kwargs["class_name"] = LiteralArrayVar.create(
-                    class_name, _var_type=list[str]
-                ).join(" ")
+                kwargs["class_name"] = LiteralVar.create(class_name).join(" ")
             else:
                 kwargs["class_name"] = " ".join(class_name)
         elif (
             isinstance(class_name, Var)
-            and not isinstance(class_name, StringVar)
+            and not var_isinstance(class_name, StringVar)
             and not issubclass(class_name._var_type, str)
         ):
             msg = f"Invalid class_name passed for prop {type(self).__name__}.class_name, expected type str, got value {class_name._js_expr} of type {class_name._var_type}."
@@ -1645,7 +1668,7 @@ class Component(BaseComponent, ABC):
                 vars.append(comp_prop)
             elif isinstance(comp_prop, str):
                 # Collapse VarData encoded in f-strings.
-                var = LiteralStringVar.create(comp_prop)
+                var = LiteralVar.create(comp_prop)
                 if var._get_all_var_data() is not None:
                     vars.append(var)
 
@@ -2315,7 +2338,7 @@ def render_dict_to_var(tag: dict | Component | str) -> Var:
         return Var(tag["contents"])
 
     if "iterable" in tag:
-        function_return = LiteralArrayVar.create([
+        function_return = LiteralVar.create([
             render_dict_to_var(child.render()) for child in tag["children"]
         ])
 
@@ -2326,7 +2349,7 @@ def render_dict_to_var(tag: dict | Component | str) -> Var:
 
         return FunctionStringVar.create("Array.prototype.map.call").call(
             tag["iterable"]
-            if not isinstance(tag["iterable"], ObjectVar)
+            if not var_isinstance(tag["iterable"], ObjectVar)
             else tag["iterable"].items(),
             func,
         )
@@ -2354,7 +2377,7 @@ def render_dict_to_var(tag: dict | Component | str) -> Var:
             render_dict_to_var(tag["true_value"]),
             render_dict_to_var(tag["false_value"])
             if tag["false_value"] is not None
-            else LiteralNoneVar.create(),
+            else LiteralVar.create(None),
         )
 
     props = Var("({" + ",".join(tag["props"]) + "})")

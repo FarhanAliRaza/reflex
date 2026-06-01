@@ -7,7 +7,7 @@ from datetime import date, datetime
 from typing import Any, TypeVar
 
 from reflex_base.utils.exceptions import VarTypeError
-from reflex_base.vars.number import BooleanVar
+from reflex_base.vars.base import BooleanVar
 
 from .base import (
     CustomVarOperationReturn,

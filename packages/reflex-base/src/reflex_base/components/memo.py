@@ -41,15 +41,16 @@ from reflex_base.utils import console, format
 from reflex_base.utils.imports import ImportVar
 from reflex_base.utils.types import safe_issubclass, typehint_issubclass
 from reflex_base.vars import VarData
-from reflex_base.vars.base import LiteralVar, Var
-from reflex_base.vars.function import (
+from reflex_base.vars.base import (
     ArgsFunctionOperation,
     DestructuredArg,
     FunctionStringVar,
     FunctionVar,
+    LiteralVar,
     ReflexCallable,
+    RestProp,
+    Var,
 )
-from reflex_base.vars.object import RestProp
 
 
 class MemoParamKind(str, Enum):

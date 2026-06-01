@@ -61,7 +61,10 @@ mod tests {
 
     #[test]
     fn json_string_decoded() {
-        assert_eq!(decode_js_string_literal(r#""hello""#).as_deref(), Some("hello"));
+        assert_eq!(
+            decode_js_string_literal(r#""hello""#).as_deref(),
+            Some("hello")
+        );
     }
 
     #[test]
@@ -72,7 +75,10 @@ mod tests {
 
     #[test]
     fn json_escapes_decoded() {
-        assert_eq!(decode_js_string_literal(r#""a\nb""#).as_deref(), Some("a\nb"));
+        assert_eq!(
+            decode_js_string_literal(r#""a\nb""#).as_deref(),
+            Some("a\nb")
+        );
         assert_eq!(decode_js_string_literal(r#""é""#).as_deref(), Some("é"));
     }
 

@@ -32,10 +32,14 @@ from reflex_base.style import Style
 from reflex_base.utils import format
 from reflex_base.utils.imports import ImportVar
 from reflex_base.vars import VarData
-from reflex_base.vars.base import Var, get_unique_variable_name
-from reflex_base.vars.function import FunctionVar
-from reflex_base.vars.object import ObjectVar
-from reflex_base.vars.sequence import ArrayVar, LiteralStringVar
+from reflex_base.vars.base import (
+    ArrayVar,
+    FunctionVar,
+    LiteralVar,
+    ObjectVar,
+    Var,
+    get_unique_variable_name,
+)
 from reflex_components_sonner.toast import toast
 
 from reflex_components_core.base.fragment import Fragment
@@ -69,7 +73,7 @@ def upload_file(id_: str | Var[str] = DEFAULT_UPLOAD_ID) -> Var:
     Returns:
         A var referencing the file upload drop trigger.
     """
-    id_var = LiteralStringVar.create(id_) if not isinstance(id_, Var) else id_
+    id_var = LiteralVar.create(id_) if not isinstance(id_, Var) else id_
     var_name = f"""e => setFilesById(filesById => {{
     const updatedFilesById = Object.assign({{}}, filesById);
     updatedFilesById[{id_var!s}] = e;
@@ -95,7 +99,7 @@ def selected_files(id_: str | Var[str] = DEFAULT_UPLOAD_ID) -> Var:
     Returns:
         A var referencing the list of selected file paths.
     """
-    id_var = LiteralStringVar.create(id_) if not isinstance(id_, Var) else id_
+    id_var = LiteralVar.create(id_) if not isinstance(id_, Var) else id_
     return Var(
         _js_expr=f"(filesById[{id_var!s}] ? filesById[{id_var!s}].map((f) => f.name) : [])",
         _var_type=list[str],

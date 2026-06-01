@@ -65,7 +65,11 @@ mod tests {
         let d = Diagnostic::error(
             "E001",
             "unknown tag",
-            SourceLoc { file: PyFileId(1), line: 10, col: 5 },
+            SourceLoc {
+                file: PyFileId(1),
+                line: 10,
+                col: 5,
+            },
         )
         .with_help("try one of: div, span, p");
         assert_eq!(d.severity, Severity::Error);

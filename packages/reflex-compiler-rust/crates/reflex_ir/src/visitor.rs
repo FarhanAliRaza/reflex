@@ -170,7 +170,10 @@ mod tests {
             id: NodeId(2),
             source_loc: loc,
         };
-        let mut c = Counter { components: 0, values: 0 };
+        let mut c = Counter {
+            components: 0,
+            values: 0,
+        };
         c.visit_component(&root);
         assert_eq!(c.components, 2);
         assert_eq!(c.values, 0);
