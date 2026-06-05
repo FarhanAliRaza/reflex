@@ -1,10 +1,44 @@
 """Tests for per-component Radix CSS chunk imports."""
 
+import importlib
+import pkgutil
+import re
+
 from reflex_components_radix.css_split import radix_chunk_name
 from reflex_components_radix.plugin import RADIX_CSS_SPLIT_ATTR
 
 import reflex as rx
 from reflex.compiler import utils as compiler_utils
+
+
+def _all_public_radix_component_classes():
+    """Import every Radix Themes module and return all public component classes.
+
+    Returns:
+        The list of ``RadixThemesComponent`` subclasses that have a string tag.
+    """
+    import reflex_components_radix as radix
+
+    for module in pkgutil.walk_packages(radix.__path__, radix.__name__ + "."):
+        try:
+            importlib.import_module(module.name)
+        except Exception:
+            continue
+
+    from reflex_components_radix.themes.base import RadixThemesComponent
+
+    def descend(cls, seen):
+        for sub in cls.__subclasses__():
+            if sub not in seen:
+                seen.add(sub)
+                descend(sub, seen)
+        return seen
+
+    return [
+        cls
+        for cls in descend(RadixThemesComponent, set())
+        if isinstance(getattr(cls, "tag", None), str) and cls.tag
+    ]
 
 
 def test_chunk_name_matches_radix_source_naming():
@@ -122,3 +156,49 @@ def test_dynamic_accent_imports_all_colors():
     setattr(button, RADIX_CSS_SPLIT_ATTR, True)
     imports = button._get_all_imports()
     assert all(f"$/styles/radix/colors/{a}.css" in imports for a in ACCENT_COLORS)
+
+
+def test_all_public_components_map_to_valid_chunk_names():
+    """Every public Radix component tag maps to a valid chunk file name."""
+    classes = _all_public_radix_component_classes()
+    assert len(classes) > 50  # the full public Radix Themes surface
+    for cls in classes:
+        name = radix_chunk_name(cls.tag)
+        assert re.fullmatch(r"[a-z][a-z0-9-]*", name), (cls.__name__, cls.tag, name)
+
+
+def test_all_public_components_emit_split_imports_when_marked():
+    """Every public component contributes its own CSS chunk to the tree.
+
+    This is what makes the feature cover *all* public components: the mechanism
+    lives on the shared ``RadixThemesComponent`` base, so every component
+    inherits it. Mirroring the compiler's ``enter_component`` pass, every Radix
+    node in a built subtree is marked, and each must contribute the shared base
+    plus its own chunk to the tree-driven import aggregation.
+    """
+    from reflex_components_radix.themes.base import RadixThemesComponent
+
+    covered = 0
+    for cls in _all_public_radix_component_classes():
+        try:
+            comp = cls.create()
+        except Exception:
+            continue
+        radix_nodes = []
+        stack = [comp]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, RadixThemesComponent):
+                setattr(node, RADIX_CSS_SPLIT_ATTR, True)
+                radix_nodes.append(node)
+            stack.extend(getattr(node, "children", None) or [])
+        if not radix_nodes:
+            continue
+        imports = comp._get_all_imports()
+        assert "$/styles/radix/_shared.css" in imports
+        for node in radix_nodes:
+            if node.tag:
+                chunk = f"$/styles/radix/{radix_chunk_name(node.tag)}.css"
+                assert chunk in imports, (cls.__name__, node.tag)
+        covered += 1
+    assert covered > 100  # nearly every component constructs with no args
