@@ -14,13 +14,8 @@ from reflex_base.utils import exceptions
 
 if TYPE_CHECKING:
     from reflex_base.components.component import ComponentStyle
-    from reflex_base.event import (
-        ArgsSpec,
-        EventChain,
-        EventHandler,
-        EventSpec,
-        EventType,
-    )
+    from reflex_base.event import EventChain, EventHandler, EventSpec, EventType
+    from reflex_base.utils.types import ArgsSpec
 
 WRAP_MAP = {
     "{": "}",
