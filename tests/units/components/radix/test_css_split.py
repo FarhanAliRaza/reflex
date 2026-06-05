@@ -4,7 +4,11 @@ import re
 from pathlib import Path
 
 import pytest
-from reflex_components_radix.css_split import SHARED_CHUNK, split_radix_css
+from reflex_components_radix.css_split import (
+    COLOR_CHUNK_PREFIX,
+    SHARED_CHUNK,
+    split_radix_css,
+)
 
 
 @pytest.fixture
@@ -154,3 +158,61 @@ def test_component_stems_restrict_chunks_and_seed_empty(components_dir: Path):
     # Still lossless.
     union = "\n".join(chunks.values())
     assert _declarations(union) == _declarations(COMPILED)
+
+
+# A bundle with mixed color-scale tokens and per-accent aliasing rules.
+COMPILED_COLORS = """\
+:root, .light { --blue-1: #f0f; --red-1: #f00; --gray-1: #eee; --space-1: 4px; }
+.dark { --blue-1: #008; --red-1: #800; --gray-1: #111; }
+.radix-themes:where([data-accent-color='blue']) { --accent-9: var(--blue-9); }
+.radix-themes:where([data-accent-color='red']) { --accent-9: var(--red-9); }
+@supports (color: color(display-p3 1 1 1)) {
+  :root { --blue-1: oklch(1 0 0); --gray-1: oklch(.9 0 0); }
+}
+"""
+
+
+def test_accent_split_is_lossless():
+    """Splitting accents out of the shared base preserves every declaration."""
+    chunks = split_radix_css(
+        COMPILED_COLORS,
+        _components_with_no_owners(),
+        accent_colors=["blue", "red"],
+    )
+    union = "\n".join(chunks.values())
+    assert _declarations(union) == _declarations(COMPILED_COLORS)
+
+
+def test_accents_move_to_their_chunk_grays_stay_shared():
+    """Accent scale defs and aliasing move to per-accent chunks; grays stay shared."""
+    chunks = split_radix_css(
+        COMPILED_COLORS,
+        _components_with_no_owners(),
+        accent_colors=["blue", "red"],
+    )
+    blue = chunks[f"{COLOR_CHUNK_PREFIX}blue"]
+    shared = chunks[SHARED_CHUNK]
+    # Blue scale + blue aliasing live in the blue chunk.
+    assert "--blue-1: #f0f;" in blue
+    assert "var(--blue-9)" in blue
+    assert "oklch(1 0 0)" in blue  # P3 block split too
+    # Red stayed out of blue.
+    assert "--red-1" not in blue
+    # Grays and structural tokens remain shared; accents do not.
+    assert "--gray-1: #eee;" in shared
+    assert "--space-1: 4px;" in shared
+    assert "--blue-1" not in shared
+    assert "--red-1" not in shared
+
+
+def _components_with_no_owners() -> Path:
+    """Create an empty components dir so only color/shared splitting happens.
+
+    Returns:
+        A temp components directory with no component css files.
+    """
+    import tempfile
+
+    path = Path(tempfile.mkdtemp()) / "components"
+    path.mkdir()
+    return path

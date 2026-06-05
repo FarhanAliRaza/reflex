@@ -22,10 +22,44 @@ so every rule remains reachable from some imported chunk.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path
 
 SHARED_CHUNK = "_shared"
+# Directory prefix (within the chunk namespace) for per-accent color chunks.
+COLOR_CHUNK_PREFIX = "colors/"
+
+# Radix accent color scales. Tree-shaken per used accent; the gray scales
+# (gray/mauve/slate/sage/olive/sand) stay shared to avoid the accent<->gray
+# auto-pairing, and are comparatively small.
+ACCENT_COLORS = (
+    "tomato",
+    "red",
+    "ruby",
+    "crimson",
+    "pink",
+    "plum",
+    "purple",
+    "violet",
+    "iris",
+    "indigo",
+    "blue",
+    "cyan",
+    "teal",
+    "jade",
+    "green",
+    "grass",
+    "brown",
+    "orange",
+    "sky",
+    "mint",
+    "lime",
+    "yellow",
+    "amber",
+    "gold",
+    "bronze",
+)
 
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
@@ -183,10 +217,109 @@ def _target_chunks(
     return chunks or None
 
 
+def _split_declarations(block: str) -> list[str]:
+    """Split a declaration block on top-level semicolons.
+
+    Args:
+        block: The body of a style rule (declarations only).
+
+    Returns:
+        The individual declarations, each keeping its trailing semicolon.
+    """
+    decls: list[str] = []
+    depth = 0
+    start = 0
+    in_str: str | None = None
+    i = 0
+    n = len(block)
+    while i < n:
+        c = block[i]
+        if in_str is not None:
+            if c == "\\":
+                i += 2
+                continue
+            if c == in_str:
+                in_str = None
+            i += 1
+            continue
+        if c in "\"'":
+            in_str = c
+        elif c in "({":
+            depth += 1
+        elif c in ")}":
+            depth -= 1
+        elif c == ";" and depth == 0:
+            decls.append(block[start : i + 1])
+            start = i + 1
+        i += 1
+    tail = block[start:].strip()
+    if tail:
+        decls.append(tail)
+    return [d for d in decls if d.strip()]
+
+
+_DECL_COLOR = re.compile(r"^\s*--([a-z]+)-")
+_SELECTOR_ACCENT = re.compile(r"data-accent-color\s*=\s*['\"]?([a-z]+)")
+
+
+def _partition_accent_node(
+    node: str,
+    accents: set[str],
+    shared: list[str],
+    buckets: dict[str, list[str]],
+) -> None:
+    """Route one shared node to the accent chunk(s) it concerns, else shared.
+
+    Args:
+        node: A CSS node from the shared base.
+        accents: The accent color names to extract.
+        shared: Accumulator for nodes that stay shared (mutated).
+        buckets: Accumulator of accent -> nodes (mutated).
+    """
+    prelude, block = _prelude_and_block(node)
+    if prelude is None:
+        shared.append(node)
+        return
+    at_rule = _AT_RULE.match(prelude)
+    if at_rule:
+        if at_rule.group(1).lower() not in _NESTING_AT_RULES:
+            shared.append(node)
+            return
+        inner_shared: list[str] = []
+        inner_buckets: dict[str, list[str]] = defaultdict(list)
+        for inner in _split_top_level_nodes(block or ""):
+            _partition_accent_node(inner, accents, inner_shared, inner_buckets)
+        if inner_shared:
+            shared.append(prelude + " {\n" + "\n".join(inner_shared) + "\n}")
+        for accent, rules in inner_buckets.items():
+            buckets[accent].append(prelude + " {\n" + "\n".join(rules) + "\n}")
+        return
+    pinned = _SELECTOR_ACCENT.search(prelude)
+    if pinned and pinned.group(1) in accents:
+        buckets[pinned.group(1)].append(node)
+        return
+    keep: list[str] = []
+    by_accent: dict[str, list[str]] = defaultdict(list)
+    for decl in _split_declarations(block or ""):
+        match = _DECL_COLOR.match(decl)
+        if match and match.group(1) in accents:
+            by_accent[match.group(1)].append(decl)
+        else:
+            keep.append(decl)
+    if not by_accent:
+        shared.append(node)
+        return
+    if keep:
+        shared.append(prelude + " {" + "".join(keep) + "}")
+    for accent, decls in by_accent.items():
+        buckets[accent].append(prelude + " {" + "".join(decls) + "}")
+
+
 def split_radix_css(
     compiled_css: str,
     components_dir: Path | None,
     component_stems: Iterable[str] | None = None,
+    accent_colors: Iterable[str] | None = None,
 ) -> dict[str, str]:
     """Split the compiled Radix Themes bundle into shared and per-component chunks.
 
@@ -199,9 +332,14 @@ def split_radix_css(
             gets a chunk (empty if it owns no rules, so the import never 404s),
             and rules owned only by other source files fall to the shared base.
             When ``None``, every non-internal source file may own a chunk.
+        accent_colors: Accent color names to lift out of the shared base into
+            per-accent ``colors/<name>`` chunks (scale definitions plus the
+            ``data-accent-color`` aliasing), so a page only loads the accents it
+            uses. When ``None``, accents stay in the shared base.
 
     Returns:
-        Map of chunk name -> CSS text. Always includes :data:`SHARED_CHUNK`.
+        Map of chunk name -> CSS text. Always includes :data:`SHARED_CHUNK`;
+        per-accent chunks are keyed ``colors/<name>``.
     """
     if components_dir is None or not components_dir.is_dir():
         return {SHARED_CHUNK: compiled_css}
@@ -244,4 +382,16 @@ def split_radix_css(
             emit(chunk, node)
 
     buckets.setdefault(SHARED_CHUNK, [])
+
+    accents = set(accent_colors) if accent_colors is not None else None
+    if accents:
+        new_shared: list[str] = []
+        accent_buckets: dict[str, list[str]] = defaultdict(list)
+        for node in buckets[SHARED_CHUNK]:
+            _partition_accent_node(node, accents, new_shared, accent_buckets)
+        buckets[SHARED_CHUNK] = new_shared
+        # Seed every accent so its chunk file always exists for imports.
+        for accent in accents:
+            buckets[f"{COLOR_CHUNK_PREFIX}{accent}"] = accent_buckets.get(accent, [])
+
     return {chunk: "\n".join(nodes) + "\n" for chunk, nodes in buckets.items()}

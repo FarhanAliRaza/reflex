@@ -132,23 +132,60 @@ class RadixThemesComponent(Component):
         """Import the component's split CSS chunk when per-component CSS is on.
 
         The plugin marks the instance during compilation; when marked, the
-        component side-effect-imports the shared Radix base plus its own chunk,
-        so only the CSS for mounted components reaches the bundle.
+        component side-effect-imports the shared Radix base, its own component
+        chunk, and the accent color chunk(s) its ``color_scheme`` (or, for the
+        theme, ``accent_color``) selects. Only the CSS for mounted components and
+        used accents reaches the bundle.
 
         Returns:
             The per-component CSS imports, or an empty dict when splitting is off.
         """
-        from reflex_components_radix.css_split import SHARED_CHUNK, radix_chunk_name
+        from reflex_components_radix.css_split import (
+            COLOR_CHUNK_PREFIX,
+            SHARED_CHUNK,
+            radix_chunk_name,
+        )
         from reflex_components_radix.plugin import RADIX_CSS_DIR, RADIX_CSS_SPLIT_ATTR
 
         if not getattr(self, RADIX_CSS_SPLIT_ATTR, False) or not self.tag:
             return {}
 
         prefix = f"$/{Dirs.STYLES}/{RADIX_CSS_DIR}"
-        return {
-            f"{prefix}/{SHARED_CHUNK}.css": [ImportVar(tag=None)],
-            f"{prefix}/{radix_chunk_name(self.tag)}.css": [ImportVar(tag=None)],
+        side_effect = [ImportVar(tag=None)]
+        imports: ImportDict = {
+            f"{prefix}/{SHARED_CHUNK}.css": side_effect,
+            f"{prefix}/{radix_chunk_name(self.tag)}.css": side_effect,
         }
+        for accent in self._used_accent_colors():
+            imports[f"{prefix}/{COLOR_CHUNK_PREFIX}{accent}.css"] = side_effect
+        return imports
+
+    def _used_accent_colors(self) -> set[str]:
+        """Resolve which accent color chunks this component needs.
+
+        Reads ``color_scheme`` and (for the theme) ``accent_color``. A literal
+        value selects that accent; a dynamic value selects all accents so any
+        runtime choice still has its CSS.
+
+        Returns:
+            The accent color names whose chunks to import.
+        """
+        from reflex_base.vars.base import LiteralVar, Var
+
+        from reflex_components_radix.css_split import ACCENT_COLORS
+
+        accents: set[str] = set()
+        for attr in ("color_scheme", "accent_color"):
+            prop = getattr(self, attr, None)
+            if prop is None:
+                continue
+            if isinstance(prop, LiteralVar) and isinstance(prop._var_value, str):
+                if prop._var_value in ACCENT_COLORS:
+                    accents.add(prop._var_value)
+            elif isinstance(prop, Var):
+                # Dynamic accent: include all so any runtime value renders.
+                return set(ACCENT_COLORS)
+        return accents
 
     @staticmethod
     def _get_app_wrap_components() -> dict[tuple[int, str], Component]:

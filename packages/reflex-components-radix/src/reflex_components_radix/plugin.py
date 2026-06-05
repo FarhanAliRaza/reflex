@@ -13,7 +13,11 @@ from reflex_base.plugins.base import Plugin
 from reflex_base.utils import console
 
 from reflex_components_radix import themes
-from reflex_components_radix.css_split import radix_chunk_name, split_radix_css
+from reflex_components_radix.css_split import (
+    ACCENT_COLORS,
+    radix_chunk_name,
+    split_radix_css,
+)
 from reflex_components_radix.themes.base import RadixThemesComponent
 
 if TYPE_CHECKING:
@@ -117,7 +121,10 @@ class RadixThemesPlugin(Plugin):
             if isinstance(tag := getattr(cls, "tag", None), str) and tag
         }
         chunks = split_radix_css(
-            bundle.read_text(encoding="utf-8"), components_dir, stems
+            bundle.read_text(encoding="utf-8"),
+            components_dir,
+            stems,
+            accent_colors=ACCENT_COLORS,
         )
         base = Path(Dirs.STYLES) / RADIX_CSS_DIR
         return [(base / f"{name}.css", css) for name, css in chunks.items()]
@@ -166,6 +173,10 @@ class RadixThemesPlugin(Plugin):
     ) -> None:
         """Inject the app-level theme wrapper when Radix Themes is active."""
         if self.enabled and self.theme is not None:
+            # The app-wrap theme is not walked by enter_component, so mark it here
+            # to ensure it imports the shared base and the default accent chunk.
+            if self.css_splitting:
+                setattr(self.theme, RADIX_CSS_SPLIT_ATTR, True)
             page_ctx.app_wrap_components[20, "Theme"] = self.theme
 
     def get_theme(self) -> Component | None:

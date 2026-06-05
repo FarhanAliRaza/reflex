@@ -64,7 +64,11 @@ def test_plugin_emits_split_chunks_as_static_assets(tmp_path, monkeypatch):
 
     plugin = RadixThemesPlugin(css_splitting=True)
     plugin.enabled = True
-    assets = {path.as_posix(): content for path, content in plugin.get_static_assets()}
+    assets = {
+        path.as_posix(): content
+        for path, content in plugin.get_static_assets()
+        if isinstance(content, str)
+    }
 
     assert "styles/radix/_shared.css" in assets
     assert "--x: 1;" in assets["styles/radix/_shared.css"]
@@ -80,3 +84,41 @@ def test_plugin_no_static_assets_without_splitting():
     plugin = RadixThemesPlugin(css_splitting=False)
     plugin.enabled = True
     assert plugin.get_static_assets() == []
+
+
+def test_marked_component_with_literal_accent_imports_that_color():
+    """A literal color_scheme imports only that accent's chunk."""
+    button = rx.button("hi", color_scheme="red")
+    setattr(button, RADIX_CSS_SPLIT_ATTR, True)
+    imports = button._get_all_imports()
+    assert "$/styles/radix/colors/red.css" in imports
+    assert "$/styles/radix/colors/blue.css" not in imports
+
+
+def test_marked_component_without_accent_imports_no_color():
+    """Without color_scheme, a component inherits the theme accent (no chunk)."""
+    button = rx.button("hi")
+    setattr(button, RADIX_CSS_SPLIT_ATTR, True)
+    assert not any(
+        lib.startswith("$/styles/radix/colors/") for lib in button._get_all_imports()
+    )
+
+
+def test_marked_theme_imports_its_accent():
+    """The theme imports its configured accent color chunk."""
+    theme = rx.theme(rx.box(), accent_color="grass")
+    setattr(theme, RADIX_CSS_SPLIT_ATTR, True)
+    assert "$/styles/radix/colors/grass.css" in theme._get_all_imports()
+
+
+def test_dynamic_accent_imports_all_colors():
+    """A dynamic color_scheme imports every accent so any value renders."""
+    from reflex_components_radix.css_split import ACCENT_COLORS
+
+    class _S(rx.State):
+        scheme: str = "blue"
+
+    button = rx.button("hi", color_scheme=_S.scheme)  # type: ignore[arg-type]
+    setattr(button, RADIX_CSS_SPLIT_ATTR, True)
+    imports = button._get_all_imports()
+    assert all(f"$/styles/radix/colors/{a}.css" in imports for a in ACCENT_COLORS)
