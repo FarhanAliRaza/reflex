@@ -3,22 +3,47 @@
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from reflex_base.components.component import BaseComponent, Component
 from reflex_base.components.dynamic import bundle_library
+from reflex_base.constants.base import Dirs, Javascript
 from reflex_base.plugins.base import Plugin
 from reflex_base.utils import console
 
 from reflex_components_radix import themes
+from reflex_components_radix.css_split import radix_chunk_name, split_radix_css
 from reflex_components_radix.themes.base import RadixThemesComponent
 
 if TYPE_CHECKING:
     from reflex_base.plugins.compiler import PageContext
 
 
+def _all_radix_subclasses() -> set[type[RadixThemesComponent]]:
+    """Collect every loaded Radix Themes component class.
+
+    Returns:
+        All transitive subclasses of :class:`RadixThemesComponent`. Any
+        component used in the app is imported, so its chunk is generated.
+    """
+    seen: set[type[RadixThemesComponent]] = set()
+    stack = [RadixThemesComponent]
+    while stack:
+        cls = stack.pop()
+        for sub in cls.__subclasses__():
+            if sub not in seen:
+                seen.add(sub)
+                stack.append(sub)
+    return seen
+
+
 RADIX_THEMES_STYLESHEET = "@radix-ui/themes/styles.css"
 RADIX_THEMES_PACKAGE = "@radix-ui/themes@3.3.0"
+# Per-component CSS chunks are written here, under .web/styles.
+RADIX_CSS_DIR = "radix"
+# Marks a component instance whose CSS should be imported per-component.
+RADIX_CSS_SPLIT_ATTR = "_radix_css_split"
 _DEPRECATION_VERSION = "0.9.0"
 _REMOVAL_VERSION = "1.0"
 
@@ -31,6 +56,10 @@ class RadixThemesPlugin(Plugin):
         default_factory=lambda: themes.theme(accent_color="blue")
     )
     enabled: bool = dataclasses.field(default=True, repr=False)
+    # Opt in to per-component CSS: replace the monolithic Radix Themes bundle
+    # with a shared base plus per-component chunks, so pages only load the CSS
+    # for components they actually render. Pixel-identical to the full bundle.
+    css_splitting: bool = False
     _explicit: bool = dataclasses.field(default=True, repr=False)
     _app_theme_warning_emitted: bool = dataclasses.field(
         default=False, init=False, repr=False
@@ -46,12 +75,52 @@ class RadixThemesPlugin(Plugin):
         return cls(enabled=False, _explicit=False)
 
     def get_stylesheet_paths(self, **context: Any) -> tuple[str, ...]:
-        """Return the Radix Themes stylesheet when enabled."""
-        return (RADIX_THEMES_STYLESHEET,) if self.enabled else ()
+        """Return the Radix Themes stylesheet when enabled.
+
+        With per-component CSS splitting on, the monolithic bundle is replaced by
+        the shared base plus per-component chunks imported by the components
+        themselves, so it is not injected globally here.
+        """
+        if not self.enabled or self.css_splitting:
+            return ()
+        return (RADIX_THEMES_STYLESHEET,)
 
     def get_frontend_dependencies(self, **context: Any) -> tuple[str, ...]:
         """Return the Radix Themes package when enabled."""
         return (RADIX_THEMES_PACKAGE,) if self.enabled else ()
+
+    def get_static_assets(self, **context: Any) -> list[tuple[Path, str | bytes]]:
+        """Emit the split Radix Themes CSS chunks when splitting is enabled.
+
+        Reads the installed ``@radix-ui/themes`` bundle and splits it into a
+        shared base plus one chunk per component, written under
+        ``.web/styles/radix``. Returns nothing (loading the full bundle instead)
+        when splitting is off or the package is not yet installed.
+
+        Returns:
+            ``(path, content)`` pairs for each chunk, relative to the web dir.
+        """
+        if not (self.enabled and self.css_splitting):
+            return []
+
+        from reflex.utils.prerequisites import get_web_dir
+
+        package = get_web_dir() / Javascript.NODE_MODULES / "@radix-ui" / "themes"
+        bundle = package / "styles.css"
+        if not bundle.is_file():
+            return []
+
+        components_dir = package / "src" / "components"
+        stems = {
+            radix_chunk_name(tag)
+            for cls in _all_radix_subclasses()
+            if isinstance(tag := getattr(cls, "tag", None), str) and tag
+        }
+        chunks = split_radix_css(
+            bundle.read_text(encoding="utf-8"), components_dir, stems
+        )
+        base = Path(Dirs.STYLES) / RADIX_CSS_DIR
+        return [(base / f"{name}.css", css) for name, css in chunks.items()]
 
     def enter_component(
         self,
@@ -63,7 +132,15 @@ class RadixThemesPlugin(Plugin):
         in_prop_tree: bool = False,
     ) -> None:
         """Auto-enable the plugin when a Radix Themes component is compiled."""
-        if self.enabled or not isinstance(comp, RadixThemesComponent):
+        if not isinstance(comp, RadixThemesComponent):
+            return
+
+        # Mark every Radix component so it imports its own CSS chunk. Done before
+        # imports are gathered, while walking the component tree.
+        if self.css_splitting:
+            setattr(comp, RADIX_CSS_SPLIT_ATTR, True)
+
+        if self.enabled:
             return
 
         self.enabled = True

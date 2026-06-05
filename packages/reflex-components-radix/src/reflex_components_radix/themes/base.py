@@ -6,6 +6,7 @@ from typing import Any, ClassVar, Literal
 
 from reflex_base.components.component import Component, field
 from reflex_base.components.tags import Tag
+from reflex_base.constants import Dirs
 from reflex_base.utils.imports import ImportDict, ImportVar
 from reflex_base.vars.base import Var
 from reflex_components_core.core.breakpoints import Responsive
@@ -126,6 +127,28 @@ class RadixThemesComponent(Component):
             ].default_value()
         component.alias = "RadixThemes" + (component.tag or type(component).__name__)
         return component
+
+    def add_imports(self) -> ImportDict | list[ImportDict]:
+        """Import the component's split CSS chunk when per-component CSS is on.
+
+        The plugin marks the instance during compilation; when marked, the
+        component side-effect-imports the shared Radix base plus its own chunk,
+        so only the CSS for mounted components reaches the bundle.
+
+        Returns:
+            The per-component CSS imports, or an empty dict when splitting is off.
+        """
+        from reflex_components_radix.css_split import SHARED_CHUNK, radix_chunk_name
+        from reflex_components_radix.plugin import RADIX_CSS_DIR, RADIX_CSS_SPLIT_ATTR
+
+        if not getattr(self, RADIX_CSS_SPLIT_ATTR, False) or not self.tag:
+            return {}
+
+        prefix = f"$/{Dirs.STYLES}/{RADIX_CSS_DIR}"
+        return {
+            f"{prefix}/{SHARED_CHUNK}.css": [ImportVar(tag=None)],
+            f"{prefix}/{radix_chunk_name(self.tag)}.css": [ImportVar(tag=None)],
+        }
 
     @staticmethod
     def _get_app_wrap_components() -> dict[tuple[int, str], Component]:

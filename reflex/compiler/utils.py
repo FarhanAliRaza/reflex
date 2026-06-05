@@ -67,7 +67,9 @@ def compile_import_statement(fields: list[ImportVar]) -> tuple[str, list[str]]:
 
     # Get the default import, and the specific imports.
     default = next(iter({field.name for field in defaults}), "")
-    rest = {field.name for field in fields_set - defaults}
+    # Empty names come from side-effect imports (e.g. CSS), which render as
+    # ``import "lib"`` with neither a default nor named binding.
+    rest = {field.name for field in fields_set - defaults if field.name}
 
     return default, sorted(rest)
 
