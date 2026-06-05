@@ -1,0 +1,9 @@
+assets/external/
+.web
+.states
+__pycache__/
+*.py[cod]
+*.db
+
+# spike: exclude bulky lockfile
+reflex.lock/

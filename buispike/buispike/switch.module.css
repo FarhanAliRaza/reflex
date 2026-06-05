@@ -1,0 +1,42 @@
+.root {
+  composes: control from "$/styles/_shared/_atoms.module.css";
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 38px;
+  height: 22px;
+  padding: 2px;
+  border-radius: 9999px;
+  background-color: #d4d4dc;
+  transition: background-color 120ms ease;
+  cursor: pointer;
+}
+
+.root[data-checked] {
+  background-color: #3b82f6;
+}
+
+.root:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+.root:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.thumb {
+  composes: control from "$/styles/_shared/_atoms.module.css";
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background-color: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 120ms ease;
+}
+
+.thumb[data-checked] {
+  transform: translateX(16px);
+}
