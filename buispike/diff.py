@@ -22,7 +22,8 @@ PROPS = [
     "borderTopLeftRadius", "borderTopRightRadius",
     "borderBottomLeftRadius", "borderBottomRightRadius",
     "boxShadow", "columnGap", "rowGap", "display", "justifyContent", "alignItems",
-    "opacity", "textAlign", "fontStyle", "borderLeftWidth",
+    "opacity", "textAlign", "fontStyle", "borderLeftWidth", "borderLeftColor",
+    "borderLeftStyle",
 ]
 
 # component -> list of case keys (testids are radix-<key> / mine-<key>)
@@ -55,6 +56,7 @@ COMPONENTS = {
         for v in ["soft", "surface", "outline"]
         for s in ["1", "2"]
     ],
+    "blockquote": [f"bq-{s}" for s in ["1", "2", "3", "5"]],
 }
 
 
@@ -97,10 +99,15 @@ def check(pg, cases, prefix_radix, prefix_mine, label):
     for key in cases:
         r = _styles(pg, f"[data-testid={prefix_radix}-{key}]")
         m = _styles(pg, f"[data-testid={prefix_mine}-{key}]")
+        # border style/color are invisible (and thus irrelevant) when width is 0;
+        # Tailwind preflight defaults to solid, Radix to none.
+        skip = set()
+        if _round_px(r.get("borderLeftWidth")) in ("0.0px", "0px"):
+            skip |= {"borderLeftStyle", "borderLeftColor"}
         diffs = [
             (p, r[p], m[p])
             for p in PROPS
-            if _norm(p, r[p]) != _norm(p, m[p])
+            if p not in skip and _norm(p, r[p]) != _norm(p, m[p])
         ]
         total += len(PROPS)
         matched += len(PROPS) - len(diffs)

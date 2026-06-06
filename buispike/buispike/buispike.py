@@ -101,6 +101,15 @@ def _build_rows():
                     P.callout("Message", size=s, variant=v),
                 )
             )
+    for s in ["1", "2", "3", "5"]:
+        k = f"bq-{s}"
+        rows.append(
+            _pair(
+                k,
+                rx.blockquote("Quote", size=s),
+                P.blockquote("Quote", size=s),
+            )
+        )
     return rows
 
 
