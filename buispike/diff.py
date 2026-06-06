@@ -88,7 +88,11 @@ COMPONENTS = {
     "select_item": ["select-item"],
     "progress_track": ["progress-track"],
     "slider_track": ["slider-track"],
-    "scroll_bar": ["scroll-bar"],
+    "container": [f"container-{s}" for s in ["1", "2", "3", "4"]],
+    "inset": ["inset-1"],
+    "skeleton": ["skeleton-1"],
+    "accordion_item": ["accordion-item"],
+    "slider_thumb": ["slider-thumb"],
 }
 
 # Components whose styled leaf carries the testid directly (measure el, not child).
@@ -98,7 +102,8 @@ DIRECT = {
     "tooltip_content", "popover_content", "hovercard_content",
     "dialog_content", "menu_content", "menu_item",
     "alertdialog_content", "segmented_root", "select_content", "select_item",
-    "progress_track", "slider_track", "scroll_bar",
+    "progress_track", "slider_track",
+    "accordion_item", "slider_thumb",
 }
 
 # Radix side: the styled leaf is nested; reach it by appending this selector to
@@ -106,7 +111,7 @@ DIRECT = {
 RADIX_LEAF = {
     "checkbox": ".rt-BaseCheckboxRoot", "radio": ".rt-BaseRadioRoot",
     "progress_track": ".rt-ProgressRoot", "slider_track": ".rt-SliderTrack",
-    "scroll_bar": ".rt-ScrollAreaScrollbar",
+    "slider_thumb": ".rt-SliderThumb",
 }
 
 # A child element the root/pseudo checks miss: (radix leaf, mine leaf, props).
@@ -122,7 +127,8 @@ SKIP_PROPS = {
     "dialog_content": {"marginLeft", "marginRight"},
     "alertdialog_content": {"marginLeft", "marginRight"},
     "slider_track": {"width"},   # grows to fill the slider; layout-dependent
-    "scroll_bar": {"height"},     # tracks scroll content height
+    "skeleton": {"backgroundColor"},  # animated pulse; frame-dependent
+    "accordion_item": {"height"},  # content-region driven (item box styling matches)
 }
 
 # Components whose visuals live on pseudo-elements: also compare those.
@@ -139,6 +145,9 @@ PSEUDO = {
     },
     "radio": {
         "::before": ["width", "height", "borderTopLeftRadius", "backgroundColor", "boxShadow"],
+    },
+    "slider_thumb": {
+        "::after": ["backgroundColor", "borderTopLeftRadius", "boxShadow"],
     },
 }
 

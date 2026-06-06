@@ -81,7 +81,7 @@ Eight subagents ran concurrently, each reverse-engineering Radix's CSS for a set
 of components and returning ready-to-integrate code; integrated centrally and
 verified with `diff.py`.
 
-**Result: 40 component groups at exactly 100% — 5274/5274 computed-style props.**
+**Result: 45 component groups at exactly 100% — 5541/5541 computed-style props.**
 
 button, badge, separator, text, heading, code, em/strong/quote, callout,
 blockquote, card, avatar, spinner, link, table header/cell, data_list,
@@ -93,10 +93,20 @@ dialog, alert_dialog, menu (content+item), select (content+item).
 checks, direct-measure mode, per-component prop skips (environmental
 margin:auto centering), and a <1px sub-pixel tolerance for dimensional AA.
 
-Now also wired + verified at 100%: progress, slider, scroll_area (multi-part,
-via RADIX_LEAF nested-leaf targeting), and the switch **thumb** child element
-(a CHILD check added after a comparison build revealed the checker had only
-measured roots + ::before — it caught and fixed a calc()-with-spaces bug and a
-transform-vs-translate-property mismatch). An audit confirmed no other
-arbitrary-value spacing bugs remain. context_menu reuses the menu styling
-(at 100%); a same-page parity-vs-Radix build measured ~13 KB vs ~94 KB gz CSS.
+Now also wired + verified at 100%: progress, slider (track + thumb, the thumb's
+white disc via its ::after), container, inset, skeleton, accordion item — plus
+the switch **thumb** child (a CHILD check added after a comparison build exposed
+that the checker only measured roots + ::before; it caught and fixed a
+calc()-with-spaces bug and a transform-vs-translate-property mismatch). A full
+audit confirmed no other arbitrary-value spacing bugs remain.
+
+A few skips are environmental/content-driven (not styling gaps), documented in
+diff.py SKIP_PROPS: dialog margin:auto centering, skeleton's animated pulse bg,
+slider-track fill width, accordion-item content-region height.
+
+Not statically verifiable (styled-by-construction; same tokens): the
+ScrollArea scrollbar (JS-mounted after overflow measurement) and ContextMenu
+(opens only on right-click) — ContextMenu reuses the menu styling (at 100%).
+
+A same-page parity-vs-Radix production build measured ~13 KB vs ~94 KB gz CSS
+(~7x) for an identical Notifications settings card, pixel-identical.

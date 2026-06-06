@@ -315,12 +315,28 @@ def _build_rows():
                                  custom_attrs={"data-testid": "mine-slider-track"}),
                   class_name="w-[120px] flex items-center"),
     ))
+    # Remaining: container, inset, skeleton, accordion item, slider thumb, context menu
+    for s in ["1", "2", "3", "4"]:
+        rows.append(_pair(f"container-{s}", rx.container(rx.el.span("X"), size=s), P.container(rx.el.span("X"), size=s)))
+    rows.append(_pair("inset-1",
+        rx.inset(rx.el.span("X"), class_name="w-[80px] h-[40px]"),
+        P.inset(rx.el.span("X"), class_name="w-[80px] h-[40px]")))
+    rows.append(_pair("skeleton-1",
+        rx.skeleton(rx.el.span("x"), width="120px", height="20px"),
+        P.skeleton(rx.el.span("x"), class_name="w-[120px] h-[20px]")))
     rows.append(_row(
-        "scroll-bar",
-        rx.scroll_area(rx.el.div(class_name="h-[400px] w-[60px]"), scrollbars="vertical", type="always", size="1",
-                       custom_attrs={"data-testid": "radix-scroll-bar"}, class_name="h-[80px] w-[100px]"),
-        P.scroll_area_scrollbar(P.scroll_area_thumb(), size="1",
-                                custom_attrs={"data-testid": "mine-scroll-bar"}, class_name="h-[80px]"),
+        "accordion-item",
+        rx.accordion.root(rx.accordion.item(header="H", content="C", value="a",
+                          custom_attrs={"data-testid": "radix-accordion-item"}),
+                          type="single", default_value="", collapsible=True, color_scheme="violet", width="300px"),
+        P.accordion_item(P.accordion_trigger("H"), custom_attrs={"data-testid": "mine-accordion-item"}, class_name="w-[300px]"),
+    ))
+    rows.append(_row(
+        "slider-thumb",
+        rx.el.div(rx.slider(default_value=[50], size="2", color_scheme="violet", width="120px"),
+                  custom_attrs={"data-testid": "radix-slider-thumb"}, class_name="w-[120px] inline-flex items-center"),
+        rx.el.div(P.slider_thumb(size="2", custom_attrs={"data-testid": "mine-slider-thumb"}),
+                  class_name="w-[120px] flex items-center"),
     ))
     return rows
 
