@@ -43,6 +43,12 @@ COMPONENTS = {
         for s in ["1", "2", "3", "5", "9"]
         for w in ["regular", "medium", "bold"]
     ],
+    "heading": [f"head-{s}" for s in ["1", "2", "4", "6", "9"]],
+    "code": [
+        f"code-{v}-{s}"
+        for v in ["soft", "solid", "outline"]
+        for s in ["1", "2", "3"]
+    ],
 }
 
 

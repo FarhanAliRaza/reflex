@@ -71,6 +71,19 @@ def _build_rows():
                     P.text("Sample", size=s, weight=w),
                 )
             )
+    for s in ["1", "2", "4", "6", "9"]:
+        k = f"head-{s}"
+        rows.append(_pair(k, rx.heading("Title", size=s), P.heading("Title", size=s)))
+    for v in ["soft", "solid", "outline"]:
+        for s in ["1", "2", "3"]:
+            k = f"code-{v}-{s}"
+            rows.append(
+                _pair(
+                    k,
+                    rx.code("code", size=s, variant=v, color_scheme="violet"),
+                    P.code("code", size=s, variant=v),
+                )
+            )
     return rows
 
 
