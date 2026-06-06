@@ -110,3 +110,25 @@ ScrollArea scrollbar (JS-mounted after overflow measurement) and ContextMenu
 
 A same-page parity-vs-Radix production build measured ~13 KB vs ~94 KB gz CSS
 (~7x) for an identical Notifications settings card, pixel-identical.
+
+
+## Every property exact — no skips, no tolerance
+
+The earlier writeups used a `SKIP_PROPS` ignore-list and a `<1px` width/height
+tolerance. Both are now **removed**: the checker compares every property with
+exact equality and `SKIP_PROPS = {}`. All 45 groups still pass — 5541/5541 —
+because each soft spot was fixed properly, not skipped:
+
+- dialog/alertdialog `margin:auto` — render the parity panel in the same 1100px
+  centering container so the computed margin matches (234px), not skipped.
+- accordion item height — build the Radix item low-level (no auto-chevron) so it
+  matches the parity item.
+- tabs & segmented widths — replicate Radix's two-copy sizing trick (an in-flow
+  medium-weight copy with `letter-spacing: -0.01em` fixes the column width so it
+  doesn't reflow on activation); this removed the 0.4–0.8px sub-pixel diffs.
+- skeleton — give the parity element Radix's exact `rt-skeleton-pulse` animation,
+  and freeze all animations to the same frame before measuring so the pulsing
+  background compares at an identical instant.
+
+The only remaining checker normalization strips Tailwind's transparent,
+zero-size box-shadow filler layers (they render nothing) — not a real diff.

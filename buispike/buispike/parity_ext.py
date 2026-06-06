@@ -44,13 +44,23 @@ def tabs_trigger(text: str, size: str = "2", active: bool = False, **props) -> r
         "flex items-center justify-center shrink-0 relative select-none box-border text-start "
         f"h-[var({h})] px-[var({px})] {color} {before}"
     )
-    inner_type = "font-medium" if active else ""
-    inner_cls = (
+    weight = "font-medium" if active else ""
+    base_inner = (
         "flex items-center justify-center box-border "
-        f"py-[{ipy}] px-[var({ipx})] rounded-[var(--radius-{irad})] {inner_type}"
+        f"py-[{ipy}] px-[var({ipx})] rounded-[var(--radius-{irad})]"
+    )
+    # Like Radix: an in-flow medium-weight sizing copy drives the width (so the
+    # tab doesn't reflow when activated), with the visible copy overlaid.
+    # active/medium copies carry --tab-active-letter-spacing (-0.01em), which
+    # tightens them; the sizing copy is always medium so width is stable.
+    act_ls = "tracking-[-0.01em]" if active else ""
+    sizing = rx.el.span(text, class_name=f"{base_inner} font-medium tracking-[-0.01em] invisible")
+    visible = rx.el.span(
+        text,
+        class_name=f"{base_inner} {weight} {act_ls} absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2",
     )
     props["class_name"] = cn(trigger_cls, props.pop("class_name", ""))
-    return rx.el.button(rx.el.span(text, class_name=inner_cls), **props)
+    return rx.el.button(sizing, visible, **props)
 
 
 # --- SegmentedControl (Root + Item) -----------------------------------------
@@ -88,12 +98,20 @@ def segmented_item(text: str, size: str = "2", active: bool = False, **props) ->
     weight = "font-medium" if active else "font-normal"
     label_cls = (
         "box-border flex grow items-center justify-center relative "
-        f"px-[var({px})] gap-[var(--space-{gap})] {weight} "
-        f"text-[length:var(--font-size-{fs})] tracking-[var(--letter-spacing-{fs})] "
+        f"px-[var({px})] gap-[var(--space-{gap})] "
         f"rounded-[max(var(--radius-{rad}),var(--radius-full))] {before}"
     )
+    fsz = f"text-[length:var(--font-size-{fs})]"
+    # Like Radix: an in-flow medium + (-0.01em) sizing copy fixes the column
+    # width so items don't reflow when activated; visible copy overlaid.
+    sizing = rx.el.span(text, class_name=f"{fsz} font-medium tracking-[-0.01em] invisible")
+    vls = "tracking-[-0.01em]" if active else f"tracking-[var(--letter-spacing-{fs})]"
+    visible = rx.el.span(
+        text,
+        class_name=f"{fsz} {weight} {vls} absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2",
+    )
     props["class_name"] = cn("flex items-stretch select-none", props.pop("class_name", ""))
-    return rx.el.div(rx.el.span(text, class_name=label_cls), **props)
+    return rx.el.div(rx.el.span(sizing, visible, class_name=label_cls), **props)
 
 
 # --- Switch / Checkbox / Radio (fixed states) -------------------------------
@@ -341,8 +359,8 @@ def skeleton(*children, **props) -> rx.Component:
     """A Radix-faithful Skeleton."""
     cls = (
         "box-border [border-radius:var(--radius-1)] [background-image:none] [border:none] "
-        "[box-shadow:none] text-transparent [outline:none] pointer-events-none select-none "
-        "bg-[var(--gray-a3)]"
+        "[box-shadow:none] text-transparent [outline:none] pointer-events-none select-none [background-clip:border-box] "
+        "[animation:rt-skeleton-pulse_1000ms_infinite_alternate-reverse]"
     )
     props["class_name"] = cn(cls, props.pop("class_name", ""))
     return rx.el.span(*children, **props)

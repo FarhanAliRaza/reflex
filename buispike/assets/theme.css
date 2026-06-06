@@ -587,3 +587,8 @@
     }
   }
 }
+
+@keyframes rt-skeleton-pulse {
+  from { background-color: var(--gray-a3); }
+  to { background-color: var(--gray-a4); }
+}

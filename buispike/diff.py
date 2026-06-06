@@ -123,13 +123,7 @@ CHILD = {
 # Props to ignore per component (environmental, not styling): dialog content is
 # `margin:auto` centered, so its computed left/right margin depends on container
 # width (full-viewport portal vs harness cell), not on the styling itself.
-SKIP_PROPS = {
-    "dialog_content": {"marginLeft", "marginRight"},
-    "alertdialog_content": {"marginLeft", "marginRight"},
-    "slider_track": {"width"},   # grows to fill the slider; layout-dependent
-    "skeleton": {"backgroundColor"},  # animated pulse; frame-dependent
-    "accordion_item": {"height"},  # content-region driven (item box styling matches)
-}
+SKIP_PROPS = {}  # no skips — every compared property must match exactly
 
 # Components whose visuals live on pseudo-elements: also compare those.
 PSEUDO = {
@@ -178,13 +172,6 @@ def _round_px(v):
 
 
 def _eq(prop, rv, mv):
-    # width/height differing by <1px is sub-pixel AA/rounding (imperceptible).
-    if prop in ("width", "height") and isinstance(rv, str) and isinstance(mv, str):
-        if rv.endswith("px") and mv.endswith("px"):
-            try:
-                return abs(float(rv[:-2]) - float(mv[:-2])) < 1.0
-            except ValueError:
-                pass
     return _norm(prop, rv) == _norm(prop, mv)
 
 
@@ -302,6 +289,9 @@ def run():
         pg.goto(URL, wait_until="networkidle", timeout=60000)
         pg.wait_for_selector("[data-testid=radix-btn-solid-2]", timeout=30000)
         pg.wait_for_timeout(500)
+        # Freeze every running animation to the same clock instant so animated
+        # properties (e.g. the skeleton pulse) compare at an identical frame.
+        pg.evaluate("document.getAnimations().forEach(a=>{try{a.pause();a.currentTime=0;}catch(e){}})")
         for comp, cases in COMPONENTS.items():
             matched, total, details = check(
                 pg, cases, "radix", "mine", comp, direct=comp in DIRECT

@@ -252,7 +252,8 @@ def _build_rows():
         "alertdialog-content",
         rx.alert_dialog.root(rx.alert_dialog.trigger(rx.button("Open")),
                              rx.alert_dialog.content("Body", custom_attrs={"data-testid": "radix-alertdialog-content"}), default_open=True),
-        P.alert_dialog_content("Body", custom_attrs={"data-testid": "mine-alertdialog-content"}),
+        rx.el.div(P.alert_dialog_content("Body", custom_attrs={"data-testid": "mine-alertdialog-content"}),
+                  class_name="w-[1100px] px-[16px]"),
     ))
     rows.append(_row(
         "seg-root-2",
@@ -285,7 +286,8 @@ def _build_rows():
         "dialog-content",
         rx.dialog.root(rx.dialog.trigger(rx.button("Open")),
                        rx.dialog.content("Body", custom_attrs={"data-testid": "radix-dialog-content"}), default_open=True),
-        P.dialog_content("Body", custom_attrs={"data-testid": "mine-dialog-content"}),
+        rx.el.div(P.dialog_content("Body", custom_attrs={"data-testid": "mine-dialog-content"}),
+                  class_name="w-[1100px] px-[16px]"),
     ))
     rows.append(_row(
         "menu-content",
@@ -326,8 +328,10 @@ def _build_rows():
         P.skeleton(rx.el.span("x"), class_name="w-[120px] h-[20px]")))
     rows.append(_row(
         "accordion-item",
-        rx.accordion.root(rx.accordion.item(header="H", content="C", value="a",
-                          custom_attrs={"data-testid": "radix-accordion-item"}),
+        rx.accordion.root(rx.accordion.item(
+                              rx.accordion.header(rx.accordion.trigger("H")),
+                              rx.accordion.content("C", value="a"), value="a",
+                              custom_attrs={"data-testid": "radix-accordion-item"}),
                           type="single", default_value="", collapsible=True, color_scheme="violet", width="300px"),
         P.accordion_item(P.accordion_trigger("H"), custom_attrs={"data-testid": "mine-accordion-item"}, class_name="w-[300px]"),
     ))
