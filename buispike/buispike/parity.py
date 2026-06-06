@@ -247,3 +247,69 @@ def code(*children, size: str = "2", variant: str = "soft", **props) -> rx.Compo
     )
     props["class_name"] = cn(cls, props.pop("class_name", ""))
     return rx.el.code(*children, **props)
+
+
+# --- Inline formatting: Em / Strong / Quote ---------------------------------
+
+_LS = "var(--letter-spacing,var(--default-letter-spacing))"
+
+
+def _inline(tag_fn, prefix, *children, line_height=None, **props):
+    cls = (
+        f"font-[family-name:var(--{prefix}-font-family)] "
+        f"text-[length:calc(var(--{prefix}-font-size-adjust)*1em)] "
+        f"[font-style:var(--{prefix}-font-style)] [font-weight:var(--{prefix}-font-weight)] "
+        f"tracking-[calc(var(--{prefix}-letter-spacing)+{_LS})]"
+    )
+    if line_height:
+        cls += f" box-border leading-[{line_height}]"
+    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    return tag_fn(*children, **props)
+
+
+def em(*children, **props) -> rx.Component:
+    """Radix-faithful emphasis (italic)."""
+    return _inline(rx.el.em, "em", *children, line_height="1.25", **props)
+
+
+def strong(*children, **props) -> rx.Component:
+    """Radix-faithful strong (bold)."""
+    return _inline(rx.el.strong, "strong", *children, **props)
+
+
+def quote(*children, **props) -> rx.Component:
+    """Radix-faithful inline quote."""
+    return _inline(rx.el.q, "quote", *children, line_height="1.25", **props)
+
+
+# --- Callout ----------------------------------------------------------------
+# Mirrors Radix .rt-CalloutRoot.
+
+_CALLOUT_BASE = "box-border grid items-start justify-start text-left text-[var(--accent-a11)]"
+_CALLOUT_SIZES = {
+    "1": "gap-y-[var(--space-2)] gap-x-[var(--space-2)] p-[var(--space-3)] rounded-[var(--radius-3)]",
+    "2": "gap-y-[var(--space-2)] gap-x-[var(--space-3)] p-[var(--space-4)] rounded-[var(--radius-4)]",
+}
+_CALLOUT_VARIANTS = {
+    "soft": "bg-[var(--accent-a3)]",
+    "surface": "shadow-[inset_0_0_0_1px_var(--accent-a6)] bg-[var(--accent-a2)]",
+    "outline": "shadow-[inset_0_0_0_1px_var(--accent-a7)]",
+}
+
+
+def callout(*children, size: str = "1", variant: str = "soft", **props) -> rx.Component:
+    """A Radix-faithful callout root.
+
+    Args:
+        *children: Content.
+        size: "1"-"2".
+        variant: soft/surface/outline.
+        **props: Extra props.
+
+    Returns:
+        The callout element.
+    """
+    cls = f"{_CALLOUT_BASE} {_CALLOUT_SIZES[size]} {_CALLOUT_VARIANTS[variant]}"
+    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    # Radix wraps callout content in size-2 text; match so the root sizes match.
+    return rx.el.div(text(*children, size="2"), **props)

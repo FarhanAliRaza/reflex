@@ -84,6 +84,23 @@ def _build_rows():
                     P.code("code", size=s, variant=v),
                 )
             )
+    for tag, rfn, pfn in [
+        ("em", rx.text.em, P.em),
+        ("strong", rx.text.strong, P.strong),
+        ("quote", rx.text.quote, P.quote),
+    ]:
+        k = f"inline-{tag}"
+        rows.append(_pair(k, rfn("Sample"), pfn("Sample")))
+    for v in ["soft", "surface", "outline"]:
+        for s in ["1", "2"]:
+            k = f"callout-{v}-{s}"
+            rows.append(
+                _pair(
+                    k,
+                    rx.callout("Message", size=s, variant=v, color_scheme="violet"),
+                    P.callout("Message", size=s, variant=v),
+                )
+            )
     return rows
 
 

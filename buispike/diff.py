@@ -21,8 +21,8 @@ PROPS = [
     "color", "backgroundColor",
     "borderTopLeftRadius", "borderTopRightRadius",
     "borderBottomLeftRadius", "borderBottomRightRadius",
-    "boxShadow", "columnGap", "display", "justifyContent", "alignItems",
-    "opacity", "textAlign",
+    "boxShadow", "columnGap", "rowGap", "display", "justifyContent", "alignItems",
+    "opacity", "textAlign", "fontStyle", "borderLeftWidth",
 ]
 
 # component -> list of case keys (testids are radix-<key> / mine-<key>)
@@ -48,6 +48,12 @@ COMPONENTS = {
         f"code-{v}-{s}"
         for v in ["soft", "solid", "outline"]
         for s in ["1", "2", "3"]
+    ],
+    "inline": ["inline-em", "inline-strong", "inline-quote"],
+    "callout": [
+        f"callout-{v}-{s}"
+        for v in ["soft", "surface", "outline"]
+        for s in ["1", "2"]
     ],
 }
 
