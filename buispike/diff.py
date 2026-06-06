@@ -61,9 +61,7 @@ def _norm(prop, v):
     # Tailwind composes box-shadow with transparent filler layers that are
     # visually identical to Radix's single shadow; strip them before compare.
     if prop == "boxShadow" and isinstance(v, str):
-        layers = [s.strip() for s in v.split(",")]
-        layers = [s for s in layers if not s.startswith("rgba(0, 0, 0, 0) 0px 0px 0px 0px")]
-        return ", ".join(layers)
+        return v.replace("rgba(0, 0, 0, 0) 0px 0px 0px 0px, ", "").strip()
     return _round_px(v)
 
 
