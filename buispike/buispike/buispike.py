@@ -7,50 +7,79 @@ a pixel-diff. A `/demo` page keeps the original interactive showcase.
 
 import reflex as rx
 
+from buispike import parity as P
 from buispike.bui import button as demo_button
 from buispike.bui import dialog, switch
-from buispike.parity import button as pbutton
 
-_VARIANTS = ["solid", "soft", "outline", "surface", "ghost"]
-_SIZES = ["1", "2", "3", "4"]
+_BTN_V = ["solid", "soft", "outline", "surface", "ghost"]
+_BADGE_V = ["solid", "soft", "surface", "outline"]
+_TEXT_SIZES = ["1", "2", "3", "5", "9"]
+_TEXT_WEIGHTS = ["regular", "medium", "bold"]
 
 
 def _cell(content, tid: str) -> rx.Component:
+    return rx.el.div(content, custom_attrs={"data-testid": tid}, class_name="inline-flex p-1")
+
+
+def _pair(key: str, radix_node, mine_node) -> rx.Component:
     return rx.el.div(
-        content,
-        custom_attrs={"data-testid": tid},
-        class_name="inline-flex p-1",
+        rx.el.span(key, class_name="w-36 text-xs text-[var(--secondary-11)]"),
+        _cell(radix_node, f"radix-{key}"),
+        _cell(mine_node, f"mine-{key}"),
+        class_name="flex items-center gap-10",
     )
 
 
-def index() -> rx.Component:
-    """Parity harness page."""
+def _build_rows():
     rows = []
-    for variant in _VARIANTS:
-        for size in _SIZES:
-            key = f"{variant}-{size}"
+    for v in _BTN_V:
+        for s in ["1", "2", "3", "4"]:
+            k = f"btn-{v}-{s}"
             rows.append(
-                rx.el.div(
-                    rx.el.span(
-                        key, class_name="w-28 text-xs text-[var(--secondary-11)]"
-                    ),
-                    _cell(
-                        rx.button(
-                            "Button",
-                            size=size,
-                            variant=variant,
-                            color_scheme="violet",
-                        ),
-                        f"radix-{key}",
-                    ),
-                    _cell(pbutton("Button", size=size, variant=variant), f"mine-{key}"),
-                    class_name="flex items-center gap-10",
+                _pair(
+                    k,
+                    rx.button("Button", size=s, variant=v, color_scheme="violet"),
+                    P.button("Button", size=s, variant=v),
                 )
             )
+    for v in _BADGE_V:
+        for s in ["1", "2", "3"]:
+            k = f"badge-{v}-{s}"
+            rows.append(
+                _pair(
+                    k,
+                    rx.badge("New", size=s, variant=v, color_scheme="violet"),
+                    P.badge("New", size=s, variant=v),
+                )
+            )
+    for s in ["1", "2", "3"]:
+        k = f"sep-{s}"
+        rows.append(
+            _pair(
+                k,
+                rx.divider(size=s, orientation="horizontal", color_scheme="violet"),
+                P.separator(size=s),
+            )
+        )
+    for s in _TEXT_SIZES:
+        for w in _TEXT_WEIGHTS:
+            k = f"text-{s}-{w}"
+            rows.append(
+                _pair(
+                    k,
+                    rx.text("Sample", size=s, weight=w),
+                    P.text("Sample", size=s, weight=w),
+                )
+            )
+    return rows
+
+
+def index() -> rx.Component:
+    """Parity harness page (Radix vs parity components)."""
     return rx.theme(
         rx.el.div(
-            rx.el.div("Radix → | ← Base UI", class_name="text-sm font-bold mb-2"),
-            *rows,
+            rx.el.div("Radix → | ← parity", class_name="text-sm font-bold mb-2"),
+            *_build_rows(),
             class_name="flex flex-col gap-2 p-8 bg-white",
         ),
         accent_color="violet",

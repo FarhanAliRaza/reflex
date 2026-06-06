@@ -25,19 +25,32 @@ PROPS = [
     "opacity", "textAlign",
 ]
 
-# (key prefix, list of case keys) per component
-BUTTON_CASES = [
-    f"{v}-{s}"
-    for v in ["solid", "soft", "outline", "surface", "ghost"]
-    for s in ["1", "2", "3", "4"]
-]
+# component -> list of case keys (testids are radix-<key> / mine-<key>)
+COMPONENTS = {
+    "button": [
+        f"btn-{v}-{s}"
+        for v in ["solid", "soft", "outline", "surface", "ghost"]
+        for s in ["1", "2", "3", "4"]
+    ],
+    "badge": [
+        f"badge-{v}-{s}"
+        for v in ["solid", "soft", "surface", "outline"]
+        for s in ["1", "2", "3"]
+    ],
+    "separator": [f"sep-{s}" for s in ["1", "2", "3"]],
+    "text": [
+        f"text-{s}-{w}"
+        for s in ["1", "2", "3", "5", "9"]
+        for w in ["regular", "medium", "bold"]
+    ],
+}
 
 
 def _styles(pg, sel):
     return pg.eval_on_selector(
         sel,
         """(el, props)=>{
-            const b = el.tagName==='BUTTON' ? el : (el.querySelector('button,input,[role=switch]')||el);
+            const b = el.firstElementChild || el;
             const s = getComputedStyle(b);
             const o = {};
             for (const p of props) o[p] = s[p];
@@ -87,18 +100,25 @@ def check(pg, cases, prefix_radix, prefix_mine, label):
 
 
 def run():
-    """Run all parity checks."""
+    """Run all parity checks across every component."""
+    gmatched = gtotal = 0
     with sync_playwright() as p:
         b = p.chromium.launch()
-        pg = b.new_page(viewport={"width": 1100, "height": 1600})
+        pg = b.new_page(viewport={"width": 1100, "height": 2200})
         pg.goto(URL, wait_until="networkidle", timeout=60000)
-        pg.wait_for_selector("[data-testid=radix-solid-2]", timeout=30000)
+        pg.wait_for_selector("[data-testid=radix-btn-solid-2]", timeout=30000)
         pg.wait_for_timeout(500)
-        matched, total, details = check(pg, BUTTON_CASES, "radix", "mine", "button")
+        for comp, cases in COMPONENTS.items():
+            matched, total, details = check(pg, cases, "radix", "mine", comp)
+            gmatched += matched
+            gtotal += total
+            offs = [d for d in details if "OFF" in d or d.startswith("        ")]
+            print(f"--- {comp}: {matched}/{total} ({100.0*matched/total:.1f}%) ---")
+            for d in offs:
+                print(d)
         b.close()
-    print("\n".join(details))
-    pct = 100.0 * matched / total
-    print(f"\nButton parity: {matched}/{total} props ({pct:.1f}%)")
+    pct = 100.0 * gmatched / gtotal
+    print(f"\nTOTAL parity: {gmatched}/{gtotal} props ({pct:.1f}%)")
     return pct
 
 
