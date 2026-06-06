@@ -1,61 +1,85 @@
-# Spike: Base UI (headless) + atomic CSS, end-to-end through Reflex
+# Spike: Base UI (headless) + atomic theme, end-to-end through Reflex
 
-Goal: validate that a Reflex page built from a **headless Base UI** component
-styled by a **per-component atomic CSS module** ships dramatically less CSS than
-the Radix Themes runtime stylesheet — using the real compiler and the real Vite
-production build, not estimates.
+Goal: validate, with the **real compiler + real Vite build + a real browser**
+(not estimates), that a Reflex page built from **headless Base UI** components
+styled by an **atomic theme** ships dramatically less CSS than the Radix Themes
+runtime stylesheet — and actually renders, themes, and behaves correctly.
 
-## What this app contains
+The spike contains **two** atomic approaches, both proven end-to-end:
 
-- `buispike/baseui_switch.py` — a Base UI `Switch` (real `@base-ui/react/switch`
-  package for behavior/a11y) wrapped as a `CSSModuleComponent`. Styling comes
-  only from a co-located atomic module.
-- `buispike/switch.module.css` — the switch's own rules (`.root` / `.thumb` +
-  `data-checked` / `focus-visible` / `disabled`), `composes`-ing shared atoms.
-- `buispike/_atoms.module.css` — shared atoms (copied once to `styles/_shared`).
-- `buispike/buispike.py` — the app. Built once with both a `/radix` page
-  (Radix Themes) and a `/baseui` page, then rebuilt with only `/baseui` to
-  capture the fully-migrated end state.
+## A. CSS Modules variant (minimal switch)
 
-## How it was measured
+- `buispike/baseui_switch.py` — Base UI `Switch` wrapped as a
+  `CSSModuleComponent`; styling from a co-located atomic module only.
+- `buispike/switch.module.css` + `buispike/_atoms.module.css` — the switch's
+  rules + shared atoms (`composes`).
 
+Built with `reflex export`; CSS emitted under `.web/build/client`:
+
+| Build | CSS shipped (gz) |
+|---|---|
+| Base UI + CSS-module (fully migrated, **zero Radix**) | **~2.7 KB** |
+| `_baseui_` route chunk alone | **406 B** |
+| Radix Themes (implicit, full bundle) | **84 KB** |
+| Radix w/ per-component+accent splitter | 28–38 KB |
+
+Compiled route confirms the pipeline (module imported **only** on pages where
+the component mounts, then Vite-tree-shaken):
+```js
+import {Switch} from "@base-ui/react/switch"
+import _rxcss_9968e39e from "$/styles/components/9968e39e/switch.module.css"
+...jsx(Switch.Thumb, {className: _rxcss_9968e39e.thumb})
 ```
-uv run --python 3.13 reflex export --frontend-only --no-zip
-# CSS assets emitted under .web/build/client/assets/*.css ; gzip each
-```
 
-## Results (gzipped)
+## B. Tailwind theme variant (full, browser-verified) — the RFC's recommendation
 
-| Build | CSS shipped (gz) | Notes |
-|---|---|---|
-| Base UI + atomic CSS (fully migrated, **zero Radix**) | **~2.7 KB** | 406 B route chunk + 2.3 KB Tailwind reset |
-| `_baseui_` route chunk alone | **406 B** | the entire switch: atoms + root + thumb + states |
-| Radix Themes (implicit, full bundle) | **84 KB** | whole design-system runtime |
-| Radix Themes w/ per-component+accent splitter | 28–38 KB | prior measurement on this branch |
+- `buispike/bui.py` — Base UI `switch`, `dialog` (Root/Trigger/Portal/Backdrop/
+  Popup/Title/Description/Close) and a `button`, styled with **Tailwind utility
+  classes** against a token theme, with `cn()` (clsx + tailwind-merge) so user
+  `class_name` overrides win deterministically.
+- `buispike/assets/theme.css` — the swappable token layer (`--primary-* →
+  violet`, `--secondary-* → slate`, gray, light + `.dark`), generated from the
+  real Radix scales.
+- `buispike/buispike.py` — app exercising all of it: interactive switch (Python
+  state round-trip), default + overridden buttons, a dialog, and dark mode
+  (toggled on `<html>` so the portaled dialog is themed too).
+- `buispike/shot.py` — Playwright driver that renders and exercises the app.
 
-~30× smaller than full Radix; ~10–14× smaller than the split.
+### Production CSS (gzipped), `reflex export`, zero Radix
+
+| Asset | gz |
+|---|---|
+| `__reflex_global_styles` (Tailwind reset + all used utilities) | 5.07 KB |
+| `theme.css` (entire violet/slate/gray token layer, light+dark) | 1.26 KB |
+| **TOTAL** | **~6.3 KB** |
+
+~13× smaller than full Radix (84 KB) for a **richer** page (dialog + switch +
+4 buttons + dark mode + full token theme). The token layer can be trimmed to
+only-used tokens; utilities already scale with usage.
+
+### Browser verification (Playwright, headless Chromium)
+
+`shot.py` → `ALL CHECKS PASSED`, screenshots in `/tmp/0{1,2,3}_*.png`:
+
+- ✅ Renders faithfully (Radix-violet look) — `01_light.png`
+- ✅ Switch **Python state round-trip** (On → Off → On via `rx.State`)
+- ✅ User override wins via tailwind-merge (red `Destructive` button)
+- ✅ Dark mode token-swap cascades to whole page — `02_dark.png`
+- ✅ Base UI dialog opens (headless behavior, backdrop, focus) and is themed
+  through the portal in dark mode — `03_dialog_dark.png` — and closes
 
 ## Why it works
 
-The `CSSModuleComponent` mechanism emits the module's `import` **only on pages
-where the component is mounted**; Vite then hashes/scopes/minifies and
-tree-shakes everything not imported. The compiled route confirms the full
-pipeline:
-
-```js
-import {Switch} from "@base-ui/react/switch"                                // headless behavior
-import _rxcss_9968e39e from "$/styles/components/9968e39e/switch.module.css"  // per-page, tree-shaken
-...jsx(Switch.Thumb, {className: _rxcss_9968e39e.thumb})                     // atomic class bound
-```
-
 The 28 KB Radix "floor" existed only because Radix ships its entire token+reset
-system at runtime. Authoring per-component atomic CSS (CSS-Modules `composes`,
-or Tailwind — Reflex's internal Base UI components already use the Tailwind
-variant) collapses a page to single-digit KB while keeping full control of the
-look.
+system at runtime. With atomic CSS, Vite/Tailwind emit only what the page uses;
+the token theme is a small, swappable layer. Both approaches collapse a page to
+single-digit KB while keeping full control of the look. Tailwind is the RFC's
+recommendation because user overrides are in the same language and merge
+deterministically (`cn`/tailwind-merge + Tailwind's `@layer` order).
 
 ## What this does NOT prove
 
 The remaining cost is unchanged: every component's *appearance* must be authored
-as atomic CSS to match the current look. That re-skin — not the build plumbing —
-is the real migration effort.
+as atomic classes to match the current look across all variants/sizes/states.
+That re-skin — not the build plumbing — is the real migration effort. See
+`rfcs/0001-base-ui-atomic-styling.md`.

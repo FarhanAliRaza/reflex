@@ -1,13 +1,13 @@
-"""Spike app: compare a Radix Themes page vs a Base UI + atomic-CSS page.
+"""Spike app: Base UI + atomic Tailwind theme, fully working.
 
-Two routes so one Vite build emits a per-route CSS chunk for each:
-  /radix   - Radix Themes components (rx.switch, rx.button) -> Radix runtime CSS
-  /baseui  - Base UI switch + plain HTML layout -> only the atomic CSS module
+Demonstrates: interactive switch (Python state round-trip), default + overridden
+buttons (tailwind-merge), a Base UI dialog (headless open/close/focus-trap),
+and dark mode via a `.dark` class on <html> (so the portaled dialog is themed).
 """
 
 import reflex as rx
 
-from buispike.baseui_switch import switch as baseui_switch
+from buispike.bui import button, dialog, switch
 
 
 class State(rx.State):
@@ -16,55 +16,78 @@ class State(rx.State):
     on: bool = True
 
     @rx.event
-    def toggle(self, value: bool):
-        """Toggle the switch.
+    def set_on(self, value: bool):
+        """Set switch state.
 
         Args:
-            value: The new checked value.
+            value: New checked value.
         """
         self.on = value
 
 
-def radix_page() -> rx.Component:
-    """Radix Themes page."""
-    return rx.center(
-        rx.vstack(
-            rx.heading("Radix Themes"),
-            rx.switch(default_checked=True),
-            rx.button("Action"),
-            spacing="4",
-            align="center",
-        ),
-        height="100vh",
-    )
+_CARD = (
+    "flex flex-col gap-6 w-[26rem] p-8 rounded-[calc(var(--radius)+4px)] "
+    "border border-[var(--secondary-6)] bg-[var(--secondary-2)]"
+)
+_ROW = "flex items-center gap-3"
+_LABEL = "text-sm text-[var(--secondary-11)]"
+_TOGGLE_DARK = rx.call_script("document.documentElement.classList.toggle('dark')")
 
 
-def baseui_page() -> rx.Component:
-    """Base UI + atomic-CSS page (no Radix layout components)."""
+def index() -> rx.Component:
+    """The spike page."""
     return rx.el.div(
         rx.el.div(
-            rx.el.h1("Base UI + atomic CSS"),
-            baseui_switch(
-                checked=State.on,
-                on_checked_change=State.toggle,
+            rx.el.div(
+                rx.el.h1(
+                    "Base UI + atomic Tailwind",
+                    class_name="text-2xl font-bold text-[var(--secondary-12)]",
+                ),
+                button(
+                    "Toggle theme",
+                    on_click=_TOGGLE_DARK,
+                    class_name="bg-[var(--secondary-12)] text-[var(--secondary-1)] "
+                    "hover:bg-[var(--secondary-11)]",
+                ),
+                class_name="flex items-center justify-between w-full",
             ),
-            style={
-                "display": "flex",
-                "flexDirection": "column",
-                "gap": "16px",
-                "alignItems": "center",
-            },
+            rx.el.div(
+                switch(checked=State.on, on_checked_change=State.set_on),
+                rx.el.span(rx.cond(State.on, "On", "Off"), class_name=_LABEL),
+                class_name=_ROW,
+            ),
+            rx.el.div(
+                button("Primary"),
+                button(
+                    "Destructive (override)",
+                    class_name="bg-red-600 hover:bg-red-700",
+                ),
+                class_name=_ROW,
+            ),
+            dialog.root(
+                dialog.trigger("Open dialog"),
+                dialog.portal(
+                    dialog.backdrop(),
+                    dialog.popup(
+                        dialog.title("Base UI Dialog"),
+                        dialog.description(
+                            "Headless behavior, atomic Tailwind styling, "
+                            "a fraction of a KB of CSS.",
+                        ),
+                        rx.el.div(
+                            dialog.close("Got it"),
+                            class_name="mt-5 flex justify-end",
+                        ),
+                    ),
+                ),
+            ),
+            class_name=_CARD,
         ),
-        style={
-            "display": "flex",
-            "justifyContent": "center",
-            "alignItems": "center",
-            "height": "100vh",
-            "fontFamily": "system-ui, sans-serif",
-        },
+        class_name="min-h-screen flex items-center justify-center "
+        "bg-[var(--secondary-1)] text-[var(--secondary-12)]",
+        style={"fontFamily": "system-ui, sans-serif"},
     )
 
 
-app = rx.App()
-# End-state build: ONLY the Base UI + atomic-CSS page, zero Radix components.
-app.add_page(baseui_page, route="/baseui")
+app = rx.App(stylesheets=["theme.css"])
+app.add_page(index, route="/")
