@@ -109,8 +109,8 @@ def switch(checked: bool = False, size: str = "2", variant: str = "surface", **p
     height, radius = _SWITCH_SIZES[size]
     state = "checked" if checked else "unchecked"
     width = f"calc({height}*1.75)"
-    thumb_size = f"calc({height} - 1px*2)"
-    translate_x = f"calc({width} - {height})"
+    thumb_size = f"calc({height}_-_1px*2)"
+    translate_x = f"calc({width}_-_{height})"
     bg_pos = "before:[background-position:0%]" if checked else "before:[background-position-x:100%]"
     root_cls = (
         "relative inline-flex items-center align-top shrink-0 text-start "
@@ -125,8 +125,8 @@ def switch(checked: bool = False, size: str = "2", variant: str = "surface", **p
     )
     thumb_transform = f"translate-x-[{translate_x}]" if checked else ""
     thumb_cls = (
-        "absolute left-[1px] bg-white "
-        f"w-[{thumb_size}] h-[{thumb_size}] rounded-[calc({radius} - 1px)] {thumb_transform}"
+        "absolute left-[1px] top-[1px] z-[1] bg-white "
+        f"w-[{thumb_size}] h-[{thumb_size}] rounded-[calc({radius}_-_1px)] {thumb_transform}"
     )
     props["class_name"] = cn(root_cls, props.pop("class_name", ""))
     props.setdefault("custom_attrs", {})["data-state"] = state

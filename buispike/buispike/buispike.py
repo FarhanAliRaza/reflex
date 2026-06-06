@@ -359,5 +359,10 @@ def demo() -> rx.Component:
 
 
 app = rx.App(stylesheets=["theme.css"])
-app.add_page(index, route="/")
-app.add_page(demo, route="/demo")
+_cmp = __import__("os").environ.get("REFLEX_CMP")
+if _cmp in ("parity", "radix"):
+    from buispike import cmp as _cmppages
+    app.add_page(getattr(_cmppages, f"{_cmp}_page"), route="/")
+else:
+    app.add_page(index, route="/")
+    app.add_page(demo, route="/demo")
