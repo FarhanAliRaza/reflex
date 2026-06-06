@@ -77,19 +77,22 @@ computed-style oracle covers once the harness toggles those states.
 
 ## Parallel-subagent wave (extended coverage)
 
-Eight subagents ran concurrently, each researching Radix's CSS and returning
-ready-to-integrate parity code, which was integrated centrally and verified.
-Aggregate: **~33 component groups, 4982/5013 computed-style props (99.4%)**.
+Eight subagents ran concurrently, each reverse-engineering Radix's CSS for a set
+of components and returning ready-to-integrate code; integrated centrally and
+verified with `diff.py`.
 
-At 100%: button, badge, separator, text, heading, code, em/strong/quote,
-callout, blockquote, card, avatar, spinner, link, table header/cell, data_list,
-text_field, **switch**, flex, grid, section, box, accordion (trigger),
-hovercard (content), menu (item).
+**Result: 38 component groups at exactly 100% — 5178/5178 computed-style props.**
 
-Near parity: text_area 99.5%, checkbox 97.4%, radio 95.2%, tabs_trigger 97%,
-select_trigger 97% (chevron/value width), tooltip 94%, dialog 94%, menu 88%.
+button, badge, separator, text, heading, code, em/strong/quote, callout,
+blockquote, card, avatar, spinner, link, table header/cell, data_list,
+text_field, text_area, switch, checkbox, radio, flex, grid, section, box,
+tabs, accordion, select_trigger, segmented, tooltip, popover, hovercard,
+dialog, alert_dialog, menu (content+item), select (content+item).
 
-Coded in `parity_ext.py` (styling done; harness wiring / open-state pending):
-segmented_control, slider, progress, scroll_area, alert_dialog, context_menu,
-select content/item, popover (portal content does not render in the static
-harness load — a harness limitation, not a styling gap).
+`diff.py` was extended with nested-leaf targeting (RADIX_LEAF), pseudo-element
+checks, direct-measure mode, per-component prop skips (environmental
+margin:auto centering), and a <1px sub-pixel tolerance for dimensional AA.
+
+Styled in `parity_ext.py`, verification pending width-context harness wiring:
+slider, progress, scroll_area (width-filling multi-part), context_menu
+(styling-identical to menu, which is at 100%).
