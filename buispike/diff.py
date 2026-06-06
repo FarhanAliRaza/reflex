@@ -60,7 +60,14 @@ COMPONENTS = {
     "card": [f"card-{s}" for s in ["1", "2"]],
     "avatar": [f"avatar-{s}" for s in ["1", "2", "3", "4"]],
     "spinner": [f"spinner-{s}" for s in ["1", "2", "3"]],
+    "link": [f"link-{s}" for s in ["1", "2", "3", "5"]],
+    "table_header": [f"tbl-head-{s}" for s in ["1", "2", "3"]],
+    "table_cell": [f"tbl-cell-{s}" for s in ["1", "2", "3"]],
+    "data_list": ["dl-label", "dl-value"],
 }
+
+# Components whose styled leaf carries the testid directly (measure el, not child).
+DIRECT = {"table_header", "table_cell", "data_list"}
 
 # Components whose visuals live on pseudo-elements: also compare those.
 PSEUDO = {
@@ -71,17 +78,18 @@ PSEUDO = {
 }
 
 
-def _styles(pg, sel):
+def _styles(pg, sel, direct=False):
     return pg.eval_on_selector(
         sel,
-        """(el, props)=>{
-            const b = el.firstElementChild || el;
+        """(el, args)=>{
+            const [props, direct] = args;
+            const b = direct ? el : (el.firstElementChild || el);
             const s = getComputedStyle(b);
             const o = {};
             for (const p of props) o[p] = s[p];
             return o;
         }""",
-        PROPS,
+        [PROPS, direct],
     )
 
 
@@ -103,13 +111,13 @@ def _norm(prop, v):
     return _round_px(v)
 
 
-def check(pg, cases, prefix_radix, prefix_mine, label):
+def check(pg, cases, prefix_radix, prefix_mine, label, direct=False):
     """Compare computed styles for each case; return (matched, total, details)."""
     matched = total = 0
     details = []
     for key in cases:
-        r = _styles(pg, f"[data-testid={prefix_radix}-{key}]")
-        m = _styles(pg, f"[data-testid={prefix_mine}-{key}]")
+        r = _styles(pg, f"[data-testid={prefix_radix}-{key}]", direct)
+        m = _styles(pg, f"[data-testid={prefix_mine}-{key}]", direct)
         # border style/color are invisible (and thus irrelevant) when width is 0;
         # Tailwind preflight defaults to solid, Radix to none.
         skip = set()
@@ -167,7 +175,9 @@ def run():
         pg.wait_for_selector("[data-testid=radix-btn-solid-2]", timeout=30000)
         pg.wait_for_timeout(500)
         for comp, cases in COMPONENTS.items():
-            matched, total, details = check(pg, cases, "radix", "mine", comp)
+            matched, total, details = check(
+                pg, cases, "radix", "mine", comp, direct=comp in DIRECT
+            )
             if comp in PSEUDO:
                 pm, pt, pd = check_pseudo(pg, comp, cases)
                 matched += pm

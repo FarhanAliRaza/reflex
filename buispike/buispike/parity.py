@@ -443,3 +443,86 @@ def spinner(size: str = "2", **props) -> rx.Component:
     cls = f"block relative opacity-[var(--spinner-opacity)] w-[{sz}] h-[{sz}]"
     props["class_name"] = cn(cls, props.pop("class_name", ""))
     return rx.el.span(**props)
+
+
+# --- Table cells ------------------------------------------------------------
+# Mirrors Radix .rt-TableCell / .rt-TableColumnHeaderCell (scaling = 1).
+
+_TABLE_SIZES = {
+    "1": ("p-[var(--space-2)]", "36px", "2"),
+    "2": ("p-[var(--space-3)]", "44px", "2"),
+    "3": ("py-[var(--space-3)] px-[var(--space-4)]", "var(--space-8)", "3"),
+}
+_TABLE_CELL_BASE = (
+    "box-border [vertical-align:inherit] text-left bg-transparent "
+    "text-[var(--gray-12)] shadow-[inset_0_-1px_var(--gray-a5)]"
+)
+
+
+def _table_cell_classes(size: str, header: bool) -> str:
+    pad, min_h, fs = _TABLE_SIZES[size]
+    weight = "font-bold" if header else "font-normal"
+    return (
+        f"{_TABLE_CELL_BASE} {pad} h-[{min_h}] {weight} "
+        f"text-[length:var(--font-size-{fs})] leading-[var(--line-height-{fs})] "
+        f"tracking-[var(--letter-spacing-{fs})] "
+        f"font-[family-name:var(--default-font-family)]"
+    )
+
+
+def table_cell(*children, size: str = "2", **props) -> rx.Component:
+    """A Radix-faithful table body cell (<td>)."""
+    props["class_name"] = cn(_table_cell_classes(size, False), props.pop("class_name", ""))
+    return rx.el.td(*children, **props)
+
+
+def table_header_cell(*children, size: str = "2", **props) -> rx.Component:
+    """A Radix-faithful table column header cell (<th>, bold)."""
+    props["class_name"] = cn(_table_cell_classes(size, True), props.pop("class_name", ""))
+    return rx.el.th(*children, **props)
+
+
+# --- DataList label / value (horizontal) ------------------------------------
+
+_DL_FONT = (
+    "text-[length:var(--font-size-2)] leading-[var(--line-height-2)] "
+    "tracking-[var(--letter-spacing-2)] font-normal not-italic "
+    "font-[family-name:var(--default-font-family)] text-start"
+)
+
+
+def data_list_label(*children, **props) -> rx.Component:
+    """A Radix-faithful DataList label."""
+    cls = f"flex min-w-[120px] text-[var(--gray-a11)] {_DL_FONT}"
+    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    return rx.el.div(*children, **props)
+
+
+def data_list_value(*children, **props) -> rx.Component:
+    """A Radix-faithful DataList value (non-edge horizontal item)."""
+    cls = f"flex min-w-0 mx-0 my-[-0.25em] text-[var(--gray-12)] {_DL_FONT}"
+    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    return rx.el.dd(*children, **props)
+
+
+# --- Link -------------------------------------------------------------------
+
+_LINK_DECORATION = (
+    "[text-decoration-line:none] [text-decoration-style:solid] "
+    "[text-decoration-thickness:min(2px,max(1px,0.05em))] "
+    "[text-underline-offset:calc(0.025em_+_2px)] "
+    "[text-decoration-color:color-mix(in_oklab,var(--accent-a5),var(--gray-a6))]"
+)
+
+
+def link(*children, size: str = "3", **props) -> rx.Component:
+    """A Radix-faithful link (accent color, auto underline)."""
+    cls = (
+        f"text-[var(--accent-a11)] text-start "
+        f"text-[length:var(--font-size-{size})] leading-[var(--line-height-{size})] "
+        f"tracking-[var(--letter-spacing-{size})] font-normal not-italic "
+        f"font-[family-name:var(--default-font-family)] {_LINK_DECORATION}"
+    )
+    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    props.setdefault("href", "#")
+    return rx.el.a(*children, **props)

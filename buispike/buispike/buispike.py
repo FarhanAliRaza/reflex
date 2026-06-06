@@ -127,6 +127,58 @@ def _build_rows():
     for s in ["1", "2", "3"]:
         k = f"spinner-{s}"
         rows.append(_pair(k, rx.spinner(size=s), P.spinner(size=s)))
+    for s in ["1", "2", "3", "5"]:
+        k = f"link-{s}"
+        rows.append(
+            _pair(k, rx.link("Read more", size=s, color_scheme="violet", href="#"),
+                  P.link("Read more", size=s))
+        )
+
+    def _row(key, radix_node, mine_node):
+        return rx.el.div(
+            rx.el.span(key, class_name="w-36 text-xs text-[var(--secondary-11)]"),
+            rx.el.div(radix_node, class_name="inline-flex p-1"),
+            rx.el.div(mine_node, class_name="inline-flex p-1"),
+            class_name="flex items-center gap-10",
+        )
+
+    def _tbl(cell):
+        return rx.el.table(rx.el.tbody(rx.el.tr(cell)), class_name="border-collapse")
+
+    for s in ["1", "2", "3"]:
+        k = f"tbl-head-{s}"
+        rows.append(_row(
+            k,
+            rx.table.root(rx.table.header(rx.table.row(
+                rx.table.column_header_cell("H", custom_attrs={"data-testid": f"radix-{k}"}))), size=s),
+            _tbl(P.table_header_cell("H", size=s, custom_attrs={"data-testid": f"mine-{k}"})),
+        ))
+    for s in ["1", "2", "3"]:
+        k = f"tbl-cell-{s}"
+        rows.append(_row(
+            k,
+            rx.table.root(rx.table.body(rx.table.row(
+                rx.table.cell("C", custom_attrs={"data-testid": f"radix-{k}"}))), size=s),
+            _tbl(P.table_cell("C", size=s, custom_attrs={"data-testid": f"mine-{k}"})),
+        ))
+    rows.append(_row(
+        "dl-label",
+        rx.data_list.root(rx.data_list.item(
+            rx.data_list.label("Name", custom_attrs={"data-testid": "radix-dl-label"}),
+            rx.data_list.value("Value"))),
+        P.data_list_label("Name", custom_attrs={"data-testid": "mine-dl-label"}),
+    ))
+    rows.append(_row(
+        "dl-value",
+        rx.data_list.root(
+            rx.data_list.item(rx.data_list.label("A"), rx.data_list.value("V1")),
+            rx.data_list.item(
+                rx.data_list.label("B"),
+                rx.data_list.value("V2", custom_attrs={"data-testid": "radix-dl-value"})),
+            rx.data_list.item(rx.data_list.label("C"), rx.data_list.value("V3")),
+        ),
+        P.data_list_value("V2", custom_attrs={"data-testid": "mine-dl-value"}),
+    ))
     return rows
 
 
