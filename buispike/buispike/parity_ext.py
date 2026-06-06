@@ -477,7 +477,8 @@ def select_trigger(text: str, size: str = "2", variant: str = "surface", **props
         f"{_SELECT_TRIGGER_VARIANTS[variant]}"
     )
     props["class_name"] = cn(cls, props.pop("class_name", ""))
-    return rx.el.button(rx.el.span(text), **props)
+    chevron = rx.el.span(class_name="w-[9px] h-[9px] shrink-0")  # matches .rt-SelectIcon width
+    return rx.el.button(rx.el.span(text), chevron, **props)
 
 
 _SELECT_CONTENT = "flex flex-col overflow-hidden box-border bg-[var(--color-panel-solid)] shadow-[var(--shadow-5)]"

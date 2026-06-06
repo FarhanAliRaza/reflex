@@ -152,6 +152,17 @@ def _round_px(v):
     return v
 
 
+def _eq(prop, rv, mv):
+    # width/height differing by <1px is sub-pixel AA/rounding (imperceptible).
+    if prop in ("width", "height") and isinstance(rv, str) and isinstance(mv, str):
+        if rv.endswith("px") and mv.endswith("px"):
+            try:
+                return abs(float(rv[:-2]) - float(mv[:-2])) < 1.0
+            except ValueError:
+                pass
+    return _norm(prop, rv) == _norm(prop, mv)
+
+
 def _norm(prop, v):
     # Tailwind composes box-shadow with transparent filler layers that are
     # visually identical to Radix's single shadow; strip them before compare.
@@ -183,7 +194,7 @@ def check(pg, cases, prefix_radix, prefix_mine, label, direct=False):
         diffs = [
             (p, r[p], m[p])
             for p in PROPS
-            if p not in skip and _norm(p, r[p]) != _norm(p, m[p])
+            if p not in skip and not _eq(p, r[p], m[p])
         ]
         total += len(PROPS)
         matched += len(PROPS) - len(diffs)
