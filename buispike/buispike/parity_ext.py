@@ -150,7 +150,8 @@ def checkbox(checked: bool = False, size: str = "2", variant: str = "surface", *
     )
     root_cls = (
         "relative flex items-center justify-center align-top shrink-0 text-start "
-        f"text-[length:var(--font-size-{size})] h-[var(--line-height-{size})] "
+        f"text-[length:var(--font-size-{size})] leading-[var(--line-height-{size})] "
+        f"tracking-[var(--letter-spacing-{size})] h-[var(--line-height-{size})] "
         f"before:content-[''] before:block "
         f"before:w-[{csize}] before:h-[{csize}] before:rounded-[{radius}] {before_bg}"
     )
@@ -178,7 +179,6 @@ def radio(checked: bool = False, size: str = "2", variant: str = "surface", **pr
         after_cls = ""
     root_cls = (
         "relative flex items-center justify-center align-top shrink-0 text-start "
-        f"text-[length:var(--font-size-{size})] "
         f"h-[{rsize}] before:content-[''] before:block "
         f"before:w-[{rsize}] before:h-[{rsize}] before:[border-radius:100%] {before_bg} {after_cls}"
     )
@@ -357,7 +357,8 @@ def inset(*children, **props) -> rx.Component:
 # --- Overlay content panels -------------------------------------------------
 def tooltip_content(*children, **props) -> rx.Component:
     """A Radix-faithful tooltip content panel."""
-    cls = "box-border relative py-[var(--space-1)] px-[var(--space-2)] bg-[var(--gray-12)] rounded-[var(--radius-2)]"
+    cls = ("box-border relative py-[var(--space-1)] px-[var(--space-2)] bg-[var(--gray-12)] rounded-[var(--radius-2)] "
+           "text-[length:var(--font-size-1)] leading-[var(--line-height-1)]")
     props["class_name"] = cn(cls, props.pop("class_name", ""))
     return rx.el.div(*children, **props)
 
@@ -421,7 +422,7 @@ def accordion_item(*children, **props) -> rx.Component:
 # --- DropdownMenu / Select --------------------------------------------------
 _MENU_CONTENT = (
     "flex flex-col box-border overflow-hidden bg-[var(--color-panel-solid)] shadow-[var(--shadow-5)] "
-    "rounded-[var(--radius-4)] p-[var(--space-2)]"
+    "rounded-[var(--radius-4)]"
 )
 _MENU_ITEM = (
     "flex items-center gap-[var(--space-2)] box-border relative outline-none select-none "

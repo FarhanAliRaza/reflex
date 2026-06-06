@@ -245,8 +245,35 @@ def _build_rows():
     rows.append(_row(
         "popover-content",
         rx.popover.root(rx.popover.trigger(rx.button("x")),
-                        rx.popover.content("hi", custom_attrs={"data-testid": "radix-popover-content"}), default_open=True),
+                        rx.popover.content("hi", custom_attrs={"data-testid": "radix-popover-content"}), open=True),
         P.popover_content("hi", custom_attrs={"data-testid": "mine-popover-content"}),
+    ))
+    rows.append(_row(
+        "alertdialog-content",
+        rx.alert_dialog.root(rx.alert_dialog.trigger(rx.button("Open")),
+                             rx.alert_dialog.content("Body", custom_attrs={"data-testid": "radix-alertdialog-content"}), default_open=True),
+        P.alert_dialog_content("Body", custom_attrs={"data-testid": "mine-alertdialog-content"}),
+    ))
+    rows.append(_row(
+        "seg-root-2",
+        rx.segmented_control.root(rx.segmented_control.item("One", value="a"), rx.segmented_control.item("Two", value="b"),
+                                  size="2", default_value="a", custom_attrs={"data-testid": "radix-seg-root-2"}),
+        P.segmented_root(P.segmented_item("One", size="2", active=True), P.segmented_item("Two", size="2"),
+                         size="2", custom_attrs={"data-testid": "mine-seg-root-2"}),
+    ))
+    rows.append(_row(
+        "select-content",
+        rx.select.root(rx.select.trigger(), rx.select.content(rx.select.item("a", value="a"),
+                       custom_attrs={"data-testid": "radix-select-content"}, size="2", variant="solid", position="popper"),
+                       default_value="a", size="2", open=True),
+        P.select_content(P.select_item("a", size="2"), size="2", custom_attrs={"data-testid": "mine-select-content"}),
+    ))
+    rows.append(_row(
+        "select-item",
+        rx.select.root(rx.select.trigger(), rx.select.content(
+            rx.select.item("Hi", value="b", custom_attrs={"data-testid": "radix-select-item", "data-highlighted": ""}),
+            size="2", variant="solid", position="popper"), default_value="a", size="2", open=True),
+        P.select_content(P.select_item("Hi", size="2", highlighted=True, custom_attrs={"data-testid": "mine-select-item"}), size="2"),
     ))
     rows.append(_row(
         "hovercard-content",

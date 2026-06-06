@@ -82,6 +82,10 @@ COMPONENTS = {
     "dialog_content": ["dialog-content"],
     "menu_content": ["menu-content"],
     "menu_item": ["menu-item"],
+    "alertdialog_content": ["alertdialog-content"],
+    "segmented_root": ["seg-root-2"],
+    "select_content": ["select-content"],
+    "select_item": ["select-item"],
 }
 
 # Components whose styled leaf carries the testid directly (measure el, not child).
@@ -90,6 +94,7 @@ DIRECT = {
     "tabs_trigger", "accordion_trigger", "select_trigger",
     "tooltip_content", "popover_content", "hovercard_content",
     "dialog_content", "menu_content", "menu_item",
+    "alertdialog_content", "segmented_root", "select_content", "select_item",
 }
 
 # Radix side: the styled leaf is nested; reach it by appending this selector to
