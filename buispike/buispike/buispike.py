@@ -1,17 +1,66 @@
-"""Spike app: Base UI + atomic Tailwind theme, fully working.
+"""Parity harness: Radix Themes vs Base UI + atomic Tailwind, side by side.
 
-Demonstrates: interactive switch (Python state round-trip), default + overridden
-buttons (tailwind-merge), a Base UI dialog (headless open/close/focus-trap),
-and dark mode via a `.dark` class on <html> (so the portaled dialog is themed).
+The index page renders, for each (variant, size), a Radix component and the
+parity component in tagged cells so ``diff.py`` can screenshot each and compute
+a pixel-diff. A `/demo` page keeps the original interactive showcase.
 """
 
 import reflex as rx
 
-from buispike.bui import button, dialog, switch
+from buispike.bui import button as demo_button
+from buispike.bui import dialog, switch
+from buispike.parity import button as pbutton
+
+_VARIANTS = ["solid", "soft", "outline", "surface", "ghost"]
+_SIZES = ["1", "2", "3", "4"]
+
+
+def _cell(content, tid: str) -> rx.Component:
+    return rx.el.div(
+        content,
+        custom_attrs={"data-testid": tid},
+        class_name="inline-flex p-1",
+    )
+
+
+def index() -> rx.Component:
+    """Parity harness page."""
+    rows = []
+    for variant in _VARIANTS:
+        for size in _SIZES:
+            key = f"{variant}-{size}"
+            rows.append(
+                rx.el.div(
+                    rx.el.span(
+                        key, class_name="w-28 text-xs text-[var(--secondary-11)]"
+                    ),
+                    _cell(
+                        rx.button(
+                            "Button",
+                            size=size,
+                            variant=variant,
+                            color_scheme="violet",
+                        ),
+                        f"radix-{key}",
+                    ),
+                    _cell(pbutton("Button", size=size, variant=variant), f"mine-{key}"),
+                    class_name="flex items-center gap-10",
+                )
+            )
+    return rx.theme(
+        rx.el.div(
+            rx.el.div("Radix → | ← Base UI", class_name="text-sm font-bold mb-2"),
+            *rows,
+            class_name="flex flex-col gap-2 p-8 bg-white",
+        ),
+        accent_color="violet",
+        gray_color="slate",
+        radius="medium",
+    )
 
 
 class State(rx.State):
-    """App state."""
+    """Demo state."""
 
     on: bool = True
 
@@ -20,60 +69,25 @@ class State(rx.State):
         """Set switch state.
 
         Args:
-            value: New checked value.
+            value: New value.
         """
         self.on = value
 
 
-_CARD = (
-    "flex flex-col gap-6 w-[26rem] p-8 rounded-[calc(var(--radius)+4px)] "
-    "border border-[var(--secondary-6)] bg-[var(--secondary-2)]"
-)
-_ROW = "flex items-center gap-3"
-_LABEL = "text-sm text-[var(--secondary-11)]"
-_TOGGLE_DARK = rx.call_script("document.documentElement.classList.toggle('dark')")
-
-
-def index() -> rx.Component:
-    """The spike page."""
+def demo() -> rx.Component:
+    """Original interactive demo (switch/dialog/buttons/dark mode)."""
     return rx.el.div(
         rx.el.div(
-            rx.el.div(
-                rx.el.h1(
-                    "Base UI + atomic Tailwind",
-                    class_name="text-2xl font-bold text-[var(--secondary-12)]",
-                ),
-                button(
-                    "Toggle theme",
-                    on_click=_TOGGLE_DARK,
-                    class_name="bg-[var(--secondary-12)] text-[var(--secondary-1)] "
-                    "hover:bg-[var(--secondary-11)]",
-                ),
-                class_name="flex items-center justify-between w-full",
-            ),
-            rx.el.div(
-                switch(checked=State.on, on_checked_change=State.set_on),
-                rx.el.span(rx.cond(State.on, "On", "Off"), class_name=_LABEL),
-                class_name=_ROW,
-            ),
-            rx.el.div(
-                button("Primary"),
-                button(
-                    "Destructive (override)",
-                    class_name="bg-red-600 hover:bg-red-700",
-                ),
-                class_name=_ROW,
-            ),
+            switch(checked=State.on, on_checked_change=State.set_on),
+            demo_button("Primary"),
+            demo_button("Override", class_name="bg-red-600 hover:bg-red-700"),
             dialog.root(
                 dialog.trigger("Open dialog"),
                 dialog.portal(
                     dialog.backdrop(),
                     dialog.popup(
                         dialog.title("Base UI Dialog"),
-                        dialog.description(
-                            "Headless behavior, atomic Tailwind styling, "
-                            "a fraction of a KB of CSS.",
-                        ),
+                        dialog.description("Atomic Tailwind, tiny CSS."),
                         rx.el.div(
                             dialog.close("Got it"),
                             class_name="mt-5 flex justify-end",
@@ -81,13 +95,12 @@ def index() -> rx.Component:
                     ),
                 ),
             ),
-            class_name=_CARD,
+            class_name="flex items-center gap-3 p-8",
         ),
-        class_name="min-h-screen flex items-center justify-center "
-        "bg-[var(--secondary-1)] text-[var(--secondary-12)]",
-        style={"fontFamily": "system-ui, sans-serif"},
+        class_name="min-h-screen bg-[var(--secondary-1)] text-[var(--secondary-12)]",
     )
 
 
 app = rx.App(stylesheets=["theme.css"])
 app.add_page(index, route="/")
+app.add_page(demo, route="/demo")
