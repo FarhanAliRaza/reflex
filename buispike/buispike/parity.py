@@ -380,3 +380,66 @@ def card(*children, size: str = "1", **props) -> rx.Component:
     cls = f"{_CARD_BASE} {_CARD_SIZES[size]}"
     props["class_name"] = cn(cls, props.pop("class_name", ""))
     return rx.el.div(*children, **props)
+
+
+# --- Avatar -----------------------------------------------------------------
+# Mirrors Radix .rt-AvatarRoot (the fallback bg/color lives on a child).
+
+_AVATAR_BASE = (
+    "inline-flex items-center justify-center align-middle select-none shrink-0 "
+    "relative overflow-hidden"
+)
+# size -> (avatar-size, radius idx, letter-spacing idx)
+_AVATAR_SIZES = {
+    "1": ("--space-5", "2", "1"),
+    "2": ("--space-6", "2", "2"),
+    "3": ("--space-7", "3", "3"),
+    "4": ("--space-8", "3", "4"),
+}
+
+
+def avatar(*children, size: str = "3", **props) -> rx.Component:
+    """A Radix-faithful avatar root.
+
+    Args:
+        *children: Fallback/content.
+        size: "1"-"4".
+        **props: Extra props.
+
+    Returns:
+        The avatar element.
+    """
+    asz, rad, ls = _AVATAR_SIZES[size]
+    cls = (
+        f"{_AVATAR_BASE} w-[var({asz})] h-[var({asz})] "
+        f"tracking-[var(--letter-spacing-{ls})] "
+        f"rounded-[max(var(--radius-{rad}),var(--radius-full))]"
+    )
+    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    return rx.el.span(*children, **props)
+
+
+# --- Spinner ----------------------------------------------------------------
+# Mirrors Radix .rt-Spinner root (leaves are children).
+
+_SPINNER_SIZE = {
+    "1": "var(--space-3)",
+    "2": "var(--space-4)",
+    "3": "calc(1.25*var(--space-4))",
+}
+
+
+def spinner(size: str = "2", **props) -> rx.Component:
+    """A Radix-faithful spinner root.
+
+    Args:
+        size: "1"-"3".
+        **props: Extra props.
+
+    Returns:
+        The spinner element.
+    """
+    sz = _SPINNER_SIZE[size]
+    cls = f"block relative opacity-[var(--spinner-opacity)] w-[{sz}] h-[{sz}]"
+    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    return rx.el.span(**props)

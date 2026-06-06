@@ -58,6 +58,8 @@ COMPONENTS = {
     ],
     "blockquote": [f"bq-{s}" for s in ["1", "2", "3", "5"]],
     "card": [f"card-{s}" for s in ["1", "2"]],
+    "avatar": [f"avatar-{s}" for s in ["1", "2", "3", "4"]],
+    "spinner": [f"spinner-{s}" for s in ["1", "2", "3"]],
 }
 
 # Components whose visuals live on pseudo-elements: also compare those.

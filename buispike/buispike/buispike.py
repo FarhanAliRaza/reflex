@@ -119,6 +119,14 @@ def _build_rows():
                 P.card("Card body", size=s),
             )
         )
+    for s in ["1", "2", "3", "4"]:
+        k = f"avatar-{s}"
+        rows.append(
+            _pair(k, rx.avatar(fallback="RX", size=s), P.avatar("RX", size=s))
+        )
+    for s in ["1", "2", "3"]:
+        k = f"spinner-{s}"
+        rows.append(_pair(k, rx.spinner(size=s), P.spinner(size=s)))
     return rows
 
 

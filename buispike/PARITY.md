@@ -34,7 +34,9 @@ Run: dev server (`reflex run`) + `uv run --python 3.13 python diff.py`.
 | Callout (soft/surface/outline × size 1–2) | 6 | 198 | ✅ 100% |
 | Blockquote (size 1/2/3/5) | 4 | 132 | ✅ 100% |
 | Card (surface, size 1–2; incl. ::before/::after pseudos) | 2 | 78 | ✅ 100% |
-| **Total** | **79** | **2619** | **✅ 100%** |
+| Avatar (size 1–4) | 4 | 132 | ✅ 100% |
+| Spinner (size 1–3) | 3 | 99 | ✅ 100% |
+| **Total** | **86** | **2850** | **✅ 100%** |
 
 Properties checked per case: width, height, padding (×4), margin (×4),
 fontSize, fontWeight, fontFamily, letterSpacing, lineHeight, color,
