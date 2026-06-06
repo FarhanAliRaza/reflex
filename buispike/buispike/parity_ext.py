@@ -486,7 +486,7 @@ _SELECT_ITEM_SIZES = {
 def select_content(*children, size: str = "2", **props) -> rx.Component:
     """A Radix-faithful select content panel (solid)."""
     pad, rad = _SELECT_CONTENT_SIZES[size]
-    props["class_name"] = cn(f"{_SELECT_CONTENT} p-[var({pad})] rounded-[var({rad})]", props.pop("class_name", ""))
+    props["class_name"] = cn(f"{_SELECT_CONTENT} rounded-[var({rad})]", props.pop("class_name", ""))
     return rx.el.div(*children, **props)
 
 
