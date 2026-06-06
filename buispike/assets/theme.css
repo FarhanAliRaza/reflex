@@ -7,6 +7,22 @@
   --color-surface: rgba(255,255,255,0.85);
   --color-background: white;
   --card-border-width: 1px;
+  --container-1: 448px;
+  --container-2: 688px;
+  --container-3: 880px;
+  --container-4: 1136px;
+  --black-a1: rgba(0,0,0,0.05);
+  --black-a2: rgba(0,0,0,0.1);
+  --black-a3: rgba(0,0,0,0.15);
+  --black-a4: rgba(0,0,0,0.2);
+  --black-a5: rgba(0,0,0,0.3);
+  --black-a6: rgba(0,0,0,0.4);
+  --black-a7: rgba(0,0,0,0.5);
+  --black-a11: rgba(0,0,0,0.9);
+  --segmented-control-indicator-background-color: var(--color-background);
+  --shadow-4: 0 0 0 1px var(--gray-a3), 0 8px 40px var(--black-a1), 0 12px 32px -16px var(--gray-a3);
+  --shadow-5: 0 0 0 1px var(--gray-a3), 0 12px 60px var(--black-a3), 0 12px 32px -16px var(--gray-a5);
+  --shadow-6: 0 0 0 1px var(--gray-a3), 0 12px 60px var(--black-a3), 0 16px 64px var(--gray-a2), 0 16px 36px -20px var(--gray-a7);
   --base-card-surface-box-shadow: 0 0 0 1px color-mix(in oklab, var(--gray-a5), var(--gray-6) 25%);
   --cursor-checkbox: default;
   --cursor-disabled: not-allowed;
@@ -382,6 +398,10 @@
   --color-panel-translucent: var(--gray-a2);
   --color-panel: var(--color-panel-translucent);
   --color-surface: rgba(0,0,0,0.25);
+  --segmented-control-indicator-background-color: var(--gray-a3);
+  --shadow-4: 0 0 0 1px var(--gray-a6), 0 8px 40px var(--black-a3), 0 12px 32px -16px var(--black-a5);
+  --shadow-5: 0 0 0 1px var(--gray-a6), 0 12px 60px var(--black-a5), 0 12px 32px -16px var(--black-a7);
+  --shadow-6: 0 0 0 1px var(--gray-a6), 0 12px 60px var(--black-a4), 0 16px 64px var(--black-a6), 0 16px 36px -20px var(--black-a11);
   --color-background: var(--gray-1);
 }
 

@@ -179,6 +179,33 @@ def _build_rows():
         ),
         P.data_list_value("V2", custom_attrs={"data-testid": "mine-dl-value"}),
     ))
+    for v in ["surface", "soft"]:
+        for s in ["1", "2", "3"]:
+            rows.append(_pair(
+                f"tf-{v}-{s}",
+                rx.input(placeholder="Text", size=s, variant=v, color_scheme="violet"),
+                P.text_field(placeholder="Text", size=s, variant=v),
+            ))
+            rows.append(_pair(
+                f"ta-{v}-{s}",
+                rx.text_area(placeholder="Text", size=s, variant=v, color_scheme="violet", width="200px"),
+                P.text_area(placeholder="Text", size=s, variant=v, class_name="w-[200px]"),
+            ))
+    # Switch / Checkbox / Radio (fixed states; visuals on ::before/::after)
+    for s in ["1", "2", "3"]:
+        rows.append(_pair(f"switch-on-{s}", rx.switch(size=s, default_checked=True, color_scheme="violet"), P.switch(checked=True, size=s)))
+        rows.append(_pair(f"switch-off-{s}", rx.switch(size=s, default_checked=False, color_scheme="violet"), P.switch(checked=False, size=s)))
+        rows.append(_pair(f"cb-on-{s}", rx.checkbox(size=s, default_checked=True, color_scheme="violet"), P.checkbox(checked=True, size=s)))
+        rows.append(_pair(f"cb-off-{s}", rx.checkbox(size=s, default_checked=False, color_scheme="violet"), P.checkbox(checked=False, size=s)))
+        rows.append(_pair(f"radio-on-{s}", rx.radio_group.root(rx.radio_group.item(value="a"), size=s, default_value="a", color_scheme="violet"), P.radio(checked=True, size=s)))
+        rows.append(_pair(f"radio-off-{s}", rx.radio_group.root(rx.radio_group.item(value="a"), size=s, default_value="", color_scheme="violet"), P.radio(checked=False, size=s)))
+    # Layout primitives
+    for g in ["1", "2", "3"]:
+        rows.append(_pair(f"flex-gap-{g}", rx.flex(rx.el.span("A"), rx.el.span("B"), spacing=g, direction="row"), P.flex(rx.el.span("A"), rx.el.span("B"), gap=g, direction="row")))
+        rows.append(_pair(f"grid-gap-{g}", rx.grid(rx.el.span("A"), rx.el.span("B"), columns="2", spacing=g), P.grid(rx.el.span("A"), rx.el.span("B"), columns="2", gap=g)))
+    for s in ["1", "2", "3"]:
+        rows.append(_pair(f"section-{s}", rx.section(rx.el.span("X"), size=s), P.section(rx.el.span("X"), size=s)))
+    rows.append(_pair("box-1", rx.box(rx.el.span("X"), class_name="w-[80px] h-[40px]"), P.box(rx.el.span("X"), class_name="w-[80px] h-[40px]")))
     return rows
 
 

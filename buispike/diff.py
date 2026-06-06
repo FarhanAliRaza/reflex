@@ -64,6 +64,15 @@ COMPONENTS = {
     "table_header": [f"tbl-head-{s}" for s in ["1", "2", "3"]],
     "table_cell": [f"tbl-cell-{s}" for s in ["1", "2", "3"]],
     "data_list": ["dl-label", "dl-value"],
+    "text_field": [f"tf-{v}-{s}" for v in ["surface", "soft"] for s in ["1", "2", "3"]],
+    "text_area": [f"ta-{v}-{s}" for v in ["surface", "soft"] for s in ["1", "2", "3"]],
+    "switch": [f"switch-{st}-{s}" for st in ["on", "off"] for s in ["1", "2", "3"]],
+    "checkbox": [f"cb-{st}-{s}" for st in ["on", "off"] for s in ["1", "2", "3"]],
+    "radio": [f"radio-{st}-{s}" for st in ["on", "off"] for s in ["1", "2", "3"]],
+    "flex": [f"flex-gap-{g}" for g in ["1", "2", "3"]],
+    "grid": [f"grid-gap-{g}" for g in ["1", "2", "3"]],
+    "section": [f"section-{s}" for s in ["1", "2", "3"]],
+    "box": ["box-1"],
 }
 
 # Components whose styled leaf carries the testid directly (measure el, not child).
@@ -74,6 +83,15 @@ PSEUDO = {
     "card": {
         "::before": ["backgroundColor", "borderTopLeftRadius"],
         "::after": ["boxShadow", "borderTopLeftRadius", "top", "left"],
+    },
+    "switch": {
+        "::before": ["width", "height", "borderTopLeftRadius", "backgroundColor"],
+    },
+    "checkbox": {
+        "::before": ["width", "height", "borderTopLeftRadius", "backgroundColor", "boxShadow"],
+    },
+    "radio": {
+        "::before": ["width", "height", "borderTopLeftRadius", "backgroundColor", "boxShadow"],
     },
 }
 
