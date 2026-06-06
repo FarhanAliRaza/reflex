@@ -57,6 +57,15 @@ COMPONENTS = {
         for s in ["1", "2"]
     ],
     "blockquote": [f"bq-{s}" for s in ["1", "2", "3", "5"]],
+    "card": [f"card-{s}" for s in ["1", "2"]],
+}
+
+# Components whose visuals live on pseudo-elements: also compare those.
+PSEUDO = {
+    "card": {
+        "::before": ["backgroundColor", "borderTopLeftRadius"],
+        "::after": ["boxShadow", "borderTopLeftRadius", "top", "left"],
+    },
 }
 
 
@@ -118,17 +127,50 @@ def check(pg, cases, prefix_radix, prefix_mine, label):
     return matched, total, details
 
 
+def _pseudo(pg, sel, pseudo, props):
+    return pg.eval_on_selector(
+        sel,
+        """(el, args)=>{
+            const [pseudo, props] = args;
+            const s = getComputedStyle(el.firstElementChild || el, pseudo);
+            return Object.fromEntries(props.map(p=>[p, s[p]]));
+        }""",
+        [pseudo, props],
+    )
+
+
+def check_pseudo(pg, comp, cases):
+    """Compare pseudo-element computed styles; return (matched, total, details)."""
+    matched = total = 0
+    details = []
+    for key in cases:
+        for pseudo, props in PSEUDO[comp].items():
+            r = _pseudo(pg, f"[data-testid=radix-{key}]", pseudo, props)
+            m = _pseudo(pg, f"[data-testid=mine-{key}]", pseudo, props)
+            d = [(p, r[p], m[p]) for p in props if _norm(p, r[p]) != _norm(p, m[p])]
+            total += len(props)
+            matched += len(props) - len(d)
+            for p, rv, mv in d:
+                details.append(f"        - {key}{pseudo} {p}: radix={rv!r} mine={mv!r}")
+    return matched, total, details
+
+
 def run():
     """Run all parity checks across every component."""
     gmatched = gtotal = 0
     with sync_playwright() as p:
         b = p.chromium.launch()
-        pg = b.new_page(viewport={"width": 1100, "height": 2200})
+        pg = b.new_page(viewport={"width": 1100, "height": 2400})
         pg.goto(URL, wait_until="networkidle", timeout=60000)
         pg.wait_for_selector("[data-testid=radix-btn-solid-2]", timeout=30000)
         pg.wait_for_timeout(500)
         for comp, cases in COMPONENTS.items():
             matched, total, details = check(pg, cases, "radix", "mine", comp)
+            if comp in PSEUDO:
+                pm, pt, pd = check_pseudo(pg, comp, cases)
+                matched += pm
+                total += pt
+                details += pd
             gmatched += matched
             gtotal += total
             offs = [d for d in details if "OFF" in d or d.startswith("        ")]

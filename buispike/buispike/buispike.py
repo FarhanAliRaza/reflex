@@ -110,6 +110,15 @@ def _build_rows():
                 P.blockquote("Quote", size=s),
             )
         )
+    for s in ["1", "2"]:
+        k = f"card-{s}"
+        rows.append(
+            _pair(
+                k,
+                rx.card("Card body", size=s),
+                P.card("Card body", size=s),
+            )
+        )
     return rows
 
 

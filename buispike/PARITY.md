@@ -33,12 +33,27 @@ Run: dev server (`reflex run`) + `uv run --python 3.13 python diff.py`.
 | Em / Strong / Quote | 3 | 99 | ✅ 100% |
 | Callout (soft/surface/outline × size 1–2) | 6 | 198 | ✅ 100% |
 | Blockquote (size 1/2/3/5) | 4 | 132 | ✅ 100% |
-| **Total** | **77** | **2541** | **✅ 100%** |
+| Card (surface, size 1–2; incl. ::before/::after pseudos) | 2 | 78 | ⚠️ 99.7%¹ |
+| **Total** | **79** | **2619** | **99.9%** |
+
+¹ Card root + `::before` (bg) + `::after` (ring) geometry all match. The one
+residual is the 1px surface-ring **color**: Radix serializes it as P3 `oklab`
+(this browser supports Display-P3), while our sRGB-extracted hex serializes as
+`rgba` — the same intended gray ring in a different gamut (see Known limitation).
 
 Properties checked per case: width, height, padding (×4), margin (×4),
 fontSize, fontWeight, fontFamily, letterSpacing, lineHeight, color,
 backgroundColor, border-radius (×4), boxShadow, column/row-gap, display,
 justify/align, opacity, textAlign, fontStyle, border-left (w/c/s).
+
+## Known limitation: P3 color space
+
+Radix ships every color **twice** — sRGB and a re-tuned Display-P3 variant
+(via `@supports (color: color(display-p3 ...))`). On P3-capable displays the
+browser uses the P3 version (serialized as `oklab`). `theme.css` currently ships
+only the sRGB hex values, so solid colors match but a few alpha colors (e.g. the
+card surface ring) differ in gamut/serialization. Closing this means extracting
+Radix's `@supports` P3 blocks into `theme.css` — bounded, mechanical work.
 
 ## Remaining components (future work)
 
