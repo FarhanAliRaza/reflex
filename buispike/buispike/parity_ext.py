@@ -113,7 +113,7 @@ def switch(checked: bool = False, size: str = "2", variant: str = "surface", **p
     translate_x = f"calc({width} - {height})"
     bg_pos = "before:[background-position:0%]" if checked else "before:[background-position-x:100%]"
     root_cls = (
-        "relative inline-flex items-center align-top shrink-0 "
+        "relative inline-flex items-center align-top shrink-0 text-start "
         f"h-[{height}] before:content-[''] before:block "
         f"before:w-[{width}] before:h-[{height}] before:rounded-[{radius}] "
         "before:bg-no-repeat "
@@ -149,8 +149,9 @@ def checkbox(checked: bool = False, size: str = "2", variant: str = "surface", *
         else "before:bg-[var(--color-surface)] before:shadow-[inset_0_0_0_1px_var(--gray-a7)]"
     )
     root_cls = (
-        "relative inline-flex items-center justify-center align-top shrink-0 "
-        f"h-[{csize}] before:content-[''] before:block "
+        "relative flex items-center justify-center align-top shrink-0 text-start "
+        f"text-[length:var(--font-size-{size})] h-[var(--line-height-{size})] "
+        f"before:content-[''] before:block "
         f"before:w-[{csize}] before:h-[{csize}] before:rounded-[{radius}] {before_bg}"
     )
     props["class_name"] = cn(root_cls, props.pop("class_name", ""))
@@ -169,16 +170,17 @@ def radio(checked: bool = False, size: str = "2", variant: str = "surface", **pr
         before_bg = "before:bg-[var(--accent-indicator)]"
         after_cls = (
             "after:content-[''] after:pointer-events-none after:absolute "
-            f"after:w-[{rsize}] after:h-[{rsize}] after:rounded-full "
+            f"after:w-[{rsize}] after:h-[{rsize}] after:[border-radius:100%] "
             "after:scale-[0.4] after:bg-[var(--accent-contrast)]"
         )
     else:
         before_bg = "before:bg-[var(--color-surface)] before:shadow-[inset_0_0_0_1px_var(--gray-a7)]"
         after_cls = ""
     root_cls = (
-        "relative inline-flex items-center justify-center align-top shrink-0 "
+        "relative flex items-center justify-center align-top shrink-0 text-start "
+        f"text-[length:var(--font-size-{size})] "
         f"h-[{rsize}] before:content-[''] before:block "
-        f"before:w-[{rsize}] before:h-[{rsize}] before:rounded-full {before_bg} {after_cls}"
+        f"before:w-[{rsize}] before:h-[{rsize}] before:[border-radius:100%] {before_bg} {after_cls}"
     )
     props["class_name"] = cn(root_cls, props.pop("class_name", ""))
     props.setdefault("custom_attrs", {})["data-state"] = state

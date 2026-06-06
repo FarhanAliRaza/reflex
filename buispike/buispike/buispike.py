@@ -197,8 +197,8 @@ def _build_rows():
         rows.append(_pair(f"switch-off-{s}", rx.switch(size=s, default_checked=False, color_scheme="violet"), P.switch(checked=False, size=s)))
         rows.append(_pair(f"cb-on-{s}", rx.checkbox(size=s, default_checked=True, color_scheme="violet"), P.checkbox(checked=True, size=s)))
         rows.append(_pair(f"cb-off-{s}", rx.checkbox(size=s, default_checked=False, color_scheme="violet"), P.checkbox(checked=False, size=s)))
-        rows.append(_pair(f"radio-on-{s}", rx.radio_group.root(rx.radio_group.item(value="a"), size=s, default_value="a", color_scheme="violet"), P.radio(checked=True, size=s)))
-        rows.append(_pair(f"radio-off-{s}", rx.radio_group.root(rx.radio_group.item(value="a"), size=s, default_value="", color_scheme="violet"), P.radio(checked=False, size=s)))
+        rows.append(_pair(f"radio-on-{s}", rx.radio_group.root(rx.radio_group.item(value="a"), size=s, default_value="a", variant="surface", color_scheme="violet"), P.radio(checked=True, size=s)))
+        rows.append(_pair(f"radio-off-{s}", rx.radio_group.root(rx.radio_group.item(value="a"), size=s, default_value="", variant="surface", color_scheme="violet"), P.radio(checked=False, size=s)))
     # Layout primitives
     for g in ["1", "2", "3"]:
         rows.append(_pair(f"flex-gap-{g}", rx.flex(rx.el.span("A"), rx.el.span("B"), spacing=g, direction="row"), P.flex(rx.el.span("A"), rx.el.span("B"), gap=g, direction="row")))

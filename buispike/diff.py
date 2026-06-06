@@ -78,6 +78,10 @@ COMPONENTS = {
 # Components whose styled leaf carries the testid directly (measure el, not child).
 DIRECT = {"table_header", "table_cell", "data_list"}
 
+# Radix side: the styled leaf is nested; reach it by appending this selector to
+# the radix testid (and measure it directly). The mine side is unchanged.
+RADIX_LEAF = {"checkbox": ".rt-BaseCheckboxRoot", "radio": ".rt-BaseRadioRoot"}
+
 # Components whose visuals live on pseudo-elements: also compare those.
 PSEUDO = {
     "card": {
@@ -133,8 +137,12 @@ def check(pg, cases, prefix_radix, prefix_mine, label, direct=False):
     """Compare computed styles for each case; return (matched, total, details)."""
     matched = total = 0
     details = []
+    leaf = RADIX_LEAF.get(label)
     for key in cases:
-        r = _styles(pg, f"[data-testid={prefix_radix}-{key}]", direct)
+        if leaf:
+            r = _styles(pg, f"[data-testid={prefix_radix}-{key}] {leaf}", True)
+        else:
+            r = _styles(pg, f"[data-testid={prefix_radix}-{key}]", direct)
         m = _styles(pg, f"[data-testid={prefix_mine}-{key}]", direct)
         # border style/color are invisible (and thus irrelevant) when width is 0;
         # Tailwind preflight defaults to solid, Radix to none.
@@ -155,15 +163,15 @@ def check(pg, cases, prefix_radix, prefix_mine, label, direct=False):
     return matched, total, details
 
 
-def _pseudo(pg, sel, pseudo, props):
+def _pseudo(pg, sel, pseudo, props, direct=False):
     return pg.eval_on_selector(
         sel,
         """(el, args)=>{
-            const [pseudo, props] = args;
-            const s = getComputedStyle(el.firstElementChild || el, pseudo);
+            const [pseudo, props, direct] = args;
+            const s = getComputedStyle(direct ? el : (el.firstElementChild || el), pseudo);
             return Object.fromEntries(props.map(p=>[p, s[p]]));
         }""",
-        [pseudo, props],
+        [pseudo, props, direct],
     )
 
 
@@ -171,9 +179,13 @@ def check_pseudo(pg, comp, cases):
     """Compare pseudo-element computed styles; return (matched, total, details)."""
     matched = total = 0
     details = []
+    leaf = RADIX_LEAF.get(comp)
     for key in cases:
         for pseudo, props in PSEUDO[comp].items():
-            r = _pseudo(pg, f"[data-testid=radix-{key}]", pseudo, props)
+            if leaf:
+                r = _pseudo(pg, f"[data-testid=radix-{key}] {leaf}", pseudo, props, True)
+            else:
+                r = _pseudo(pg, f"[data-testid=radix-{key}]", pseudo, props)
             m = _pseudo(pg, f"[data-testid=mine-{key}]", pseudo, props)
             d = [(p, r[p], m[p]) for p in props if _norm(p, r[p]) != _norm(p, m[p])]
             total += len(props)
