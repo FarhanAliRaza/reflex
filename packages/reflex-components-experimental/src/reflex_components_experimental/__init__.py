@@ -27,10 +27,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from reflex_components_experimental import components as _c
+from reflex_components_experimental import interactive as _it
 from reflex_components_experimental.plugin import ExperimentalThemePlugin
 from reflex_components_experimental.utils import cn
 
-# --- simple components ------------------------------------------------------
+# --- static, already-accessible HTML components -----------------------------
 button = _c.button
 badge = _c.badge
 separator = _c.separator
@@ -53,34 +54,30 @@ container = _c.container
 section = _c.section
 skeleton = _c.skeleton
 inset = _c.inset
-switch = _c.switch
-checkbox = _c.checkbox
-radio = _c.radio
 text_field = _c.text_field
 text_area = _c.text_area
-
-# --- compound families ------------------------------------------------------
 table = SimpleNamespace(cell=_c.table_cell, header_cell=_c.table_header_cell)
 data_list = SimpleNamespace(label=_c.data_list_label, value=_c.data_list_value)
-tabs = SimpleNamespace(list=_c.tabs_list, trigger=_c.tabs_trigger)
-segmented_control = SimpleNamespace(root=_c.segmented_root, item=_c.segmented_item)
-slider = SimpleNamespace(
-    track=_c.slider_track, range=_c.slider_range, thumb=_c.slider_thumb
-)
-progress = SimpleNamespace(root=_c.progress_root, indicator=_c.progress_indicator)
-scroll_area = SimpleNamespace(
-    scrollbar=_c.scroll_area_scrollbar, thumb=_c.scroll_area_thumb
-)
-tooltip = SimpleNamespace(content=_c.tooltip_content)
-popover = SimpleNamespace(content=_c.popover_content)
-hover_card = SimpleNamespace(content=_c.hovercard_content)
-dialog = SimpleNamespace(content=_c.dialog_content)
-alert_dialog = SimpleNamespace(content=_c.alert_dialog_content)
-accordion = SimpleNamespace(trigger=_c.accordion_trigger, item=_c.accordion_item)
-menu = SimpleNamespace(content=_c.menu_content, item=_c.menu_item)
-select = SimpleNamespace(
-    trigger=_c.select_trigger, content=_c.select_content, item=_c.select_item
-)
+
+# --- accessible interactive components (Base UI behavior) -------------------
+# Form controls keep a flat callable API; compound widgets are part namespaces.
+switch = _it.switch
+checkbox = _it.checkbox
+radio = _it.radio
+radio_group = _it.radio_group
+slider = _it.slider
+progress = _it.progress
+scroll_area = _it.scroll_area
+tabs = _it.tabs
+segmented_control = _it.segmented_control
+dialog = _it.dialog
+alert_dialog = _it.alert_dialog
+popover = _it.popover
+hover_card = _it.hover_card
+tooltip = _it.tooltip
+menu = _it.menu
+select = _it.select
+accordion = _it.accordion
 
 __all__ = [
     "ExperimentalThemePlugin",
@@ -111,6 +108,7 @@ __all__ = [
     "progress",
     "quote",
     "radio",
+    "radio_group",
     "scroll_area",
     "section",
     "segmented_control",
