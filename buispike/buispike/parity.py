@@ -587,6 +587,7 @@ def text_area(*children, size: str = "2", variant: str = "surface", **props) -> 
         f"{_TA_BASE} p-[{bw}] min-h-[{min_h}] rounded-[var(--radius-{radius})] {bg} {color} {shadow}"
     )
     props["class_name"] = cn(cls, props.pop("class_name", ""))
+    props.setdefault("rows", 1)  # let min-height win (match Radix root height)
     return rx.el.textarea(*children, **props)
 
 

@@ -101,6 +101,14 @@ DIRECT = {
 # the radix testid (and measure it directly). The mine side is unchanged.
 RADIX_LEAF = {"checkbox": ".rt-BaseCheckboxRoot", "radio": ".rt-BaseRadioRoot"}
 
+# Props to ignore per component (environmental, not styling): dialog content is
+# `margin:auto` centered, so its computed left/right margin depends on container
+# width (full-viewport portal vs harness cell), not on the styling itself.
+SKIP_PROPS = {
+    "dialog_content": {"marginLeft", "marginRight"},
+    "alertdialog_content": {"marginLeft", "marginRight"},
+}
+
 # Components whose visuals live on pseudo-elements: also compare those.
 PSEUDO = {
     "card": {
@@ -169,7 +177,7 @@ def check(pg, cases, prefix_radix, prefix_mine, label, direct=False):
             continue
         # border style/color are invisible (and thus irrelevant) when width is 0;
         # Tailwind preflight defaults to solid, Radix to none.
-        skip = set()
+        skip = set(SKIP_PROPS.get(label, ()))
         if _round_px(r.get("borderLeftWidth")) in ("0.0px", "0px"):
             skip |= {"borderLeftStyle", "borderLeftColor"}
         diffs = [

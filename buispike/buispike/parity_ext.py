@@ -168,7 +168,7 @@ def radio(checked: bool = False, size: str = "2", variant: str = "surface", **pr
     rsize = _RADIO_SIZES[size]
     state = "checked" if checked else "unchecked"
     if checked:
-        before_bg = "before:bg-[var(--accent-indicator)]"
+        before_bg = "before:bg-[var(--accent-indicator)] before:shadow-[inset_0_0_0_1px_var(--gray-a7)]"
         after_cls = (
             "after:content-[''] after:pointer-events-none after:absolute "
             f"after:w-[{rsize}] after:h-[{rsize}] after:[border-radius:100%] "
@@ -356,11 +356,13 @@ def inset(*children, **props) -> rx.Component:
 
 # --- Overlay content panels -------------------------------------------------
 def tooltip_content(*children, **props) -> rx.Component:
-    """A Radix-faithful tooltip content panel."""
-    cls = ("box-border relative py-[var(--space-1)] px-[var(--space-2)] bg-[var(--gray-12)] rounded-[var(--radius-2)] "
-           "text-[length:var(--font-size-1)] leading-[var(--line-height-1)]")
+    """A Radix-faithful tooltip content panel (inner text is size-1; panel font inherits)."""
+    cls = "box-border relative py-[var(--space-1)] px-[var(--space-2)] bg-[var(--gray-12)] rounded-[var(--radius-2)]"
     props["class_name"] = cn(cls, props.pop("class_name", ""))
-    return rx.el.div(*children, **props)
+    # Block inner (like Radix's <p class=rt-Text size-1>) so the panel's strut
+    # doesn't inflate the height; panel keeps inherited font-size/line-height.
+    inner = rx.el.p(*children, class_name="m-0 text-[length:var(--font-size-1)] leading-[var(--line-height-1)]")
+    return rx.el.div(inner, **props)
 
 
 def popover_content(*children, **props) -> rx.Component:
@@ -433,9 +435,13 @@ _MENU_ITEM = (
 
 
 def menu_content(*children, **props) -> rx.Component:
-    """A Radix-faithful dropdown/context menu content panel (size 2, solid)."""
+    """A Radix-faithful dropdown/context menu content panel (size 2, solid).
+
+    Radix nests a padded viewport inside the (zero-padding) content; mirror that
+    so the content box size matches.
+    """
     props["class_name"] = cn(_MENU_CONTENT, props.pop("class_name", ""))
-    return rx.el.div(*children, **props)
+    return rx.el.div(rx.el.div(*children, class_name="flex flex-col p-[var(--space-2)]"), **props)
 
 
 def menu_item(text: str, highlighted: bool = False, **props) -> rx.Component:
@@ -474,7 +480,7 @@ def select_trigger(text: str, size: str = "2", variant: str = "surface", **props
     return rx.el.button(rx.el.span(text), **props)
 
 
-_SELECT_CONTENT = "overflow-hidden box-border bg-[var(--color-panel-solid)] shadow-[var(--shadow-5)]"
+_SELECT_CONTENT = "flex flex-col overflow-hidden box-border bg-[var(--color-panel-solid)] shadow-[var(--shadow-5)]"
 _SELECT_CONTENT_SIZES = {"1": ("--space-1", "--radius-3"), "2": ("--space-2", "--radius-4"), "3": ("--space-2", "--radius-4")}
 _SELECT_ITEM_SIZES = {
     "1": ("--space-5", "calc(var(--space-5)/1.2)", "1", "--radius-1"),
@@ -487,7 +493,7 @@ def select_content(*children, size: str = "2", **props) -> rx.Component:
     """A Radix-faithful select content panel (solid)."""
     pad, rad = _SELECT_CONTENT_SIZES[size]
     props["class_name"] = cn(f"{_SELECT_CONTENT} rounded-[var({rad})]", props.pop("class_name", ""))
-    return rx.el.div(*children, **props)
+    return rx.el.div(rx.el.div(*children, class_name=f"flex flex-col p-[var({pad})]"), **props)
 
 
 def select_item(text: str, size: str = "2", variant: str = "solid", highlighted: bool = False, **props) -> rx.Component:
