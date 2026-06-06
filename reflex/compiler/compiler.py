@@ -244,34 +244,6 @@ def compile_root_stylesheet(
     return output_path, code
 
 
-def compile_css_modules(
-    roots: Iterable[Component],
-) -> list[tuple[str, str]]:
-    """Collect per-component CSS module files for every mounted component.
-
-    Walks each root's subtree gathering the ``*.module.css`` files authored by
-    :class:`~reflex_base.components.css_module.CSSModuleComponent` instances and
-    returns them as ``(web_dest_relpath, file_contents)`` pairs to write into the
-    web dir. Only components present in the tree contribute, so unused components
-    ship zero CSS. Destinations are deduplicated, collapsing shared atoms.
-
-    Args:
-        roots: The root components to scan (pages and the app root).
-
-    Returns:
-        ``(web_dest_relpath, contents)`` pairs to add to the compile results.
-    """
-    sources: dict[str, Path] = {}
-    for root in roots:
-        for source_path, dest in root._get_all_css_module_assets():
-            sources.setdefault(dest, source_path)
-
-    return [
-        (dest, source_path.read_text(encoding="utf-8"))
-        for dest, source_path in sources.items()
-    ]
-
-
 def _validate_stylesheet(stylesheet_full_path: Path, assets_app_path: Path) -> None:
     """Validate the stylesheet.
 
@@ -1138,8 +1110,6 @@ def compile_app(
     app_wrappers = _resolve_app_wrap_components(app, compile_ctx.app_wrap_components)
     app_root = app._app_root(app_wrappers)
     all_imports = utils.merge_imports(all_imports, app_root._get_all_imports())
-
-    compile_results.extend(compile_css_modules([*app._pages.values(), app_root]))
 
     memo_component_files, memo_components_imports = compile_memo_components(
         (

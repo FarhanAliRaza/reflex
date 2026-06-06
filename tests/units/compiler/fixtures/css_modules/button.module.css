@@ -1,5 +1,0 @@
-.root {
-  composes: row from "$/styles/_shared/_atoms.module.css";
-  padding: 8px 16px;
-  border-radius: var(--rx-radius-2);
-}

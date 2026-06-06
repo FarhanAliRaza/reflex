@@ -13,7 +13,6 @@ from abc import ABC, ABCMeta, abstractmethod
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import _MISSING_TYPE, MISSING
 from hashlib import md5
-from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
@@ -1937,39 +1936,6 @@ class Component(BaseComponent, ABC):
             ],
         )
         return imports.collapse_imports(imports_) if collapse else imports_
-
-    def _get_css_module_assets(self) -> list[tuple[Path, str]]:
-        """Get the CSS module stylesheets this component needs copied into the web dir.
-
-        Components that author a co-located CSS module override this. The default
-        is empty, so components without a module contribute no stylesheets.
-
-        Returns:
-            ``(source_path, web_dest_relpath)`` pairs for this component only.
-        """
-        return []
-
-    def _get_all_css_module_assets(self) -> list[tuple[Path, str]]:
-        """Collect CSS module assets for this component and its whole subtree.
-
-        Mirrors :meth:`_get_all_imports`: only components actually mounted in the
-        tree contribute, so unused components ship zero CSS. Assets are
-        deduplicated by destination, which also collapses shared atoms referenced
-        by multiple components into a single copy.
-
-        Returns:
-            The deduplicated ``(source_path, web_dest_relpath)`` pairs for the tree.
-        """
-        seen: dict[str, tuple[Path, str]] = {}
-        for source_path, dest in self._get_css_module_assets():
-            seen[dest] = (source_path, dest)
-        for child in self.children:
-            for source_path, dest in child._get_all_css_module_assets():
-                seen[dest] = (source_path, dest)
-        for component in self._get_components_in_props():
-            for source_path, dest in component._get_all_css_module_assets():
-                seen[dest] = (source_path, dest)
-        return list(seen.values())
 
     def _get_mount_lifecycle_hook(self) -> str | None:
         """Generate the component lifecycle hook.
