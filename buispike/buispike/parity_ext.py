@@ -123,7 +123,7 @@ def switch(checked: bool = False, size: str = "2", variant: str = "surface", **p
         f"{bg_pos}"
         + ("" if checked else " before:shadow-[inset_0_0_0_1px_var(--gray-a5)]")
     )
-    thumb_transform = f"translate-x-[{translate_x}]" if checked else ""
+    thumb_transform = f"[transform:translateX({translate_x})]" if checked else ""
     thumb_cls = (
         "absolute left-[1px] top-[1px] z-[1] bg-white "
         f"w-[{thumb_size}] h-[{thumb_size}] rounded-[calc({radius}_-_1px)] {thumb_transform}"

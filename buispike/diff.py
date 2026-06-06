@@ -86,6 +86,9 @@ COMPONENTS = {
     "segmented_root": ["seg-root-2"],
     "select_content": ["select-content"],
     "select_item": ["select-item"],
+    "progress_track": ["progress-track"],
+    "slider_track": ["slider-track"],
+    "scroll_bar": ["scroll-bar"],
 }
 
 # Components whose styled leaf carries the testid directly (measure el, not child).
@@ -95,11 +98,22 @@ DIRECT = {
     "tooltip_content", "popover_content", "hovercard_content",
     "dialog_content", "menu_content", "menu_item",
     "alertdialog_content", "segmented_root", "select_content", "select_item",
+    "progress_track", "slider_track", "scroll_bar",
 }
 
 # Radix side: the styled leaf is nested; reach it by appending this selector to
 # the radix testid (and measure it directly). The mine side is unchanged.
-RADIX_LEAF = {"checkbox": ".rt-BaseCheckboxRoot", "radio": ".rt-BaseRadioRoot"}
+RADIX_LEAF = {
+    "checkbox": ".rt-BaseCheckboxRoot", "radio": ".rt-BaseRadioRoot",
+    "progress_track": ".rt-ProgressRoot", "slider_track": ".rt-SliderTrack",
+    "scroll_bar": ".rt-ScrollAreaScrollbar",
+}
+
+# A child element the root/pseudo checks miss: (radix leaf, mine leaf, props).
+CHILD = {
+    "switch": (".rt-SwitchThumb", "span",
+               ["width", "height", "backgroundColor", "borderTopLeftRadius", "transform"]),
+}
 
 # Props to ignore per component (environmental, not styling): dialog content is
 # `margin:auto` centered, so its computed left/right margin depends on container
@@ -107,6 +121,8 @@ RADIX_LEAF = {"checkbox": ".rt-BaseCheckboxRoot", "radio": ".rt-BaseRadioRoot"}
 SKIP_PROPS = {
     "dialog_content": {"marginLeft", "marginRight"},
     "alertdialog_content": {"marginLeft", "marginRight"},
+    "slider_track": {"width"},   # grows to fill the slider; layout-dependent
+    "scroll_bar": {"height"},     # tracks scroll content height
 }
 
 # Components whose visuals live on pseudo-elements: also compare those.
@@ -240,6 +256,34 @@ def check_pseudo(pg, comp, cases):
     return matched, total, details
 
 
+def _child(pg, sel, props):
+    return pg.eval_on_selector(
+        sel,
+        "(el,p)=>{const s=getComputedStyle(el);const o={};for(const k of p)o[k]=s[k];return o;}",
+        props,
+    )
+
+
+def check_child(pg, comp, cases):
+    """Verify a child element (e.g. switch thumb) the root/pseudo checks miss."""
+    rleaf, mleaf, props = CHILD[comp]
+    matched = total = 0
+    details = []
+    for key in cases:
+        try:
+            r = _child(pg, f"[data-testid=radix-{key}] {rleaf}", props)
+            m = _child(pg, f"[data-testid=mine-{key}] {mleaf}", props)
+        except Exception:  # noqa: BLE001
+            details.append(f"  [MISS] {comp} child {key}")
+            continue
+        d = [(p, r[p], m[p]) for p in props if not _eq(p, r[p], m[p])]
+        total += len(props)
+        matched += len(props) - len(d)
+        for p, rv, mv in d:
+            details.append(f"        - {key} child {p}: radix={rv!r} mine={mv!r}")
+    return matched, total, details
+
+
 def run():
     """Run all parity checks across every component."""
     gmatched = gtotal = 0
@@ -258,6 +302,11 @@ def run():
                 matched += pm
                 total += pt
                 details += pd
+            if comp in CHILD:
+                cm, ct, cd = check_child(pg, comp, cases)
+                matched += cm
+                total += ct
+                details += cd
             gmatched += matched
             gtotal += total
             offs = [d for d in details if "OFF" in d or "MISS" in d or d.startswith("        ")]

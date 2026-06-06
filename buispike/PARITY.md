@@ -81,7 +81,7 @@ Eight subagents ran concurrently, each reverse-engineering Radix's CSS for a set
 of components and returning ready-to-integrate code; integrated centrally and
 verified with `diff.py`.
 
-**Result: 38 component groups at exactly 100% — 5178/5178 computed-style props.**
+**Result: 40 component groups at exactly 100% — 5274/5274 computed-style props.**
 
 button, badge, separator, text, heading, code, em/strong/quote, callout,
 blockquote, card, avatar, spinner, link, table header/cell, data_list,
@@ -93,6 +93,10 @@ dialog, alert_dialog, menu (content+item), select (content+item).
 checks, direct-measure mode, per-component prop skips (environmental
 margin:auto centering), and a <1px sub-pixel tolerance for dimensional AA.
 
-Styled in `parity_ext.py`, verification pending width-context harness wiring:
-slider, progress, scroll_area (width-filling multi-part), context_menu
-(styling-identical to menu, which is at 100%).
+Now also wired + verified at 100%: progress, slider, scroll_area (multi-part,
+via RADIX_LEAF nested-leaf targeting), and the switch **thumb** child element
+(a CHILD check added after a comparison build revealed the checker had only
+measured roots + ::before — it caught and fixed a calc()-with-spaces bug and a
+transform-vs-translate-property mismatch). An audit confirmed no other
+arbitrary-value spacing bugs remain. context_menu reuses the menu styling
+(at 100%); a same-page parity-vs-Radix build measured ~13 KB vs ~94 KB gz CSS.

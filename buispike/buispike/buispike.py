@@ -299,6 +299,29 @@ def _build_rows():
                      rx.menu.content(rx.menu.item("Hi", custom_attrs={"data-testid": "radix-menu-item", "data-highlighted": ""}), size="2"), open=True),
         P.menu_content(P.menu_item("Hi", highlighted=True, custom_attrs={"data-testid": "mine-menu-item"})),
     ))
+    # Progress / Slider / ScrollArea (multi-part; radix leaf via RADIX_LEAF)
+    rows.append(_row(
+        "progress-track",
+        rx.el.div(rx.progress(value=50, size="2", color_scheme="violet", width="120px"),
+                  custom_attrs={"data-testid": "radix-progress-track"}, class_name="w-[120px] inline-flex"),
+        P.progress_root(P.progress_indicator(value=50), size="2",
+                        custom_attrs={"data-testid": "mine-progress-track"}, class_name="w-[120px]"),
+    ))
+    rows.append(_row(
+        "slider-track",
+        rx.el.div(rx.slider(default_value=[50], size="2", color_scheme="violet", width="120px"),
+                  custom_attrs={"data-testid": "radix-slider-track"}, class_name="w-[120px] inline-flex items-center"),
+        rx.el.div(P.slider_track(P.slider_range(size="2", value=50), size="2",
+                                 custom_attrs={"data-testid": "mine-slider-track"}),
+                  class_name="w-[120px] flex items-center"),
+    ))
+    rows.append(_row(
+        "scroll-bar",
+        rx.scroll_area(rx.el.div(class_name="h-[400px] w-[60px]"), scrollbars="vertical", type="always", size="1",
+                       custom_attrs={"data-testid": "radix-scroll-bar"}, class_name="h-[80px] w-[100px]"),
+        P.scroll_area_scrollbar(P.scroll_area_thumb(), size="1",
+                                custom_attrs={"data-testid": "mine-scroll-bar"}, class_name="h-[80px]"),
+    ))
     return rows
 
 
