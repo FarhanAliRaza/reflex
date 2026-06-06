@@ -9,7 +9,39 @@ production build ships only one site's CSS:
 
 import reflex as rx
 
+import reflex_components_experimental as rxe
 from buispike import parity as P
+
+
+# --- Package-driven page (proves reflex_components_experimental + its plugin) -
+def pkg_page() -> rx.Component:
+    """A page built entirely from the published package (rxe.*).
+
+    The token theme is delivered by ``ExperimentalThemePlugin`` (no manual
+    stylesheet), proving the package works end-to-end through the real plugin.
+    """
+    return rx.el.div(
+        rxe.card(
+            rx.el.div(
+                rx.el.div(
+                    rxe.heading("From the package", size="6"),
+                    rxe.badge("experimental", size="1", variant="soft"),
+                    class_name="flex items-center justify-between gap-4",
+                ),
+                rxe.text("Rendered with reflex_components_experimental; theme shipped "
+                         "by ExperimentalThemePlugin.", size="3",
+                         class_name="mt-2 text-[var(--secondary-11)]"),
+                rxe.separator(size="3", class_name="w-full my-4"),
+                rx.el.div(rxe.text("Notifications", size="2"), rxe.switch(checked=True, size="2"),
+                          class_name="flex items-center justify-between"),
+                rx.el.div(rxe.button("Save", variant="solid"), rxe.button("Cancel", variant="soft"),
+                          class_name="flex gap-3 mt-5 justify-end"),
+                class_name="flex flex-col w-[26rem]",
+            ), size="2",
+        ),
+        class_name="min-h-screen flex items-center justify-center bg-[var(--secondary-1)] text-[var(--secondary-12)]",
+        style={"fontFamily": "var(--default-font-family)"},
+    )
 
 _FEATURES = [
     ("Fast", "Single-digit-KB CSS per page, shipped only where used.", "New"),

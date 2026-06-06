@@ -401,11 +401,18 @@ def demo() -> rx.Component:
     )
 
 
-app = rx.App(stylesheets=["theme.css"])
 _cmp = __import__("os").environ.get("REFLEX_CMP")
-if _cmp in ("parity", "radix"):
+if _cmp == "pkg":
+    # Package end-to-end: theme comes only from ExperimentalThemePlugin (rxconfig),
+    # no manual stylesheet.
     from buispike import cmp as _cmppages
+    app = rx.App()
+    app.add_page(_cmppages.pkg_page, route="/")
+elif _cmp in ("parity", "radix"):
+    from buispike import cmp as _cmppages
+    app = rx.App(stylesheets=["theme.css"])
     app.add_page(getattr(_cmppages, f"{_cmp}_page"), route="/")
 else:
+    app = rx.App(stylesheets=["theme.css"])
     app.add_page(index, route="/")
     app.add_page(demo, route="/demo")
