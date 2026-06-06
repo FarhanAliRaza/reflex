@@ -41,7 +41,7 @@ def tabs_trigger(text: str, size: str = "2", active: bool = False, **props) -> r
         if active else ""
     )
     trigger_cls = (
-        "flex items-center justify-center shrink-0 relative select-none box-border "
+        "flex items-center justify-center shrink-0 relative select-none box-border text-start "
         f"h-[var({h})] px-[var({px})] {color} {before}"
     )
     inner_type = "font-medium" if active else ""

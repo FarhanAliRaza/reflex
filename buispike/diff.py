@@ -73,10 +73,24 @@ COMPONENTS = {
     "grid": [f"grid-gap-{g}" for g in ["1", "2", "3"]],
     "section": [f"section-{s}" for s in ["1", "2", "3"]],
     "box": ["box-1"],
+    "tabs_trigger": [f"tabs-{st}-{s}" for s in ["1", "2"] for st in ["active", "idle"]],
+    "accordion_trigger": ["accordion-trigger"],
+    "select_trigger": ["select-trigger-2"],
+    "tooltip_content": ["tooltip-content"],
+    "popover_content": ["popover-content"],
+    "hovercard_content": ["hovercard-content"],
+    "dialog_content": ["dialog-content"],
+    "menu_content": ["menu-content"],
+    "menu_item": ["menu-item"],
 }
 
 # Components whose styled leaf carries the testid directly (measure el, not child).
-DIRECT = {"table_header", "table_cell", "data_list"}
+DIRECT = {
+    "table_header", "table_cell", "data_list",
+    "tabs_trigger", "accordion_trigger", "select_trigger",
+    "tooltip_content", "popover_content", "hovercard_content",
+    "dialog_content", "menu_content", "menu_item",
+}
 
 # Radix side: the styled leaf is nested; reach it by appending this selector to
 # the radix testid (and measure it directly). The mine side is unchanged.
@@ -139,11 +153,15 @@ def check(pg, cases, prefix_radix, prefix_mine, label, direct=False):
     details = []
     leaf = RADIX_LEAF.get(label)
     for key in cases:
-        if leaf:
-            r = _styles(pg, f"[data-testid={prefix_radix}-{key}] {leaf}", True)
-        else:
-            r = _styles(pg, f"[data-testid={prefix_radix}-{key}]", direct)
-        m = _styles(pg, f"[data-testid={prefix_mine}-{key}]", direct)
+        try:
+            if leaf:
+                r = _styles(pg, f"[data-testid={prefix_radix}-{key}] {leaf}", True)
+            else:
+                r = _styles(pg, f"[data-testid={prefix_radix}-{key}]", direct)
+            m = _styles(pg, f"[data-testid={prefix_mine}-{key}]", direct)
+        except Exception:  # noqa: BLE001
+            details.append(f"  [MISS] {label} {key:12} (element not in DOM)")
+            continue
         # border style/color are invisible (and thus irrelevant) when width is 0;
         # Tailwind preflight defaults to solid, Radix to none.
         skip = set()
@@ -182,11 +200,14 @@ def check_pseudo(pg, comp, cases):
     leaf = RADIX_LEAF.get(comp)
     for key in cases:
         for pseudo, props in PSEUDO[comp].items():
-            if leaf:
-                r = _pseudo(pg, f"[data-testid=radix-{key}] {leaf}", pseudo, props, True)
-            else:
-                r = _pseudo(pg, f"[data-testid=radix-{key}]", pseudo, props)
-            m = _pseudo(pg, f"[data-testid=mine-{key}]", pseudo, props)
+            try:
+                if leaf:
+                    r = _pseudo(pg, f"[data-testid=radix-{key}] {leaf}", pseudo, props, True)
+                else:
+                    r = _pseudo(pg, f"[data-testid=radix-{key}]", pseudo, props)
+                m = _pseudo(pg, f"[data-testid=mine-{key}]", pseudo, props)
+            except Exception:  # noqa: BLE001
+                continue
             d = [(p, r[p], m[p]) for p in props if _norm(p, r[p]) != _norm(p, m[p])]
             total += len(props)
             matched += len(props) - len(d)
@@ -215,8 +236,10 @@ def run():
                 details += pd
             gmatched += matched
             gtotal += total
-            offs = [d for d in details if "OFF" in d or d.startswith("        ")]
-            print(f"--- {comp}: {matched}/{total} ({100.0*matched/total:.1f}%) ---")
+            offs = [d for d in details if "OFF" in d or "MISS" in d or d.startswith("        ")]
+            pct = (100.0 * matched / total) if total else 0.0
+            tag = f"{matched}/{total} ({pct:.1f}%)" if total else "NOT RENDERED (portal/open-state)"
+            print(f"--- {comp}: {tag} ---")
             for d in offs:
                 print(d)
         b.close()

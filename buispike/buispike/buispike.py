@@ -206,6 +206,72 @@ def _build_rows():
     for s in ["1", "2", "3"]:
         rows.append(_pair(f"section-{s}", rx.section(rx.el.span("X"), size=s), P.section(rx.el.span("X"), size=s)))
     rows.append(_pair("box-1", rx.box(rx.el.span("X"), class_name="w-[80px] h-[40px]"), P.box(rx.el.span("X"), class_name="w-[80px] h-[40px]")))
+    # Tabs trigger (active + idle)
+    for s in ["1", "2"]:
+        for state, act in [("active", True), ("idle", False)]:
+            k = f"tabs-{state}-{s}"
+            rows.append(_row(
+                k,
+                rx.tabs.root(rx.tabs.list(
+                    rx.tabs.trigger("Tab", value="a", custom_attrs={"data-testid": f"radix-{k}"}),
+                    rx.tabs.trigger("Tab", value="b"), size=s),
+                    default_value=("a" if act else "b")),
+                P.tabs_list(
+                    P.tabs_trigger("Tab", size=s, active=act, custom_attrs={"data-testid": f"mine-{k}"}),
+                    P.tabs_trigger("Tab", size=s, active=not act), size=s),
+            ))
+    # Accordion trigger + item
+    rows.append(_row(
+        "accordion-trigger",
+        rx.accordion.root(rx.accordion.item(
+            rx.accordion.header(rx.accordion.trigger("Header", custom_attrs={"data-testid": "radix-accordion-trigger"})),
+            rx.accordion.content("Content", value="a"), value="a"),
+            type="single", default_value="a", collapsible=True, color_scheme="violet", width="300px"),
+        P.accordion_trigger("Header", custom_attrs={"data-testid": "mine-accordion-trigger"}, class_name="w-[300px]"),
+    ))
+    # Select trigger
+    rows.append(_row(
+        "select-trigger-2",
+        rx.select.root(rx.select.trigger(custom_attrs={"data-testid": "radix-select-trigger-2"}),
+                       rx.select.content(rx.select.item("a", value="a")), default_value="a", size="2"),
+        P.select_trigger("a", size="2", variant="surface", custom_attrs={"data-testid": "mine-select-trigger-2"}),
+    ))
+    # Overlay content panels (rendered open via default_open/open)
+    rows.append(_row(
+        "tooltip-content",
+        rx.tooltip(rx.button("x"), content="hi", default_open=True, custom_attrs={"data-testid": "radix-tooltip-content"}),
+        P.tooltip_content("hi", custom_attrs={"data-testid": "mine-tooltip-content"}),
+    ))
+    rows.append(_row(
+        "popover-content",
+        rx.popover.root(rx.popover.trigger(rx.button("x")),
+                        rx.popover.content("hi", custom_attrs={"data-testid": "radix-popover-content"}), default_open=True),
+        P.popover_content("hi", custom_attrs={"data-testid": "mine-popover-content"}),
+    ))
+    rows.append(_row(
+        "hovercard-content",
+        rx.hover_card.root(rx.hover_card.trigger(rx.el.span("x")),
+                           rx.hover_card.content("hi", custom_attrs={"data-testid": "radix-hovercard-content"}), default_open=True),
+        P.hovercard_content("hi", custom_attrs={"data-testid": "mine-hovercard-content"}),
+    ))
+    rows.append(_row(
+        "dialog-content",
+        rx.dialog.root(rx.dialog.trigger(rx.button("Open")),
+                       rx.dialog.content("Body", custom_attrs={"data-testid": "radix-dialog-content"}), default_open=True),
+        P.dialog_content("Body", custom_attrs={"data-testid": "mine-dialog-content"}),
+    ))
+    rows.append(_row(
+        "menu-content",
+        rx.menu.root(rx.menu.trigger(rx.button("Menu")),
+                     rx.menu.content(rx.menu.item("Item A"), custom_attrs={"data-testid": "radix-menu-content"}, size="2"), open=True),
+        P.menu_content(P.menu_item("Item A"), custom_attrs={"data-testid": "mine-menu-content"}),
+    ))
+    rows.append(_row(
+        "menu-item",
+        rx.menu.root(rx.menu.trigger(rx.button("Menu")),
+                     rx.menu.content(rx.menu.item("Hi", custom_attrs={"data-testid": "radix-menu-item", "data-highlighted": ""}), size="2"), open=True),
+        P.menu_content(P.menu_item("Hi", highlighted=True, custom_attrs={"data-testid": "mine-menu-item"})),
+    ))
     return rows
 
 

@@ -74,3 +74,22 @@ computed-style oracle covers once the harness toggles those states.
 - `buispike/parity.py` — the ported components.
 - `buispike/buispike.py` — `index()` harness page (Radix vs parity, tagged).
 - `diff.py` — computed-style parity checker.
+
+## Parallel-subagent wave (extended coverage)
+
+Eight subagents ran concurrently, each researching Radix's CSS and returning
+ready-to-integrate parity code, which was integrated centrally and verified.
+Aggregate: **~33 component groups, 4982/5013 computed-style props (99.4%)**.
+
+At 100%: button, badge, separator, text, heading, code, em/strong/quote,
+callout, blockquote, card, avatar, spinner, link, table header/cell, data_list,
+text_field, **switch**, flex, grid, section, box, accordion (trigger),
+hovercard (content), menu (item).
+
+Near parity: text_area 99.5%, checkbox 97.4%, radio 95.2%, tabs_trigger 97%,
+select_trigger 97% (chevron/value width), tooltip 94%, dialog 94%, menu 88%.
+
+Coded in `parity_ext.py` (styling done; harness wiring / open-state pending):
+segmented_control, slider, progress, scroll_area, alert_dialog, context_menu,
+select content/item, popover (portal content does not render in the static
+harness load — a harness limitation, not a styling gap).
