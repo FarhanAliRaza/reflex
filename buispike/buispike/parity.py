@@ -358,7 +358,7 @@ _CARD_BASE = (
     "after:content-[''] after:absolute after:pointer-events-none "
     "after:inset-[var(--card-border-width)] "
     "after:rounded-[calc(var(--radius-4)-var(--card-border-width))] "
-    "after:shadow-[0_0_0_1px_var(--gray-a5)]"
+    "after:shadow-[var(--base-card-surface-box-shadow)]"
 )
 _CARD_SIZES = {
     "1": "p-[var(--space-3)] rounded-[var(--radius-4)]",
