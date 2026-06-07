@@ -2,6 +2,12 @@
 
 import reflex_components_experimental as rxe
 
+import reflex as rx
+
+
+class _SwitchState(rx.State):
+    on: bool = False
+
 
 def test_public_api_present():
     for name in [
@@ -42,6 +48,28 @@ def test_namespaces_resolve():
     assert callable(rxe.menu.item)
     assert callable(rxe.slider.track)
     assert callable(rxe.select.content)
+
+
+def test_switch_animates_thumb():
+    # The thumb glides like Radix (single persistent element + transition), so a
+    # state change is animated rather than snapping.
+    render = str(rxe.switch(checked=True).render())
+    assert "cubic-bezier" in render
+    assert "data-state" in render
+
+
+def test_switch_checked_accepts_reactive_var():
+    # A reactive Var must drive the switch; the presentational impl raised here.
+    render = str(rxe.switch(checked=_SwitchState.on).render())
+    assert "data-state" in render
+
+
+def test_avatar_fallback_has_background_and_font():
+    # The fallback must render a tinted tile with Radix's typography, not a bare
+    # letter: a variant background plus the per-size one-letter font size.
+    render = str(rxe.avatar("L", size="3").render())
+    assert "accent-a3" in render  # soft (default) background
+    assert "font-size-4" in render  # one-letter font size for size 3
 
 
 def test_theme_plugin():

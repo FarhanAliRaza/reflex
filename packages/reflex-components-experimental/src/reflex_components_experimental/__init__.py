@@ -19,67 +19,88 @@ Usage::
 
 Simple components are top-level callables (``rxe.button``, ``rxe.card``, …);
 compound families are grouped namespaces (``rxe.table.cell``, ``rxe.tabs.trigger``,
-``rxe.menu.item``, ``rxe.slider.track``, …).
+``rxe.menu.item``, ``rxe.slider.track``, …). The implementations live under the
+``components``, ``layout`` and ``typography`` subpackages.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-from reflex_components_experimental import components as _c
+from reflex_components_experimental.components import (
+    accordion_item,
+    accordion_trigger,
+    alert_dialog_content,
+    avatar,
+    badge,
+    button,
+    callout,
+    card,
+    checkbox,
+    data_list_label,
+    data_list_value,
+    dialog_content,
+    hovercard_content,
+    inset,
+    menu_content,
+    menu_item,
+    popover_content,
+    progress_indicator,
+    progress_root,
+    radio,
+    scroll_area_scrollbar,
+    scroll_area_thumb,
+    segmented_item,
+    segmented_root,
+    select_content,
+    select_item,
+    select_trigger,
+    separator,
+    skeleton,
+    slider_range,
+    slider_thumb,
+    slider_track,
+    spinner,
+    switch,
+    table_cell,
+    table_header_cell,
+    tabs_list,
+    tabs_trigger,
+    text_area,
+    text_field,
+    tooltip_content,
+)
+from reflex_components_experimental.layout import box, container, flex, grid, section
 from reflex_components_experimental.plugin import ExperimentalThemePlugin
+from reflex_components_experimental.typography import (
+    blockquote,
+    code,
+    em,
+    heading,
+    link,
+    quote,
+    strong,
+    text,
+)
 from reflex_components_experimental.utils import cn
 
-# --- simple components ------------------------------------------------------
-button = _c.button
-badge = _c.badge
-separator = _c.separator
-text = _c.text
-heading = _c.heading
-code = _c.code
-em = _c.em
-strong = _c.strong
-quote = _c.quote
-callout = _c.callout
-blockquote = _c.blockquote
-card = _c.card
-avatar = _c.avatar
-spinner = _c.spinner
-link = _c.link
-box = _c.box
-flex = _c.flex
-grid = _c.grid
-container = _c.container
-section = _c.section
-skeleton = _c.skeleton
-inset = _c.inset
-switch = _c.switch
-checkbox = _c.checkbox
-radio = _c.radio
-text_field = _c.text_field
-text_area = _c.text_area
-
 # --- compound families ------------------------------------------------------
-table = SimpleNamespace(cell=_c.table_cell, header_cell=_c.table_header_cell)
-data_list = SimpleNamespace(label=_c.data_list_label, value=_c.data_list_value)
-tabs = SimpleNamespace(list=_c.tabs_list, trigger=_c.tabs_trigger)
-segmented_control = SimpleNamespace(root=_c.segmented_root, item=_c.segmented_item)
-slider = SimpleNamespace(
-    track=_c.slider_track, range=_c.slider_range, thumb=_c.slider_thumb
-)
-progress = SimpleNamespace(root=_c.progress_root, indicator=_c.progress_indicator)
-scroll_area = SimpleNamespace(
-    scrollbar=_c.scroll_area_scrollbar, thumb=_c.scroll_area_thumb
-)
-tooltip = SimpleNamespace(content=_c.tooltip_content)
-popover = SimpleNamespace(content=_c.popover_content)
-hover_card = SimpleNamespace(content=_c.hovercard_content)
-dialog = SimpleNamespace(content=_c.dialog_content)
-alert_dialog = SimpleNamespace(content=_c.alert_dialog_content)
-accordion = SimpleNamespace(trigger=_c.accordion_trigger, item=_c.accordion_item)
-menu = SimpleNamespace(content=_c.menu_content, item=_c.menu_item)
+table = SimpleNamespace(cell=table_cell, header_cell=table_header_cell)
+data_list = SimpleNamespace(label=data_list_label, value=data_list_value)
+tabs = SimpleNamespace(list=tabs_list, trigger=tabs_trigger)
+segmented_control = SimpleNamespace(root=segmented_root, item=segmented_item)
+slider = SimpleNamespace(track=slider_track, range=slider_range, thumb=slider_thumb)
+progress = SimpleNamespace(root=progress_root, indicator=progress_indicator)
+scroll_area = SimpleNamespace(scrollbar=scroll_area_scrollbar, thumb=scroll_area_thumb)
+tooltip = SimpleNamespace(content=tooltip_content)
+popover = SimpleNamespace(content=popover_content)
+hover_card = SimpleNamespace(content=hovercard_content)
+dialog = SimpleNamespace(content=dialog_content)
+alert_dialog = SimpleNamespace(content=alert_dialog_content)
+accordion = SimpleNamespace(trigger=accordion_trigger, item=accordion_item)
+menu = SimpleNamespace(content=menu_content, item=menu_item)
 select = SimpleNamespace(
-    trigger=_c.select_trigger, content=_c.select_content, item=_c.select_item
+    trigger=select_trigger, content=select_content, item=select_item
 )
 
 __all__ = [

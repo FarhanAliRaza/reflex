@@ -19,6 +19,7 @@ members = [
     "reflex-components-code",
     "reflex-components-core",
     "reflex-components-dataeditor",
+    "reflex-components-experimental",
     "reflex-components-gridjs",
     "reflex-components-internal",
     "reflex-components-lucide",
@@ -3619,6 +3620,16 @@ requires-dist = [
     { name = "reflex-base", editable = "packages/reflex-base" },
     { name = "reflex-components-core", editable = "packages/reflex-components-core" },
 ]
+
+[[package]]
+name = "reflex-components-experimental"
+source = { editable = "packages/reflex-components-experimental" }
+dependencies = [
+    { name = "reflex" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "reflex", editable = "." }]
 
 [[package]]
 name = "reflex-components-gridjs"
