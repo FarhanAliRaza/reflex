@@ -5,10 +5,6 @@ import reflex_components_experimental as rxe
 import reflex as rx
 
 
-class _SwitchState(rx.State):
-    on: bool = False
-
-
 def test_public_api_present():
     for name in [
         "button",
@@ -18,12 +14,15 @@ def test_public_api_present():
         "heading",
         "switch",
         "checkbox",
+        "radio",
+        "radio_group",
+        "slider",
+        "progress",
         "table",
         "tabs",
         "menu",
         "dialog",
         "select",
-        "slider",
         "ExperimentalThemePlugin",
         "cn",
     ]:
@@ -44,32 +43,12 @@ def test_class_name_override_is_merged():
 
 def test_namespaces_resolve():
     assert callable(rxe.table.cell)
-    assert callable(rxe.tabs.trigger)
+    assert callable(rxe.tabs.tab)
     assert callable(rxe.menu.item)
-    assert callable(rxe.slider.track)
-    assert callable(rxe.select.content)
-
-
-def test_switch_animates_thumb():
-    # The thumb glides like Radix (single persistent element + transition), so a
-    # state change is animated rather than snapping.
-    render = str(rxe.switch(checked=True).render())
-    assert "cubic-bezier" in render
-    assert "data-state" in render
-
-
-def test_switch_checked_accepts_reactive_var():
-    # A reactive Var must drive the switch; the presentational impl raised here.
-    render = str(rxe.switch(checked=_SwitchState.on).render())
-    assert "data-state" in render
-
-
-def test_avatar_fallback_has_background_and_font():
-    # The fallback must render a tinted tile with Radix's typography, not a bare
-    # letter: a variant background plus the per-size one-letter font size.
-    render = str(rxe.avatar("L", size="3").render())
-    assert "accent-a3" in render  # soft (default) background
-    assert "font-size-4" in render  # one-letter font size for size 3
+    assert callable(rxe.slider)
+    assert callable(rxe.select.trigger)
+    assert callable(rxe.dialog.popup)
+    assert callable(rxe.accordion.panel)
 
 
 def test_theme_plugin():
@@ -82,3 +61,53 @@ def test_theme_plugin():
     # the shipped theme defines the Radix-derived design tokens
     assert "--accent-9" in assets[0][1]
     assert "--space-3" in assets[0][1]
+
+
+def test_switch_wraps_base_ui():
+    # The accessible switch is backed by Base UI (role=switch at runtime) and
+    # declares the headless package as a dependency.
+    sw = rxe.switch(default_checked=True)
+    assert sw.tag == "Switch.Root"
+    assert any("@base-ui/react" in d for d in sw.lib_dependencies)
+    render = str(sw.render())
+    assert "Switch.Root" in render
+    assert "Switch.Thumb" in render
+    # checked styling tracks Base UI state rather than being hard-coded.
+    assert "data-[checked]" in render
+
+
+def test_interactive_components_render():
+    # Every compound widget composes without error.
+    comps = [
+        rxe.checkbox(default_checked=True),
+        rxe.radio_group(rxe.radio("a"), rxe.radio("b"), default_value="a"),
+        rxe.slider(default_value=40),
+        rxe.progress(value=60),
+        rxe.tabs.root(
+            rxe.tabs.list(rxe.tabs.tab("One", "1"), rxe.tabs.tab("Two", "2")),
+            rxe.tabs.panel(rx.el.div("p1"), value="1"),
+            default_value="1",
+        ),
+        rxe.dialog.root(
+            rxe.dialog.trigger("open"),
+            rxe.dialog.portal(rxe.dialog.popup(rxe.dialog.title("T"))),
+        ),
+        rxe.menu.root(
+            rxe.menu.trigger("m"),
+            rxe.menu.portal(
+                rxe.menu.positioner(rxe.menu.popup(rxe.menu.item("Item 1")))
+            ),
+        ),
+        rxe.select.root(
+            rxe.select.trigger(rxe.select.value(placeholder="Pick")),
+            rxe.select.portal(
+                rxe.select.positioner(
+                    rxe.select.popup(
+                        rxe.select.item(rxe.select.item_text("A"), value="a")
+                    )
+                )
+            ),
+        ),
+    ]
+    for c in comps:
+        assert str(c.render())

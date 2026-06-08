@@ -17,58 +17,36 @@ Usage::
             size="2",
         )
 
-Simple components are top-level callables (``rxe.button``, ``rxe.card``, …);
-compound families are grouped namespaces (``rxe.table.cell``, ``rxe.tabs.trigger``,
-``rxe.menu.item``, ``rxe.slider.track``, …). The implementations live under the
-``components``, ``layout`` and ``typography`` subpackages.
+Static, already-accessible HTML components (``button``, ``card``, typography,
+layout) live in the ``components``, ``layout`` and ``typography`` subpackages.
+Interactive widgets that need ARIA/keyboard behavior (``switch``, ``dialog``,
+``select`` …) layer the same token styling on Base UI headless parts in the
+``interactive`` subpackage. Simple controls are top-level callables; compound
+widgets are grouped namespaces (``rxe.tabs.tab``, ``rxe.menu.item``,
+``rxe.dialog.popup`` …).
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
+from reflex_components_experimental import interactive as _it
 from reflex_components_experimental.components import (
-    accordion_item,
-    accordion_trigger,
-    alert_dialog_content,
     avatar,
     badge,
     button,
     callout,
     card,
-    checkbox,
     data_list_label,
     data_list_value,
-    dialog_content,
-    hovercard_content,
     inset,
-    menu_content,
-    menu_item,
-    popover_content,
-    progress_indicator,
-    progress_root,
-    radio,
-    scroll_area_scrollbar,
-    scroll_area_thumb,
-    segmented_item,
-    segmented_root,
-    select_content,
-    select_item,
-    select_trigger,
     separator,
     skeleton,
-    slider_range,
-    slider_thumb,
-    slider_track,
     spinner,
-    switch,
     table_cell,
     table_header_cell,
-    tabs_list,
-    tabs_trigger,
     text_area,
     text_field,
-    tooltip_content,
 )
 from reflex_components_experimental.layout import box, container, flex, grid, section
 from reflex_components_experimental.plugin import ExperimentalThemePlugin
@@ -84,24 +62,29 @@ from reflex_components_experimental.typography import (
 )
 from reflex_components_experimental.utils import cn
 
-# --- compound families ------------------------------------------------------
+# --- static compound families -----------------------------------------------
 table = SimpleNamespace(cell=table_cell, header_cell=table_header_cell)
 data_list = SimpleNamespace(label=data_list_label, value=data_list_value)
-tabs = SimpleNamespace(list=tabs_list, trigger=tabs_trigger)
-segmented_control = SimpleNamespace(root=segmented_root, item=segmented_item)
-slider = SimpleNamespace(track=slider_track, range=slider_range, thumb=slider_thumb)
-progress = SimpleNamespace(root=progress_root, indicator=progress_indicator)
-scroll_area = SimpleNamespace(scrollbar=scroll_area_scrollbar, thumb=scroll_area_thumb)
-tooltip = SimpleNamespace(content=tooltip_content)
-popover = SimpleNamespace(content=popover_content)
-hover_card = SimpleNamespace(content=hovercard_content)
-dialog = SimpleNamespace(content=dialog_content)
-alert_dialog = SimpleNamespace(content=alert_dialog_content)
-accordion = SimpleNamespace(trigger=accordion_trigger, item=accordion_item)
-menu = SimpleNamespace(content=menu_content, item=menu_item)
-select = SimpleNamespace(
-    trigger=select_trigger, content=select_content, item=select_item
-)
+
+# --- accessible interactive components (Base UI behavior) -------------------
+# Form controls keep a flat callable API; compound widgets are part namespaces.
+switch = _it.switch
+checkbox = _it.checkbox
+radio = _it.radio
+radio_group = _it.radio_group
+slider = _it.slider
+progress = _it.progress
+scroll_area = _it.scroll_area
+tabs = _it.tabs
+segmented_control = _it.segmented_control
+dialog = _it.dialog
+alert_dialog = _it.alert_dialog
+popover = _it.popover
+hover_card = _it.hover_card
+tooltip = _it.tooltip
+menu = _it.menu
+select = _it.select
+accordion = _it.accordion
 
 __all__ = [
     "ExperimentalThemePlugin",
@@ -132,6 +115,7 @@ __all__ = [
     "progress",
     "quote",
     "radio",
+    "radio_group",
     "scroll_area",
     "section",
     "segmented_control",

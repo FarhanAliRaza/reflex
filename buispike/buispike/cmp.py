@@ -43,6 +43,145 @@ def pkg_page() -> rx.Component:
         style={"fontFamily": "var(--default-font-family)"},
     )
 
+
+def _row(label, control):
+    return rx.el.div(
+        rxe.text(label, size="2"),
+        control,
+        class_name="flex items-center justify-between gap-6 py-2",
+    )
+
+
+def a11y_page() -> rx.Component:
+    """Exercises the accessible interactive layer (Base UI behavior).
+
+    Overlays default to open so an axe-core sweep sees their popups in the DOM.
+    """
+    import reflex_components_experimental as rxe2
+
+    it = rxe2
+
+    return rx.el.div(
+        rxe.heading("Accessible interactive components", size="6"),
+        rxe.text(
+            "Every control below is backed by Base UI headless behavior.",
+            size="2",
+            class_name="text-[var(--secondary-11)]",
+        ),
+        rxe.separator(size="3", class_name="w-full my-4"),
+        _row("Switch", it.switch(size="2", default_checked=True)),
+        _row("Checkbox", it.checkbox(size="2", default_checked=True)),
+        _row(
+            "Radio group",
+            it.radio_group(
+                rx.el.label(
+                    it.radio("a"), rxe.text("Option A", size="2"),
+                    class_name="flex items-center gap-2",
+                ),
+                rx.el.label(
+                    it.radio("b"), rxe.text("Option B", size="2"),
+                    class_name="flex items-center gap-2",
+                ),
+                default_value="a",
+                class_name="flex-row gap-6",
+            ),
+        ),
+        _row("Slider", rx.el.div(it.slider(default_value=40), class_name="w-48")),
+        _row("Progress", rx.el.div(it.progress(value=60), class_name="w-48")),
+        _row(
+            "Segmented",
+            it.segmented_control.root(
+                it.segmented_control.item("Day", "day"),
+                it.segmented_control.item("Week", "week"),
+                default_value=["day"],
+            ),
+        ),
+        it.tabs.root(
+            it.tabs.list(
+                it.tabs.tab("Account", "account"),
+                it.tabs.tab("Settings", "settings"),
+            ),
+            it.tabs.panel(
+                rxe.text("Account panel", size="2"), value="account",
+                class_name="py-3",
+            ),
+            it.tabs.panel(
+                rxe.text("Settings panel", size="2"), value="settings",
+                class_name="py-3",
+            ),
+            default_value="account",
+            class_name="mt-4 w-full",
+        ),
+        it.accordion.root(
+            it.accordion.item(
+                it.accordion.trigger(
+                    rxe.text("What is this?", size="2"),
+                    class_name="bg-[var(--accent-9)]",
+                ),
+                it.accordion.panel(
+                    rxe.text("An accessible accordion.", size="2"),
+                    class_name="text-[var(--gray-12)]",
+                ),
+                value="one",
+                class_name="bg-[var(--color-panel-solid)] shadow-[inset_0_0_0_1px_var(--gray-a5)]",
+            ),
+            default_value=["one"],
+            class_name="mt-4 w-full",
+        ),
+        # Open overlays so axe can audit their popups.
+        it.dialog.root(
+            it.dialog.trigger("Open dialog", class_name="mt-4 self-start"),
+            it.dialog.portal(
+                it.dialog.backdrop(),
+                it.dialog.popup(
+                    it.dialog.title("Dialog title"),
+                    it.dialog.description("An accessible, focus-trapped dialog."),
+                    it.dialog.close("Close", class_name="mt-4"),
+                ),
+            ),
+            default_open=True,
+        ),
+        it.popover.root(
+            it.popover.trigger("Popover"),
+            it.popover.portal(
+                it.popover.positioner(
+                    it.popover.popup(rxe.text("Popover body", size="2")),
+                    side_offset=8,
+                )
+            ),
+        ),
+        it.menu.root(
+            it.menu.trigger("Menu"),
+            it.menu.portal(
+                it.menu.positioner(
+                    it.menu.popup(
+                        it.menu.item("Profile"),
+                        it.menu.item("Settings"),
+                        it.menu.item("Log out"),
+                    ),
+                    side_offset=8,
+                )
+            ),
+        ),
+        it.select.root(
+            it.select.trigger(it.select.value(placeholder="Pick one")),
+            it.select.portal(
+                it.select.positioner(
+                    it.select.popup(
+                        it.select.item(it.select.item_text("Apple"), value="apple"),
+                        it.select.item(it.select.item_text("Banana"), value="banana"),
+                    ),
+                    side_offset=8,
+                )
+            ),
+            default_value="apple",
+        ),
+        class_name="min-h-screen flex flex-col items-stretch gap-1 max-w-[34rem] mx-auto px-6 py-10 "
+        "bg-[var(--secondary-1)] text-[var(--secondary-12)]",
+        style={"fontFamily": "var(--default-font-family)"},
+    )
+
+
 _FEATURES = [
     ("Fast", "Single-digit-KB CSS per page, shipped only where used.", "New"),
     ("Faithful", "Pixel-matched to the design system you already use.", "Stable"),
