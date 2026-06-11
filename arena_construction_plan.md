@@ -285,15 +285,20 @@ dict. No arena, no generations: the tuple is owned by the component; immutabilit
   `_get_vars` consumers are `read_hooks_internal` (freeze.rs:1843 →
   `_get_hooks_internal` → `_get_vars_hooks`, component.py:2372) and
   `build_imports_dict`'s var-imports step (`_get_imports`'s `var_imports`,
-  component.py:2287). Branch: probe the instance dict for `_vars_cache` (same
-  `instance_dict` helper as read_field); when present AND the class's
-  `_get_vars`/`_get_vars_hooks`/`_get_hooks_internal` are base implementations
-  (forms.py:266 overrides `_get_vars`!) AND every cached var passes the `native_var`
-  gate AND its `var_data.components` is empty → iterate the tuple natively, fold
-  `var_data.hooks` (dict vs set semantics per component.py:2381) and `var_data.imports`
-  in Rust, skip the Python calls. Anything else → existing Python path (which
-  re-primes the cache). Expected: the 6.5 s cum slice and the isinstance/abc storm
-  collapse to native struct reads.
+  component.py:2287). `_get_hooks_internal` (component.py:2465) composes, in merge
+  order (later wins): `_get_events_hooks()` + ref hook + mount-lifecycle hook +
+  `_get_vars_hooks()` — and the freeze ALREADY derives ref presence and lifecycle
+  natively (the `_REF_HOOK_IMPORTS`/`_LIFECYCLE_HOOK_IMPORTS` wave), so the port is:
+  events hooks (from the frozen chains) + the staged-tuple vars hooks. Branch: probe
+  the instance dict for `_vars_cache` (same `instance_dict` helper as read_field);
+  when present AND the class's `_get_vars`/`_get_vars_hooks`/`_get_hooks_internal`
+  are base implementations (forms.py:266 overrides `_get_vars`!) AND every cached var
+  passes the `native_var` gate AND its `var_data.components` is empty → iterate the
+  tuple natively, fold `var_data.hooks` (dict vs set semantics per component.py:2381)
+  and `var_data.imports` in Rust, skip the Python calls. Anything else → existing
+  Python path (which re-primes the cache). Expected: the 6.5 s cum slice and the
+  isinstance/abc storm collapse to native struct reads. Gate as always: fork-pair
+  427/427 + oracle + suites.
 - **Phase III — owner follow-up: full immutability enforcement.** Deprecate (then
   refuse) post-create writes to harvest fields; migrate the remaining internal
   mutators (Upload's `special_props` assignment → construct-final; radix Progress's
