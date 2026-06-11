@@ -450,6 +450,38 @@ divergence, NOT introduced here). `app.style` rides
     set-rebuild iteration order (original-vs-its-copy churns memo names
     with byte-identical normalized output).
 
+## DONE — arena M3 phase 1: construction fast path + gate (2026-06-11)
+
+Default-off (`REFLEX_ARENA_CONSTRUCT=1` to enable). `arena_construction()`
+contextvar scope in component.py, set by rust_pipeline around page
+evaluation only. Eligible classes (`_post_init` is base + stock `Style`
+factory; per-class cached) skip `_post_init` in `_create`: kwargs mirror
+into the instance `__dict__`, Var-typed props `LiteralVar`-wrapped (Var
+values pass through unchanged — `_create_literal_var` returns Var inputs
+as-is), all-str class_name lists joined. Per-call fallback to
+`_post_init` for event triggers, style inputs, special attrs, non-str
+class_name, unknown names. Validation skipped on the fast path (the
+documented flag-gated difference). No write-through needed yet — the
+mirror IS the storage, so every audited post-create mutation site works
+natively. M1's ConstructionSchema is the classifier.
+
+- Gates: 16-fixture parity suite
+  (`tests/units/compiler/test_arena_construct_mirror.py`); oracle 27/27;
+  unit suites green (known 6); **fork-pair docs diff 427/427
+  byte-identical** rich-vs-arena, zero errors.
+- **Fork-pair harness (the M3+ gate tool):** fork twice per route from
+  one imported parent; both children inherit identical random/counter/
+  intern state, so single-page compiles are exactly byte-comparable —
+  eliminates ALL evaluation nondeterminism (upload's random idents,
+  data-editor, state counters, memo symbol churn). Normalization-based
+  cross-process comparison was tried first and could not be made tight.
+- Measured (docs, arena on): in-scope constructions 82.7k, fast 50.4k
+  (**60.9%**); fallbacks are style-kwarg + event-trigger calls (phase 2
+  and M4 cover those). Out-of-scope during compile: only 2.1k
+  (freeze-time foreach `render_component()` re-renders — scope-widening
+  candidates); ~233k constructions are app-import-time docgen, which
+  stays rich by design (lifecycle audit).
+
 ### M2 scoping notes (kept for reference; superseded by the DONE above)
 
 Construction-path facts established for M2, beyond the plan text:

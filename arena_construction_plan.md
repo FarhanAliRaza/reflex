@@ -178,6 +178,30 @@ full validation. Documented behavior difference behind the flag.
   Events at the seal call `EventChain.create` + existing rendering per trigger (same cost
   as today, just moved). Gate: everything byte-identical with flag ON; the 24-site
   mutation matrix as regression tests. *Risk: HIGH — the compatibility cliff.*
+  - **Phase 1 DONE (2026-06-11): gate + `_create` mirror fast path, default-off.**
+    `arena_construction()` contextvar scope (component.py) set by rust_pipeline around
+    page evaluation under `REFLEX_ARENA_CONSTRUCT=1`. Eligible classes (`_post_init` is
+    base, stock `Style` factory on the style field; cached per class) skip `_post_init`:
+    kwargs mirror into `__dict__` with `LiteralVar` wrapping for Var-typed props (Var
+    values pass through unchanged — proven identity at base.py:1414) and all-str
+    class_name lists joined; calls carrying event triggers / style inputs / special
+    attrs / unknown names fall back per call. Validation (`satisfies_type_hint`,
+    children checks) skipped on the fast path — the documented flag-gated difference.
+    No `__setattr__`/write-through needed in this phase: the mirror IS the storage, so
+    all 24 audited mutation sites work natively. M1's schema got its first consumer
+    (per-kwarg classification drives eligibility). Gate shipped: 16-fixture parity
+    suite (`tests/units/compiler/test_arena_construct_mirror.py`) + **fork-pair docs
+    diff: 427/427 pages byte-identical rich-vs-arena** (fork twice per route from one
+    imported parent — children share random/counter/intern state, eliminating ALL
+    evaluation nondeterminism incl. upload/data-editor). Measured on docs: 60.9% of
+    in-scope constructions skip `_post_init` (50.4k/82.7k; remainder = style-kwarg and
+    event-trigger calls — phase 2/M4 territory); only 2.1k compile-time constructions
+    occur outside the scope (freeze-time foreach re-renders — candidates for scope
+    widening in phase 2), the other ~233k are app-import-time docgen (correctly rich).
+  - **Phase 2 (next): `push_node` + staged nodes + the seal.** Mirror stays as the
+    Python-side handle state; push converts kwargs to owned Rust data so the seal can
+    fill snapshot slots without per-node Python reads; `__setattr__` write-through
+    arrives here (staged data duplicates the mirror). Style keys + events move next.
 - **M4 — Event optimization.** Cache parsed arg-specs per (class, trigger); assemble
   chains via `assemble_chain_js` without per-trigger `LiteralVar.create`. Kills
   `rx.input`'s 112 µs/node pathology end-to-end. *Risk: medium.*

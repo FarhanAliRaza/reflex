@@ -1,0 +1,258 @@
+"""M3 phase-1 gate: the arena construction fast path is byte-identical.
+
+Inside ``arena_construction()`` (set by the Rust pipeline under
+``REFLEX_ARENA_CONSTRUCT=1``), eligible ``Component.create`` calls skip
+``_post_init`` and mirror kwargs into the instance ``__dict__`` — Var-typed
+props ``LiteralVar``-wrapped exactly as ``_post_init`` does. Each fixture
+compiles the same page with the scope off and on; page JS, memo bodies, and
+imports must match byte-for-byte. Calls the mirror can't reproduce (event
+triggers, style inputs, special attrs, non-str class_name) must fall back
+to ``_post_init`` and still match trivially.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+import pytest
+from reflex_base.components.component import Component, arena_construction
+from reflex_base.vars.base import Var, VarData
+
+import reflex as rx
+from reflex.app import UnevaluatedPage
+from reflex.compiler.compiler import compile_unevaluated_page
+from reflex.compiler.session import CompilerSession
+
+pytest.importorskip("reflex_compiler_rust._native")
+
+_IMPORT_FIELDS = ("tag", "alias", "is_default", "install", "render", "package_path")
+
+
+def _canon_imports(imports: dict) -> dict[str, list[str]]:
+    return {
+        lib: sorted({
+            repr(tuple(getattr(iv, f, None) for f in _IMPORT_FIELDS)) for iv in ivs
+        })
+        for lib, ivs in sorted(imports.items())
+    }
+
+
+def _compile(build: Callable[[], Component], *, arena: bool) -> tuple[str, list, dict]:
+    sess = CompilerSession()
+    unev = UnevaluatedPage(component=build, route="/arena-mirror-diff")
+    with arena_construction(arena):
+        component = compile_unevaluated_page(
+            "/arena-mirror-diff", unev, {}, None, apply_style=False
+        )
+    page_js, bodies, imports, _ = sess.compile_page_from_component_arena(
+        component, "ArenaMirrorDiff", "arena-mirror-diff", app_style={}
+    )
+    return page_js, sorted(bodies), _canon_imports(imports)
+
+
+def _assert_arena_parity(build: Callable[[], Component]) -> str:
+    rich_js, rich_bodies, rich_imports = _compile(build, arena=False)
+    arena_js, arena_bodies, arena_imports = _compile(build, arena=True)
+    assert arena_js == rich_js
+    assert arena_bodies == rich_bodies
+    assert arena_imports == rich_imports
+    # Content assertions search the page plus memo bodies (stateful or
+    # event-bearing subtrees get memoized out of the page function).
+    return rich_js + "\n".join(jsx for _, jsx in rich_bodies)
+
+
+_STATE_VAR = Var(
+    "stateValue",
+    _var_data=VarData(hooks={"const stateValue = 1;": None}),
+).to(str)
+
+
+def test_literal_var_props_mirror():
+    js = _assert_arena_parity(
+        lambda: rx.box(
+            rx.text("hello", size="3"),
+            rx.heading("head", as_="h2"),
+            rx.spacer(),
+        )
+    )
+    assert "hello" in js
+
+
+def test_state_var_props_mirror():
+    js = _assert_arena_parity(
+        lambda: rx.box(rx.input(value=_STATE_VAR, placeholder="type"))
+    )
+    assert "stateValue" in js
+
+
+def test_event_trigger_falls_back():
+    js = _assert_arena_parity(
+        lambda: rx.box(rx.button("click", on_click=rx.console_log("x")))
+    )
+    assert "console" in js
+
+
+def test_style_inputs_fall_back():
+    _assert_arena_parity(
+        lambda: rx.box(
+            rx.text("styled", style={"color": "red"}),
+            rx.text("shorthand", background_color="blue"),
+        )
+    )
+
+
+def test_special_attrs_fall_back():
+    js = _assert_arena_parity(lambda: rx.box(rx.text("t", data_testid="x")))
+    assert "data-testid" in js
+
+
+def test_class_name_variants():
+    _assert_arena_parity(
+        lambda: rx.box(
+            rx.text("plain", class_name="a b"),
+            rx.text("listy", class_name=["a", "b"]),
+        )
+    )
+
+
+def test_raw_fields_mirror():
+    _assert_arena_parity(
+        lambda: rx.box(
+            rx.text("k", key="some-key", id="an-id"),
+            rx.el.div("attrs", custom_attrs={"spellcheck": "false"}),
+        )
+    )
+
+
+def test_create_override_mutation_sites():
+    # Form patches handle_submit_unique_name post-create; DebounceInput
+    # swaps methods on its child. Both operate on the mirror instance dict.
+    _assert_arena_parity(
+        lambda: rx.box(
+            rx.form(rx.input(value=_STATE_VAR), on_submit=rx.console_log("s")),
+            rx.debounce_input(
+                rx.input(value=_STATE_VAR, on_change=rx.console_log("c"))
+            ),
+        )
+    )
+
+
+def test_upload_special_props_mutation_normalized():
+    import re
+
+    # Upload generates random unique variable names per EVALUATION (its
+    # rich-vs-rich A/A already differs), so this fixture compares modulo
+    # those tokens. It pins the special_props post-create append working
+    # against the mirror instance dict.
+    def norm(text: str) -> str:
+        text = re.sub(r"_memo_[0-9a-f]{16}", "_memo_X", text)
+        text = re.sub(r'key: "\d+"', 'key: "K"', text)
+        text = re.sub(r"_[0-9a-f]{32}", "_H", text)
+        return re.sub(r"\b[a-z]{8}\b", "ident", text)
+
+    build = lambda: rx.box(rx.upload(rx.text("up")))  # noqa: E731
+    rich_js, rich_bodies, _ = _compile(build, arena=False)
+    arena_js, arena_bodies, _ = _compile(build, arena=True)
+    assert norm(arena_js) == norm(rich_js)
+    assert sorted(norm(j) for _, j in arena_bodies) == sorted(
+        norm(j) for _, j in rich_bodies
+    )
+    assert "getRootProps" in arena_js + "".join(j for _, j in arena_bodies)
+
+
+def test_control_flow_create_callers():
+    _assert_arena_parity(
+        lambda: rx.box(
+            rx.foreach(Var.create(["a", "b"]), lambda item: rx.text(item)),
+            rx.cond(_STATE_VAR.bool(), rx.text("yes"), rx.text("no")),
+            rx.match(_STATE_VAR, ("a", rx.text("A")), rx.text("default")),
+        )
+    )
+
+
+def test_markdown_mirrors():
+    _assert_arena_parity(lambda: rx.box(rx.markdown("**bold** and `code`")))
+
+
+def test_add_style_class_with_fold():
+    class FoldedComp(Component):
+        tag = "FoldedComp"
+        library = "arena-mirror-lib"
+
+        def add_style(self):
+            """Class default style for the fold.
+
+            Returns:
+                The default style dict.
+            """
+            return {"color": "rebeccapurple"}
+
+    js = _assert_arena_parity(lambda: rx.box(FoldedComp.create(prop_a="x")))
+    assert "rebeccapurple" in js
+
+
+def test_custom_post_init_class_never_fast_paths():
+    calls = []
+
+    class CustomInit(Component):
+        tag = "CustomInit"
+        library = "arena-mirror-lib"
+        val: Var[str]
+
+        def _post_init(self, *args, **kwargs):
+            """Track invocations, then defer to the base constructor.
+
+            Args:
+                *args: positional args for the base constructor.
+                **kwargs: keyword args for the base constructor.
+            """
+            calls.append(1)
+            super()._post_init(*args, **kwargs)
+
+    assert not CustomInit._arena_create_eligible()
+    _assert_arena_parity(lambda: rx.box(CustomInit.create(val="v")))
+    assert calls  # _post_init ran on both compiles
+
+
+def test_fast_path_skips_post_init(monkeypatch):
+    seen = []
+    real = Component._post_init
+
+    def spy(self, *args, **kwargs):
+        seen.append(type(self).__name__)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Component, "_post_init", spy)
+    with arena_construction():
+        rx.text("fast", size="3")
+    assert "Text" not in seen
+    seen.clear()
+    rx.text("slow", size="3")
+    assert "Text" in seen
+    seen.clear()
+    with arena_construction(False):
+        rx.text("slow2", size="3")
+    assert "Text" in seen
+
+
+def test_validation_skipped_under_arena():
+    # Documented behavior difference behind the flag: satisfies_type_hint
+    # does not run on the fast path.
+    with pytest.raises(TypeError):
+        # trim expects a literal union, not int
+        rx.text("x", trim=42)  # pyright: ignore[reportArgumentType]
+    with arena_construction():
+        comp = rx.text("x", trim=42)  # pyright: ignore[reportArgumentType]
+    assert comp is not None
+
+
+def test_scope_is_context_local():
+    from reflex_base.components.component import _ARENA_CONSTRUCTION
+
+    assert _ARENA_CONSTRUCTION.get() is False
+    with arena_construction():
+        assert _ARENA_CONSTRUCTION.get() is True
+        with arena_construction(False):
+            assert _ARENA_CONSTRUCTION.get() is False
+        assert _ARENA_CONSTRUCTION.get() is True
+    assert _ARENA_CONSTRUCTION.get() is False

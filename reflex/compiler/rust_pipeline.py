@@ -31,6 +31,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from reflex_base.components.component import arena_construction
 from reflex_base.components.memo import MEMOS, MemoComponentDefinition
 
 from reflex.compiler import utils as compiler_utils
@@ -225,10 +226,15 @@ def compile_pages(
         # Python `_add_style_recursive` tree walk here; the freeze applies
         # the per-node fold lazily under the fold-root mark, using the
         # `app_style` dict passed to the arena entry below.
+        # M3 arena construction (default OFF): with REFLEX_ARENA_CONSTRUCT=1,
+        # page evaluation runs under the construction fast-path scope —
+        # eligible Component.create calls skip `_post_init`.
         fold_in_freeze = os.environ.get("REFLEX_STYLE_FOLD", "") != "0"
-        component = compile_unevaluated_page(
-            route, unev, app.style, app.theme, apply_style=not fold_in_freeze
-        )
+        arena_construct = os.environ.get("REFLEX_ARENA_CONSTRUCT", "") == "1"
+        with arena_construction(arena_construct):
+            component = compile_unevaluated_page(
+                route, unev, app.style, app.theme, apply_style=not fold_in_freeze
+            )
         page_is_stateful = len(all_base_state_classes) > n_states_before
         if page_is_stateful:
             # Statefulness detection: matches the legacy plugin

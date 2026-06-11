@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import dataclasses
 import enum
 import functools
@@ -91,6 +92,43 @@ def _is_var(value: Any) -> bool:
 
 if TYPE_CHECKING:
     import reflex.state
+
+# M3 arena construction gate: set by the Rust pipeline around page
+# evaluation only (via `arena_construction`). Off everywhere else —
+# module import, runtime events, legacy `reflex run`, tests — so
+# components built outside page evaluation always take the full
+# `_post_init` path.
+_ARENA_CONSTRUCTION: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "reflex_arena_construction", default=False
+)
+
+# Fields whose kwargs `_post_init` transforms rather than stores raw —
+# a call passing any of these falls back to the full constructor.
+_MIRROR_BLOCKED_FIELDS = frozenset({"style", "event_triggers"})
+
+
+@contextlib.contextmanager
+def arena_construction(enabled: bool = True) -> Iterator[None]:
+    """Scope the arena construction fast path to a code block.
+
+    Inside the scope, eligible `Component.create` calls skip `_post_init`
+    and mirror their kwargs directly (with `LiteralVar` wrapping for
+    Var-typed props, exactly as `_post_init` would — but without
+    `satisfies_type_hint` validation). The Rust pipeline wraps page
+    evaluation in this scope when `REFLEX_ARENA_CONSTRUCT=1`.
+
+    Args:
+        enabled: Whether the fast path is active inside the scope.
+
+    Yields:
+        None.
+    """
+    token = _ARENA_CONSTRUCTION.set(enabled)
+    try:
+        yield
+    finally:
+        _ARENA_CONSTRUCTION.reset(token)
+
 
 # Constant halves of `_get_hooks_imports`, read by the Rust freeze so it can
 # derive hook-implied imports from already-frozen data (ref presence,
@@ -1445,6 +1483,81 @@ class Component(BaseComponent, ABC):
         return cls._create(children_normalized, **props)
 
     @classmethod
+    def _arena_create_eligible(cls) -> bool:
+        """Whether this class may take the arena construction fast path.
+
+        True when ``_post_init`` is the base implementation (no subclass
+        hooks to honor) and the ``style`` field keeps the stock empty
+        ``Style`` factory (a class-level style default would need the
+        ``_post_init`` merge). Cached on the class's own ``__dict__``.
+
+        Returns:
+            Whether instances may skip ``_post_init``.
+        """
+        cached = cls.__dict__.get("_arena_eligible_cache")
+        if cached is None:
+            style_field = cls.get_fields().get("style")
+            cached = (
+                cls._post_init is Component._post_init
+                and style_field is not None
+                and style_field.default is MISSING
+                and style_field.default_factory is Style
+            )
+            cls._arena_eligible_cache = cached
+        return cached
+
+    @classmethod
+    def _arena_mirror_kwargs(cls, props: dict[str, Any]) -> dict[str, Any] | None:
+        """Build the instance ``__dict__`` payload for the fast path.
+
+        Mirrors ``_post_init``'s storage semantics per kwarg: Var-typed
+        props are ``LiteralVar``-wrapped (Var values pass through
+        unchanged, exactly like ``_post_init``), everything else that
+        ``_post_init`` stores raw is kept raw. Type validation
+        (``satisfies_type_hint``) is skipped — the documented behavior
+        difference behind the arena flag.
+
+        Args:
+            props: The raw create kwargs (children excluded).
+
+        Returns:
+            The mirror dict, or ``None`` when any kwarg needs the full
+            constructor (event triggers, style inputs, non-str
+            ``class_name``, special attrs, unknown names).
+        """
+        schema = cls._construction_schema()
+        prop_map = schema.props
+        base_fields = schema.base_fields
+        mirror: dict[str, Any] = {}
+        for key, value in props.items():
+            if (is_var := prop_map.get(key)) is not None:
+                if is_var and not _is_var(value):
+                    # Hot path: bare try/except over contextlib.suppress —
+                    # this runs once per literal-valued prop.
+                    try:  # noqa: SIM105
+                        value = LiteralVar.create(value)
+                    except TypeError:
+                        # _post_init keeps the raw value in this case too
+                        # (its validation may raise where we don't).
+                        pass
+                mirror[key] = value
+            elif key in base_fields and key not in _MIRROR_BLOCKED_FIELDS:
+                if key == "class_name" and type(value) is not str:
+                    # _post_init joins all-str lists/tuples; anything with a
+                    # Var (or any other shape) keeps the full constructor.
+                    if type(value) in (list, tuple) and all(
+                        type(c) is str for c in value
+                    ):
+                        value = " ".join(value)
+                    else:
+                        return None
+                mirror[key] = value
+            else:
+                # Event trigger, style/special-attr key, or unknown name.
+                return None
+        return mirror
+
+    @classmethod
     def _create(cls: type[T], children: Sequence[BaseComponent], **props: Any) -> T:
         """Create the component.
 
@@ -1457,6 +1570,11 @@ class Component(BaseComponent, ABC):
         """
         comp = cls.__new__(cls)
         super(Component, comp).__init__(id=props.get("id"), children=list(children))
+        if _ARENA_CONSTRUCTION.get() and cls._arena_create_eligible():
+            mirror = cls._arena_mirror_kwargs(props)
+            if mirror is not None:
+                comp.__dict__.update(mirror)
+                return comp
         comp._post_init(children=list(children), **props)
         return comp
 
