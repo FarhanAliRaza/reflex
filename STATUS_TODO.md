@@ -450,6 +450,25 @@ divergence, NOT introduced here). `app.style` rides
     set-rebuild iteration order (original-vs-its-copy churns memo names
     with byte-identical normalized output).
 
+### M4 scoping notes (event optimization — read before starting)
+
+`EventChain.create` measured at **46 µs/trigger** (single-spec on_click,
+stable handler): `call_event_handler` is 77% of it — roughly 28 µs
+building the spec's args (`add_args`/`with_args`/`parse` Var
+construction; deterministic per args_spec → cacheable) and 18 µs
+`_check_event_args_subclass_of_callback` + `get_type_hints` (spec-vs-
+callback type VALIDATION → skippable under the arena flag, same policy
+as `satisfies_type_hint`). Cache keys must be identity-based on STABLE
+objects only: EventHandler descriptors on state classes and class-level
+arg-spec constants are stable; ad-hoc `EventSpec`s built per call
+(e.g. `rx.console_log(...)` inline) are not — cache must not key on
+those. NOTE: `EventChain.create` also runs at RUNTIME (event
+processing) — any change must be gated or proven behavior-neutral, not
+just compile-byte-neutral. Benchmark trap: `lambda:
+rx.button(on_click=rx.console_log("x"))` times the console_log
+EventSpec construction too (~100 µs of the 157 µs) — keep handler
+construction outside the timed region.
+
 ## DONE — arena M3 phase 2a: full-surface mirror (2026-06-11)
 
 `_arena_mirror_kwargs` now replicates `_post_init` end-to-end minus
