@@ -7,7 +7,7 @@ Rust/native reads → byte-gate (oracle + fork-pair 427) → commit →
 re-profile. Continue until only user overrides remain Python.
 
 Program counters so far (docs compile, profiled, identical conditions):
-total Python function calls **57.5M → 49.2M**; isinstance+abc
+total Python function calls **57.5M → 48.7M**; isinstance+abc
 **3.35M → 2.24M**; `_post_init` 84.9k → 12.1k calls; `_get_vars`
 frames 991k → 676k; LiteralVar creates 448k → 300k; `Style.__init__`
 177k → 67k; the `_add_style_recursive` walk and per-var
@@ -28,12 +28,10 @@ pattern in the session transcripts: cProfile around
 2. **forms.py:266 `_get_vars` override** (61k+ frames): el-form classes
    add extra vars; either port the override's contribution or stage it
    at construction via a per-class hook.
-3. **`import_var` property** (143k Python calls + ImportVar builds in
-   `build_imports_dict` step 3): pure function of (tag, alias,
-   is_default) — value-keyed memo or native build. CARE: the property
-   returns the Python `ImportVar` type; check type identity vs
-   `RustImportVar` for downstream isinstance/merge consumers before
-   swapping.
+3. ~~`import_var` property~~ DONE: per-(tag, alias, is_default) memo
+   in PyRefs (143k → 54k calls; the residue is per-page misses — a
+   session-level memo would cut further). The property's own result is
+   shared, so the Python `ImportVar` type is preserved exactly.
 4. **First-freeze priming of import-time (docgen-cached) rich nodes**:
    their first freeze runs the Python harvest once; subsequent freezes
    hit the staged branch already. Optionally widen the arena scope to

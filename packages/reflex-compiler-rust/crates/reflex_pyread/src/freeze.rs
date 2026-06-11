@@ -1396,8 +1396,65 @@ fn build_imports_dict<'py>(
     let tag = read_field(component, inst_dict.as_ref(), "tag", &refs.attrs.tag, refs);
     if let (Some(lib), Some(tg)) = (&library, &tag) {
         if !lib.is_none() && !tg.is_none() {
-            if let Ok(import_var) = component.getattr(refs.attrs.import_var.bind(py)) {
-                let _ = imports_list_for(&result, lib)?.append(import_var);
+            // `import_var` is a pure function of (tag, alias, is_default) —
+            // memoize the property's result per distinct key per page so the
+            // Python call + dataclass construction run once per key instead
+            // of once per node. An exotic `is_default` value bypasses the
+            // memo and calls the property directly.
+            let alias = read_field(
+                component,
+                inst_dict.as_ref(),
+                "alias",
+                &refs.attrs.alias,
+                refs,
+            );
+            let is_default = read_field(
+                component,
+                inst_dict.as_ref(),
+                "is_default",
+                &refs.attrs.is_default,
+                refs,
+            );
+            let default_code = match &is_default {
+                None => Some(0u8),
+                Some(v) if v.is_none() => Some(1),
+                Some(v) => match v.extract::<bool>() {
+                    Ok(false) => Some(2),
+                    Ok(true) => Some(3),
+                    Err(_) => None,
+                },
+            };
+            let memo_key = default_code.map(|code| {
+                let alias_key = match &alias {
+                    Some(a) if !a.is_none() => {
+                        py_str(a).map(|s| format!("s:{s}")).unwrap_or_default()
+                    }
+                    _ => "n".to_owned(),
+                };
+                (py_str(tg).unwrap_or_default(), alias_key, code)
+            });
+            let cached = memo_key.as_ref().and_then(|k| {
+                refs.import_var_memo
+                    .borrow()
+                    .get(k)
+                    .map(|o| o.bind(py).clone())
+            });
+            let import_var = match cached {
+                Some(iv) => Some(iv),
+                None => match component.getattr(refs.attrs.import_var.bind(py)) {
+                    Ok(iv) => {
+                        if let Some(k) = memo_key {
+                            refs.import_var_memo
+                                .borrow_mut()
+                                .insert(k, iv.clone().unbind());
+                        }
+                        Some(iv)
+                    }
+                    Err(_) => None,
+                },
+            };
+            if let Some(iv) = import_var {
+                let _ = imports_list_for(&result, lib)?.append(iv);
             }
         }
     }

@@ -235,6 +235,11 @@ pub struct PyRefs<'py> {
     /// for the class (`styles.get(type(self))` / `styles.get(cls.create)`).
     /// Per-call because `App.style` can differ across compiles.
     pub style_fold_entries: RefCell<HashMap<usize, bool>>,
+    /// `import_var` property results memoized per (tag, alias-marker,
+    /// is_default-code): the property is a pure function of those three
+    /// fields, so one Python call per distinct key per page replaces one
+    /// per node. The frozen result is value-identical for every consumer.
+    pub import_var_memo: RefCell<HashMap<(String, String, u8), Py<PyAny>>>,
     /// Pre-interned attribute / method names. Each PyO3 ``getattr``
     /// or ``call_method0`` that took ``&str`` previously allocated a
     /// fresh ``PyString`` per call; passing the pre-interned
@@ -319,6 +324,7 @@ pub struct InternedAttrs {
     pub m_create: Py<PyString>,
     pub style_fold_root: Py<PyString>,
     pub vars_cache: Py<PyString>,
+    pub is_default: Py<PyString>,
 }
 
 impl InternedAttrs {
@@ -382,6 +388,7 @@ impl InternedAttrs {
             m_create: s("create"),
             style_fold_root: s("_style_fold_root"),
             vars_cache: s("_vars_cache"),
+            is_default: s("is_default"),
         }
     }
 }
@@ -1076,6 +1083,7 @@ impl<'py> PyRefs<'py> {
             app_wraps_seen: RefCell::new(HashSet::with_capacity(8)),
             style_fold_style: RefCell::new(None),
             style_fold_entries: RefCell::new(HashMap::with_capacity(8)),
+            import_var_memo: RefCell::new(HashMap::with_capacity(32)),
             attrs: InternedAttrs::new(py),
             method_cache: RefCell::new(HashMap::with_capacity(32)),
             class_cache: None,

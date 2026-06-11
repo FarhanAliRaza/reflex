@@ -1263,9 +1263,12 @@ class Component(BaseComponent, ABC):
         ):
             msg = f"Invalid class_name passed for prop {type(self).__name__}.class_name, expected type str, got value {class_name._js_expr} of type {class_name._var_type}."
             raise TypeError(msg)
-        # Construct the component.
-        for key, value in kwargs.items():
-            setattr(self, key, value)
+        # Construct the component. A plain dict update has the same
+        # semantics as the setattr loop (every key is a non-data
+        # ComponentField name) without 20+ Python `__setattr__` frames per
+        # node; the harvest invalidation in `__setattr__` is a no-op here
+        # anyway — `_post_init` only runs on fresh instances.
+        self.__dict__.update(kwargs)
 
     @classmethod
     def get_event_triggers(cls) -> dict[str, types.ArgsSpec | Sequence[types.ArgsSpec]]:
