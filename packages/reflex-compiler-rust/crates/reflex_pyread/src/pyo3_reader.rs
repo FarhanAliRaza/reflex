@@ -470,6 +470,10 @@ pub struct ClassMetadata {
     /// deepcopies wrappers before mutating, so sharing one instance per
     /// class across nodes and pages is safe.
     pub app_wraps_dict: Option<Py<PyAny>>,
+    /// M1 (arena construction): construction-time kwarg classification
+    /// table registered via `CompilerSession.register_class_schema`.
+    /// `None` until the class registers; inert until M3's `push_node`.
+    pub construction_schema: Option<ConstructionSchema>,
     /// Bitmask of methods that have been marked "always trivial" for
     /// this class. One bit per `SkippableMethod` variant.
     pub skip_flags: u8,
@@ -501,6 +505,113 @@ pub enum FieldDefault {
     Dynamic,
 }
 
+/// M1 (arena construction): how one statically-known construction kwarg is
+/// handled, mirroring `Component._post_init`'s per-key branches. The last
+/// three variants are fallthrough results for names absent from the table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KwargKind {
+    /// Var-typed prop — `LiteralVar.create`-wrapped at construction.
+    PropVar,
+    /// Non-Var prop — stored raw.
+    PropPlain,
+    /// Event trigger — bound to an `EventChain` (at the seal, post-M3).
+    EventTrigger,
+    /// Non-prop field (children, style, custom_attrs, ...) — stored raw,
+    /// never folded into style.
+    BaseField,
+    /// Unknown `on_*` name — `_post_init` raises ValueError.
+    Invalid,
+    /// `data_`/`data-`/`aria_`/`aria-` attribute — kebab-cased into
+    /// `custom_attrs`.
+    SpecialAttr,
+    /// Unknown name — merged into the style dict.
+    Style,
+}
+
+impl KwargKind {
+    /// Category name matching `ConstructionSchema.classify` on the Python
+    /// side, for differential tests.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PropVar => "prop_var",
+            Self::PropPlain => "prop",
+            Self::EventTrigger => "event_trigger",
+            Self::BaseField => "field",
+            Self::Invalid => "invalid",
+            Self::SpecialAttr => "special_attr",
+            Self::Style => "style",
+        }
+    }
+}
+
+/// M1 (arena construction): per-class kwarg classification table,
+/// registered from Python via `CompilerSession.register_class_schema`
+/// (built by `Component._construction_schema()`). Inert until M3's
+/// `push_node` consumes it to classify kwargs without invoking the
+/// Python constructor.
+pub struct ConstructionSchema {
+    /// Statically-known kwargs: props, event triggers, non-prop fields.
+    /// The three input sets are disjoint (the Python builder resolves the
+    /// trigger-over-prop precedence).
+    kwargs: HashMap<String, KwargKind>,
+    /// Render-time prop renames (old -> new), carried for the seal phase.
+    pub rename_props: Vec<(String, String)>,
+}
+
+impl ConstructionSchema {
+    /// Build the table from the Python-side schema's components.
+    pub fn new(
+        props: Vec<(String, bool)>,
+        triggers: Vec<String>,
+        base_fields: Vec<String>,
+        rename_props: Vec<(String, String)>,
+    ) -> Self {
+        let mut kwargs =
+            HashMap::with_capacity(props.len() + triggers.len() + base_fields.len());
+        for name in base_fields {
+            kwargs.insert(name, KwargKind::BaseField);
+        }
+        for (name, is_var) in props {
+            let kind = if is_var {
+                KwargKind::PropVar
+            } else {
+                KwargKind::PropPlain
+            };
+            kwargs.insert(name, kind);
+        }
+        for name in triggers {
+            kwargs.insert(name, KwargKind::EventTrigger);
+        }
+        Self {
+            kwargs,
+            rename_props,
+        }
+    }
+
+    /// Classify a construction kwarg exactly as `_post_init` would
+    /// (semantics doc on the Python `ConstructionSchema.classify`).
+    pub fn classify(&self, name: &str) -> KwargKind {
+        match self.kwargs.get(name) {
+            // _post_init's invalid-trigger check runs before the field
+            // check, so an on_-prefixed non-prop field name raises too.
+            Some(KwargKind::BaseField) if name.starts_with("on_") => KwargKind::Invalid,
+            Some(kind) => *kind,
+            None if name.starts_with("on_") => KwargKind::Invalid,
+            None if is_special_attr(name) => KwargKind::SpecialAttr,
+            None => KwargKind::Style,
+        }
+    }
+}
+
+/// `SpecialAttributes.is_special` (constants/compiler.py): data-*/aria-*
+/// names that land in `custom_attrs` instead of style.
+fn is_special_attr(name: &str) -> bool {
+    name.starts_with("data_")
+        || name.starts_with("data-")
+        || name.starts_with("aria_")
+        || name.starts_with("aria-")
+}
+
 impl Default for ClassMetadata {
     fn default() -> Self {
         Self {
@@ -519,6 +630,7 @@ impl Default for ClassMetadata {
             render_is_base: None,
             app_wrap_is_base: None,
             app_wraps_dict: None,
+            construction_schema: None,
             skip_flags: 0,
             trivial_counts: [0; SkippableMethod::COUNT],
             total_visits: 0,
@@ -2296,6 +2408,67 @@ fn is_js_identifier(name: &str) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod construction_schema_tests {
+    use super::{ConstructionSchema, KwargKind};
+
+    fn schema() -> ConstructionSchema {
+        ConstructionSchema::new(
+            vec![("color".into(), true), ("contents".into(), false)],
+            vec!["on_click".into(), "on_mount".into()],
+            vec![
+                "children".into(),
+                "style".into(),
+                "custom_attrs".into(),
+                "on_weird_field".into(),
+            ],
+            vec![("type".into(), "type_".into())],
+        )
+    }
+
+    #[test]
+    fn known_names_classify_by_table() {
+        let s = schema();
+        assert_eq!(s.classify("color"), KwargKind::PropVar);
+        assert_eq!(s.classify("contents"), KwargKind::PropPlain);
+        assert_eq!(s.classify("on_click"), KwargKind::EventTrigger);
+        assert_eq!(s.classify("children"), KwargKind::BaseField);
+        assert_eq!(s.classify("style"), KwargKind::BaseField);
+    }
+
+    #[test]
+    fn on_prefixed_names_are_invalid_unless_trigger_or_prop() {
+        let s = schema();
+        // Unknown on_* name: _post_init raises ValueError.
+        assert_eq!(s.classify("on_bogus"), KwargKind::Invalid);
+        // on_-prefixed non-prop FIELD: the raise happens before the
+        // field check in _post_init, so this is invalid too.
+        assert_eq!(s.classify("on_weird_field"), KwargKind::Invalid);
+    }
+
+    #[test]
+    fn unknown_names_fall_through_to_special_attr_or_style() {
+        let s = schema();
+        assert_eq!(s.classify("data_foo"), KwargKind::SpecialAttr);
+        assert_eq!(s.classify("data-foo"), KwargKind::SpecialAttr);
+        assert_eq!(s.classify("aria_label"), KwargKind::SpecialAttr);
+        assert_eq!(s.classify("aria-label"), KwargKind::SpecialAttr);
+        assert_eq!(s.classify("background_color"), KwargKind::Style);
+        assert_eq!(s.classify("databse_typo"), KwargKind::Style);
+    }
+
+    #[test]
+    fn category_names_match_python_side() {
+        assert_eq!(KwargKind::PropVar.as_str(), "prop_var");
+        assert_eq!(KwargKind::PropPlain.as_str(), "prop");
+        assert_eq!(KwargKind::EventTrigger.as_str(), "event_trigger");
+        assert_eq!(KwargKind::BaseField.as_str(), "field");
+        assert_eq!(KwargKind::Invalid.as_str(), "invalid");
+        assert_eq!(KwargKind::SpecialAttr.as_str(), "special_attr");
+        assert_eq!(KwargKind::Style.as_str(), "style");
+    }
 }
 
 #[cfg(test)]

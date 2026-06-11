@@ -27,7 +27,8 @@ use reflex_pyread::{
     collect_all_imports as pyread_collect_all_imports,
     collect_all_imports_into as pyread_collect_all_imports_into, freeze_component,
     freeze_component_with_class_cache, merge_imports_into as pyread_merge_imports_into,
-    should_memoize as memoize_should_memoize, ClassMetadataCache, MemoRefs, PyRefs,
+    should_memoize as memoize_should_memoize, ClassMetadataCache, ConstructionSchema,
+    MemoRefs, PyRefs,
 };
 
 /// One per Python `reflex.compiler.session.CompilerSession`. Holds the
@@ -421,6 +422,68 @@ impl CompilerSession {
     /// landed (presence of attr also serves as the contract pin).
     fn class_metadata_cache_size(&self) -> usize {
         self.class_metadata.borrow().len()
+    }
+
+    /// M1 (arena construction): register the construction-time kwarg
+    /// classification schema for a Component class. The inputs come
+    /// from `Component._construction_schema()` on the Python side; the
+    /// table is stored on the per-class metadata cache. Inert —
+    /// nothing consumes it until M3's `push_node`.
+    fn register_class_schema(
+        &self,
+        cls: &Bound<'_, PyAny>,
+        props: Vec<(String, bool)>,
+        triggers: Vec<String>,
+        base_fields: Vec<String>,
+        rename_props: Vec<(String, String)>,
+    ) {
+        let key = cls.as_ptr() as usize;
+        self.class_metadata
+            .borrow_mut()
+            .entry(key)
+            .or_default()
+            .construction_schema = Some(ConstructionSchema::new(
+            props,
+            triggers,
+            base_fields,
+            rename_props,
+        ));
+    }
+
+    /// M1: whether a construction schema is registered for `cls`.
+    fn class_schema_registered(&self, cls: &Bound<'_, PyAny>) -> bool {
+        let key = cls.as_ptr() as usize;
+        self.class_metadata
+            .borrow()
+            .get(&key)
+            .is_some_and(|meta| meta.construction_schema.is_some())
+    }
+
+    /// M1 differential-test hook: classify one kwarg name against the
+    /// registered schema for `cls`. Returns the category string
+    /// matching `ConstructionSchema.classify` on the Python side, or
+    /// `None` when no schema is registered for the class.
+    fn class_schema_classify(&self, cls: &Bound<'_, PyAny>, name: &str) -> Option<&'static str> {
+        let key = cls.as_ptr() as usize;
+        self.class_metadata
+            .borrow()
+            .get(&key)
+            .and_then(|meta| meta.construction_schema.as_ref())
+            .map(|schema| schema.classify(name).as_str())
+    }
+
+    /// M1 round-trip hook: the registered rename map for `cls`, or
+    /// `None` when no schema is registered.
+    fn class_schema_rename_props(
+        &self,
+        cls: &Bound<'_, PyAny>,
+    ) -> Option<Vec<(String, String)>> {
+        let key = cls.as_ptr() as usize;
+        self.class_metadata
+            .borrow()
+            .get(&key)
+            .and_then(|meta| meta.construction_schema.as_ref())
+            .map(|schema| schema.rename_props.clone())
     }
 
     /// PyO3 boundary crossings during freeze since the last reset.

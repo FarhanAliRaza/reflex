@@ -235,6 +235,59 @@ def _field_values_equal(a: Any, b: Any) -> bool:
     return a == b
 
 
+@dataclasses.dataclass(frozen=True)
+class ConstructionSchema:
+    """Static kwarg-classification table for one Component class.
+
+    Mirrors ``_post_init``'s per-kwarg handling so the arena construction
+    path can classify kwargs in Rust without invoking the Python
+    constructor. Built once per class by ``Component._construction_schema``
+    from the same sources ``_post_init`` reads (``get_event_triggers``,
+    ``get_props``, ``get_fields``, ``_rename_props``).
+    """
+
+    # Prop name -> whether the field is Var-typed (LiteralVar-wrapped at
+    # construction). Excludes names that are also event triggers, which
+    # take precedence in ``_post_init``.
+    props: Mapping[str, bool]
+    # Event trigger names (DEFAULT_TRIGGERS plus EventHandler fields).
+    triggers: frozenset[str]
+    # Field names that are neither props nor triggers (children, style,
+    # custom_attrs, ...) — set verbatim, never folded into style.
+    base_fields: frozenset[str]
+    # Render-time prop renames (old -> new), carried for the seal phase.
+    rename_props: Mapping[str, str]
+
+    def classify(self, name: str) -> str:
+        """Classify a construction kwarg exactly as ``_post_init`` would.
+
+        Args:
+            name: The kwarg name.
+
+        Returns:
+            One of ``"event_trigger"`` (bound to an EventChain),
+            ``"prop_var"`` (Var-typed prop, LiteralVar-wrapped),
+            ``"prop"`` (non-Var prop, stored raw), ``"field"`` (non-prop
+            field, stored raw), ``"invalid"`` (unknown ``on_*`` name —
+            ``_post_init`` raises ValueError), ``"special_attr"``
+            (data-*/aria-* — kebab-cased into ``custom_attrs``), or
+            ``"style"`` (unknown name — merged into the style dict).
+        """
+        if name in self.triggers:
+            return "event_trigger"
+        if (is_var := self.props.get(name)) is not None:
+            return "prop_var" if is_var else "prop"
+        if name.startswith("on_"):
+            # _post_init raises before the field check, so an on_-prefixed
+            # non-prop field name is invalid too.
+            return "invalid"
+        if name in self.base_fields:
+            return "field"
+        if SpecialAttributes.is_special(name):
+            return "special_attr"
+        return "style"
+
+
 @dataclass_transform(kw_only_default=True, field_specifiers=(field,))
 class BaseComponentMeta(FieldBasedMeta, ABCMeta):
     """Meta class for BaseComponent."""
@@ -1196,6 +1249,35 @@ class Component(BaseComponent, ABC):
         result = DEFAULT_TRIGGERS | args_specs_from_fields(cls.get_fields())  # pyright: ignore [reportOperatorIssue]
         cls._event_triggers_cache = result
         return result
+
+    @classmethod
+    def _construction_schema(cls) -> ConstructionSchema:
+        """Build the construction-time kwarg classification table.
+
+        Cached on the class's own ``__dict__`` (not inherited) so each
+        subclass computes its own; the field set is fixed at class creation.
+
+        Returns:
+            The class's ``ConstructionSchema``.
+        """
+        cached = cls.__dict__.get("_construction_schema_cache")
+        if cached is not None:
+            return cached
+        fields = cls.get_fields()
+        triggers = frozenset(cls.get_event_triggers())
+        props = {
+            name: (field.type_origin is Var if (field := fields.get(name)) else False)
+            for name in cls.get_props()
+            if name not in triggers
+        }
+        schema = ConstructionSchema(
+            props=props,
+            triggers=triggers,
+            base_fields=frozenset(fields) - props.keys() - triggers,
+            rename_props=dict(cls._rename_props),
+        )
+        cls._construction_schema_cache = schema
+        return schema
 
     def __repr__(self) -> str:
         """Represent the component in React.

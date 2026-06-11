@@ -72,6 +72,67 @@ class CompilerSession:
         """
         return int(self._inner.cache_len())
 
+    # ---- Construction schemas (arena construction M1) -----------------------
+
+    def register_component_schema(self, component_cls: type) -> None:
+        """Register a Component class's construction schema with Rust.
+
+        Builds the per-class kwarg classification table via
+        ``Component._construction_schema()`` and stores it on the Rust
+        per-class metadata cache. Inert until M3's ``push_node`` consumes
+        it; safe to call repeatedly (idempotent overwrite).
+
+        Args:
+            component_cls: the ``Component`` subclass to register.
+        """
+        schema = component_cls._construction_schema()  # pyright: ignore [reportAttributeAccessIssue]
+        self._inner.register_class_schema(
+            component_cls,
+            list(schema.props.items()),
+            list(schema.triggers),
+            list(schema.base_fields),
+            list(schema.rename_props.items()),
+        )
+
+    def class_schema_registered(self, component_cls: type) -> bool:
+        """Whether a construction schema is registered for the class.
+
+        Args:
+            component_cls: the ``Component`` subclass to check.
+
+        Returns:
+            True if :meth:`register_component_schema` ran for the class.
+        """
+        return bool(self._inner.class_schema_registered(component_cls))
+
+    def class_schema_classify(self, component_cls: type, name: str) -> str | None:
+        """Classify a construction kwarg via the registered Rust schema.
+
+        Differential-test hook for the M1 gate: the result must match
+        ``component_cls._construction_schema().classify(name)`` exactly.
+
+        Args:
+            component_cls: the ``Component`` subclass whose schema to use.
+            name: the kwarg name to classify.
+
+        Returns:
+            The category string, or ``None`` if no schema is registered.
+        """
+        return self._inner.class_schema_classify(component_cls, name)
+
+    def class_schema_rename_props(
+        self, component_cls: type
+    ) -> list[tuple[str, str]] | None:
+        """The registered rename map for the class.
+
+        Args:
+            component_cls: the ``Component`` subclass whose schema to read.
+
+        Returns:
+            ``(old, new)`` pairs, or ``None`` if no schema is registered.
+        """
+        return self._inner.class_schema_rename_props(component_cls)
+
     # ---- Compile entry points ----------------------------------------------
 
     def compile_styles_root(self, stylesheets: list[str], out_path: str) -> None:

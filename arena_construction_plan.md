@@ -1,9 +1,10 @@
 # Arena-born components: construct into Rust, keep only user code in Python
 
-Status: **proven feasible** (P0 evidence below) — design fixed, phases P1-P6 not started.
-Predecessor: `rust_port_plan.md` (freeze pipeline, complete), two-wave plan
-(`~/.claude/plans/vivid-juggling-moonbeam.md`, superseded by this — that plan kept Python
-construction and probed it; this one removes Python construction).
+Status: **proven feasible** (P0 evidence below) — design fixed after a construction-path +
+builder-surface exploration (2026-06-11); milestones M1-M5 below are the executable plan.
+M1 landed 2026-06-11. Predecessor: `rust_port_plan.md` (freeze pipeline, complete), the
+probe-walk two-wave plan (superseded — it kept Python construction and probed it; this
+removes Python construction).
 
 ## 1. Why: the measured problem
 
@@ -77,70 +78,126 @@ construction is arena-born**; anything created at import time, at runtime
 (app-wrap factory outputs) stays a rich Python object. The cache keeps pickling rich
 wraps — unchanged.
 
-## 3. The design (fixed by the evidence)
+## 3. The design (fixed by the evidence + construction-path exploration)
 
-**The handle.** An arena-born component is a *real instance of its own class* with exactly
-three Python-side things: `_arena_idx`, a real `children` list of child handles, and a
-normal instance `__dict__`. Everything else — props, style, event values, custom_attrs,
-special_props, tag/alias/library overrides — lives in the Rust staging arena.
-`__getattr__` materializes from the arena on read (0.10 µs, override classes only);
-`__setattr__`/proxy containers write through. Because it IS its class: `isinstance`,
-method dispatch, instance-level method reassignment, and `id()`-stable dedup all work
-unmodified. Children stay a Python list because tree-rewriting passes mutate it and
-identity walks traverse it; a list per node is noise next to 46 µs of prop machinery.
+Three tensions from the audits got resolved by reading the construction path in detail
+(`_create` at component.py:1366, `_post_init` at 1019-1181, `ComponentField.__get__` at
+148-175, the builder reserve/fill pattern in snapshot/builder.rs):
 
-**The push.** `Component.create` → (children construct first, depth-first, as today) →
-ONE PyO3 call `push_node(class_id, child_idxs, raw_kwargs)`. Rust classifies each kwarg
-against the per-class schema (prop / event trigger / style key / custom attr, rename map
-applied), converts values (scalars, interned strings, container→JS literal, native
-RustVar→struct ref, event values→kept Py handles for the probe phase), validates types,
-and stores the node. The per-class schema is built once per class from one Python
-introspection (`get_fields` + `get_event_triggers` + `_rename_props`) — the
-`ClassMetadata` machinery already does exactly this pattern.
+**The handle — no `__getattr__` interception at all.** An arena-born component is a *real
+instance of its own class*. Its `__dict__` holds: `_arena_idx`, a real `children` list of
+child handles, and the **raw kwarg values mirrored in** (plain dict writes — the final
+setattr loop is 0.11s of 14.6s; the expensive parts of `_post_init` are LiteralVar
+wrapping + `satisfies_type_hint` validation + `EventChain.create` + Style normalization,
+and THOSE are what move to Rust). Unset fields resolve through today's class-attr
+defaults / `ComponentField` descriptors unchanged — correct because unset means default.
+Set fields read back as raw values, which only matters on override classes — and those
+stay rich (gated). `isinstance`, method dispatch, instance-level method swaps, and
+`id()`-stable dedup all work because it IS its class.
 
-**The seal.** The staging arena keeps child indices as per-node Vecs so post-construction
-mutation is cheap. At compile time a pure-Rust seal pass runs the override probes
-(per-class-gated, exactly today's skip-list machinery), folds style, assembles event
-chains (`assemble_chain_js`), and lays out the contiguous-children `Snapshot` the existing
-memoize+emit consume **unchanged**. The freeze survives only as the grafting path for
-rich subtrees (memo definitions, app-wraps, legacy-gated classes) — it walks them into
-the same arena, as it does today.
+**The push.** `Component._create` branches: when arena mode is active and the class is
+eligible, skip `_post_init` entirely — mirror raw kwargs, ONE PyO3 call
+`push_node(schema_id, raw_kwargs)`. Rust classifies each kwarg against the per-class
+schema (prop / event trigger / style key / special attr, rename map), converts values
+(scalars, interned strings, container→JS literal via the real `reflex_vars` literal code,
+native RustVar→struct ref + var_data, event values→kept Py handles), structurally
+validates, stores a staged node, returns its index. The schema is built once per class
+from one Python introspection (`get_props` + per-field `type_origin is Var` +
+`get_event_triggers` + `_rename_props`) and registered into `ClassMetadata` — the
+existing per-class-cache pattern.
 
-**The gate.** A construction-mode flag (context-local), flipped on by the Rust pipeline
-around page evaluation only. Off ⇒ rich objects (module import, runtime events, legacy
-`reflex run`, tests). Per-class opt-out list for pathological classes (DebounceInput).
-Global kill switch `REFLEX_ARENA_CONSTRUCT=0`.
+**Write-through is `__setattr__` only.** Normal `object.__setattr__` always; if
+`_arena_idx` exists and the name is a schema field, also update the staged node. This
+covers all 24 audited post-create mutation sites (RadixThemes `alias`, Form's submit
+hash, Upload `special_props`, style write-backs). Children need NO write-through — see
+the seal. No ProxyList/ProxyDict machinery.
 
-## 4. Phases (every phase ships with: oracle 27/27 byte-identical, corpus, docs app compile+run, unit suite)
+**The seal walks the Python children lists — staged nodes store no child links.** At
+compile time, one walk reads ONLY `__dict__["children"]` + `__dict__["_arena_idx"]` per
+handle (~0.3 µs/node): staged payloads are copied into `SnapshotBuilder` slots (the
+existing reserve/fill contiguous-range pattern; graft point = `freeze_children_for`,
+freeze.rs:677), and handles WITHOUT `_arena_idx` (rich subtrees: gated classes, memo
+definitions, app-wraps) are grafted via today's `freeze_into_slot`. Reading children from
+Python at seal time makes every list mutation (`append`, `insert`, wholesale replacement
+by compile passes) correct by construction — no sync protocol. The seal also runs
+override probes (today's skip-list machinery), folds style, builds event chains, and
+registers var_data; downstream (`memoize_arena_pass`, emitters, byte-oracle) consumes the
+identical `Snapshot` unchanged.
 
-- **P1 — Schema.** Extend `ClassMetadata` with the full construction schema (field names
-  + types + defaults, trigger names, rename map, style-key classification). Pure addition;
-  freeze keeps running. Build it lazily on first construction per class.
-  *Risk: low.*
-- **P2 — Staging arena + handle.** Real `push_node` (the prototype, productionized:
-  schema-driven, proper literal conversion via the existing `reflex_vars` literal code,
-  not the bench's stand-in). `Component.__new__` fast path behind the mode flag +
-  per-class gate; `__getattr__`/`__setattr__` routing; ProxyDict/ProxyList for
-  `custom_attrs`/`style`/`special_props` writes. Freeze learns to consume arena-born
-  nodes by index instead of re-reading them (hybrid trees work). The 24 write-through
-  sites from the audit are the test matrix.
-  *Risk: HIGH — this is the compatibility cliff; land behind default-off flag.*
-- **P3 — Style fold at construction.** Port `_add_style_recursive` semantics into the
-  seal (per-node `_add_style` probes for override classes, App-style per-class entries,
-  instance style last-wins, VarData merge order). Deletes the last Python tree pass in
-  the Rust pipeline. The old plan's P1 differential suite applies as-is.
-  *Risk: high (byte-visible CSS).*
-- **P4 — Events at the seal.** Trigger values stored at construction (already Py
-  handles); arg-spec parsing cached per (class, trigger); chains assembled in the seal
-  via `assemble_chain_js`. `rx.input`'s 112 µs/node pathology dies here.
-  *Risk: medium.*
-- **P5 — Freeze bypass.** Pure-arena trees seal directly to `Snapshot`; freeze runs only
-  for grafted rich subtrees. The ~7.5 s freeze slice goes to ~0 for arena trees.
-  *Risk: medium (the seal must reproduce freeze byte-semantics — the oracle is the gate).*
-- **P6 — Default-on + cutover.** Flip the flag default under the Rust pipeline, audit-mark
-  remaining opt-out classes, delete dead freeze paths for base classes, strip the bench
-  scaffolding.
-  *Risk: low.*
+**The gate.** A contextvar holding the active staging session, set by the Rust pipeline
+around page evaluation only. Off ⇒ rich objects everywhere (module import, runtime
+`ComponentState`, legacy `reflex run`, tests). Per-class eligibility: `_post_init` is
+base AND `_render` is base AND not denylisted (DebounceInput's method-swap create);
+override-bearing classes (~40, <3% of nodes) stay rich so their probes read real objects.
+Env kill switch `REFLEX_ARENA_CONSTRUCT=0`.
+
+**Validation note.** The arena path replaces `satisfies_type_hint` with structural type
+checks in Rust. Output bytes are unaffected (validation only raises); the rich path keeps
+full validation. Documented behavior difference behind the flag.
+
+## 4. Milestones (each ships green: oracle 27/27 byte-identical, corpus, docs compile+run, unit suites)
+
+- **M1 — Per-class construction schema. DONE (2026-06-11).** Python `ConstructionSchema`
+  builder mirroring `_post_init`'s classification (component.py:1031-1148);
+  `register_class_schema` PyO3 entry; stored on `ClassMetadata` (pyo3_reader.rs). Inert —
+  nothing consumes it yet. Gate shipped: differential sweep of schema vs a literal
+  `_post_init` transcription across all loaded Component classes (>200: core/radix/
+  lucide/markdown/sonner/code; enterprise covered by the docs-app compile smoke),
+  behavioral spot checks driving `create()` per category, Rust round-trip classify
+  equality, cargo classify tests
+  (`tests/units/reflex_base/components/test_construction_schema.py`,
+  `tests/units/compiler/test_construction_schema.py`). Oracle 27/27; docs app 427/427
+  compiles. *Risk: low.*
+- **M2 — Style fold at the seal, on RICH objects first.** `compile_unevaluated_page`
+  gains `apply_style: bool = True`; rust_pipeline passes False; the freeze replicates
+  `_add_style_recursive` (component.py:1448) per node (add_style MRO probes for override
+  classes via the existing `class_bool_flag` gate, App.style per-class entry, instance
+  style last-wins, VarData merge order), reusing `emotion_from_style` (freeze.rs:2541).
+  Ordering rationale: this lands BEFORE arena construction so arena nodes never need
+  `.style` Python reads. Kill switch `REFLEX_STYLE_FOLD=0`. Gate: oracle style cases +
+  NEW differential suite vs `_add_style_recursive` (accordion/app-style/style-Var/
+  Breakpoints/pseudo) + byte-diff of all 427 docs pages. *Risk: high (byte-visible CSS).*
+- **M3 — Arena construction + seal (the cliff; default-off flag).** Productionize
+  `push_node` from the bench prototype; `_create` fast path + raw-kwarg mirroring;
+  `__setattr__` write-through; plain-str child fast path (push Bare text node directly,
+  skipping `LiteralVar.create` + `_unsafe_create` — text children are the most numerous
+  nodes). Seal: children walk + staged copy + rich graft, hybrid in BOTH directions.
+  Events at the seal call `EventChain.create` + existing rendering per trigger (same cost
+  as today, just moved). Gate: everything byte-identical with flag ON; the 24-site
+  mutation matrix as regression tests. *Risk: HIGH — the compatibility cliff.*
+- **M4 — Event optimization.** Cache parsed arg-specs per (class, trigger); assemble
+  chains via `assemble_chain_js` without per-trigger `LiteralVar.create`. Kills
+  `rx.input`'s 112 µs/node pathology end-to-end. *Risk: medium.*
+- **M5 — Default-on + measure + cleanup.** Flip the flag default under the Rust pipeline;
+  denylist audit; re-profile docs (target ~4s); strip `bench_push_node` scaffolding;
+  update this doc + STATUS_TODO with measured numbers. *Risk: low.*
+
+## 4b. Critical files
+
+- `packages/reflex-base/src/reflex_base/components/component.py` — `_create`/`_post_init`
+  fast path, `__setattr__`, schema builder (construction semantics source of truth)
+- `packages/reflex-compiler-rust/crates/reflex_py/src/session.rs` — `push_node`, staging
+  arena, seal entry (the `bench_push_node` prototype is the seed)
+- `packages/reflex-compiler-rust/crates/reflex_pyread/src/freeze.rs` — style fold (M2),
+  graft branch + seal walk (M3)
+- `packages/reflex-compiler-rust/crates/reflex_pyread/src/pyo3_reader.rs` —
+  `ClassMetadata` schema storage
+- `packages/reflex-compiler-rust/crates/reflex_ir/src/snapshot/{builder,node,tables}.rs` —
+  StagedNode→NodeSnapshot copy
+- `reflex/compiler/rust_pipeline.py` + `reflex/compiler/compiler.py:907` — mode
+  contextvar, `apply_style` kwarg
+- `packages/reflex-compiler-rust/crates/reflex_vars/src/py.rs` — literal conversion +
+  `assemble_chain_js` reuse
+
+## 4c. Verification (every milestone)
+
+`uv run maturin develop --release` (from packages/reflex-compiler-rust) →
+`uv run python scripts/parity_oracle.py check` →
+`uv run pytest tests/units/compiler tests/units/vars tests/codegen_corpus tests/units/components -q`
+(known-6 failures only) → docs app: in-process compile of all 427 pages byte-diffed
+against flag-off output, then `CI=1 uv run reflex run-rust` smoke → per-milestone
+differential suites named above → freeze/seal timers re-measured. Known pre-existing
+failures (STATUS_TODO): the 6 compiler ones + full-suite DynamicState pollution.
 
 ## 5. Projection (docs app, single-threaded, warm cache)
 

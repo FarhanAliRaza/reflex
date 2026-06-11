@@ -383,6 +383,37 @@ warm cache, 288 uncacheable):
   design fixed; `bench_push_node` prototype lives in reflex_py
   session.rs). Measured: only ~16% of evaluate is truly user code.
 
+## DONE — arena construction M1: per-class construction schema (2026-06-11)
+
+Inert foundation for `push_node` (plan M3). `ConstructionSchema` on
+component.py mirrors `_post_init`'s kwarg classification (trigger >
+prop[is_var] > invalid-on_* > field > special-attr > style), built once
+per class from `get_props` + per-field `type_origin is Var` +
+`get_event_triggers` + merged `_rename_props`, cached on the class
+`__dict__` (the `_event_triggers_cache` pattern).
+`CompilerSession.register_class_schema` stores the table on
+`ClassMetadata.construction_schema`; `class_schema_classify`/
+`class_schema_rename_props` are the differential-test hooks. Nothing in
+the compile path consumes it yet.
+
+- Gate: schema vs literal `_post_init`-transcription sweep across ALL
+  loaded Component classes (>200; core/radix/lucide/markdown/sonner/
+  code) × full per-class name universe + synthetic edge names;
+  behavioral spot checks driving `create()` per category; Rust
+  round-trip classify equality; cargo classify tests. New files:
+  `tests/units/reflex_base/components/test_construction_schema.py`,
+  `tests/units/compiler/test_construction_schema.py`.
+- Oracle 27/27 byte-identical; unit suites green (same known 6);
+  pyright/ruff clean on touched files; docs app 427/427 pages compile
+  in-process (19.6s cold, matches baseline).
+- Env note (fresh containers): bootstrap order is `uv sync
+  --no-install-package reflex` → `uv pip install maturin
+  uv-dynamic-versioning editables` → `maturin develop --release` →
+  `uv sync --inexact --no-build-isolation-package reflex` (the reflex
+  hatch hook imports reflex_compiler_rust, so isolated builds fail).
+  Full `make_pyi` regen drifts 16 hashes on a CLEAN tree here
+  (environment drift, not committed).
+
 ## DONE — "fix all" round on the profile findings (2026-06-10)
 
 All four queued items above closed (see checkboxes for details). Docs
