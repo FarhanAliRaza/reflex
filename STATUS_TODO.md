@@ -414,6 +414,40 @@ the compile path consumes it yet.
   Full `make_pyi` regen drifts 16 hashes on a CLEAN tree here
   (environment drift, not committed).
 
+### M2 scoping notes (read before implementing the style fold)
+
+Construction-path facts established for M2, beyond the plan text:
+
+- `theme` is DEAD in `_add_style_recursive` — threaded through the
+  recursion, never used (the deprecated `_apply_theme` tail is gone).
+  The freeze fold needs only `app.style`.
+- **Fold scope is NOT the whole page tree.** `compile_unevaluated_page`
+  folds the user component BEFORE `Fragment.create(component)` +
+  `add_meta` wrap it — the outer Fragment and Title/Meta nodes are
+  never folded by legacy. A freeze fold over all nodes would diverge
+  whenever `App.style` targets Fragment/Meta classes. Exact scoping
+  needs a fold-root mark (e.g. set by `compile_unevaluated_page` when
+  `apply_style=False`) that activates folding for that subtree only.
+- **Fold propagates along `children`-list edges only.** Legacy recurses
+  `self.children`; prop-held components are never folded
+  (`ApplyStylePlugin.enter_component` skips `in_prop_tree`). The freeze
+  also pushes control-flow bodies and `_get_components_in_props` — the
+  fold must not fire on push paths that don't correspond to a Python
+  `children` entry (verify Match/Foreach/Cond body storage).
+- **The per-node fold gate already exists in Python** (component.py
+  fast path: style-is-dict AND no add_style MRO chain AND no App.style
+  entry for type/`cls.create`) — only ~2.2% of docs nodes fold. The
+  cheap M2 shape: replicate the GATE in Rust (class_bool_flag for the
+  add_style chain; per-class-per-freeze App.style entry probe), and
+  call one extracted Python helper (`_apply_style_fold`, the
+  non-recursive portion of `_add_style_recursive`, single-sourced) for
+  folding nodes only — byte parity by construction; the win is killing
+  the Python recursion frames over the other 97.8%.
+- Memo bodies (`prepare_memo_component_for_compile`) and the app-root
+  path (`compiler/utils.py:333`) apply the Python fold separately —
+  keep them; the freeze fold must not double-fold those trees (fold
+  only under the explicit fold-root mark).
+
 ## DONE — "fix all" round on the profile findings (2026-06-10)
 
 All four queued items above closed (see checkboxes for details). Docs
