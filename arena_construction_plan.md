@@ -258,6 +258,50 @@ full validation. Documented behavior difference behind the flag.
   the 88% fast rate. The "~4 s target" assumed the staged seal zeroed the freeze; that
   path is superseded (M3 note) and the freeze remains ~9 ms/page from prior waves.
 
+## 4a. Post-completion extension (owner-directed, 2026-06-11): immutable components + native var-harvest consumption
+
+Owner decision: stage construction data toward Rust ("method 1") and make components
+immutable. Profiling after M5 showed the dominant remaining Python/isinstance slice is
+the FREEZE calling `_get_vars` per node (hooks/imports VarData harvest): ~991k calls,
+6.5 s cum profiled, 1.09 M isinstance, 139 k LiteralVar creates, ~0.96 M abc checks.
+Key reframing: post Var-cutover, every var's `VarData` already lives in Rust memory —
+"sending the data to Rust" reduces to priming the existing `_vars_cache` tuple (the var
+HANDLES) at construction and letting the freeze read it natively from the instance
+dict. No arena, no generations: the tuple is owned by the component; immutability
+(enforced as invalidate-on-write) makes it authoritative.
+
+- **Phase I — DONE (2026-06-11).** `Component.__setattr__` invalidation bridge: a write
+  to any harvest-relevant field (props ∪ {style, special_props, event_triggers,
+  class_name, id, key, custom_attrs}; per-class cached set) drops a staged
+  `_vars_cache`; non-harvest writes (RadixThemes `alias` patch, DebounceInput method
+  swaps, Form's submit handle) keep it. In-place container mutation inside `add_style`
+  overrides is covered by the style fold calling `_clear_compile_caches` (which already
+  pops `_vars_cache`). The mirror fast path primes `_vars_cache` at construction by
+  running `_get_vars` (exact parity by construction — it IS the harvest code). Also:
+  `create()`'s `_validate_children` is now skipped under the arena scope (raises only;
+  321 k isinstance/compile). Gates: 24-fixture parity suite, fork-pair docs diff
+  427/427 byte-identical, oracle 27/27, suites green.
+- **Phase II — NEXT: freeze consumes `_vars_cache` natively.** In freeze.rs, the two
+  `_get_vars` consumers are `read_hooks_internal` (freeze.rs:1843 →
+  `_get_hooks_internal` → `_get_vars_hooks`, component.py:2372) and
+  `build_imports_dict`'s var-imports step (`_get_imports`'s `var_imports`,
+  component.py:2287). Branch: probe the instance dict for `_vars_cache` (same
+  `instance_dict` helper as read_field); when present AND the class's
+  `_get_vars`/`_get_vars_hooks`/`_get_hooks_internal` are base implementations
+  (forms.py:266 overrides `_get_vars`!) AND every cached var passes the `native_var`
+  gate AND its `var_data.components` is empty → iterate the tuple natively, fold
+  `var_data.hooks` (dict vs set semantics per component.py:2381) and `var_data.imports`
+  in Rust, skip the Python calls. Anything else → existing Python path (which
+  re-primes the cache). Expected: the 6.5 s cum slice and the isinstance/abc storm
+  collapse to native struct reads.
+- **Phase III — owner follow-up: full immutability enforcement.** Deprecate (then
+  refuse) post-create writes to harvest fields; migrate the remaining internal
+  mutators (Upload's `special_props` assignment → construct-final; radix Progress's
+  in-place `custom_attrs` update inside `add_style`; the style fold's `self.style`
+  assignment is framework-internal at seal time and either stays exempt or moves
+  fully into the freeze). Breaking-change policy (console.deprecate + fallback)
+  applies.
+
 ## 4b. Critical files
 
 - `packages/reflex-base/src/reflex_base/components/component.py` — `_create`/`_post_init`

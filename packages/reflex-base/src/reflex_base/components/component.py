@@ -1461,8 +1461,11 @@ class Component(BaseComponent, ABC):
         # Filter out None props
         props = {key: value for key, value in props.items() if value is not None}
 
-        # Validate all the children.
-        cls._validate_children(children)
+        # Validate all the children. Skipped under the arena scope like the
+        # rest of construction validation (raises only; ~321k isinstance
+        # calls per docs compile).
+        if not _ARENA_CONSTRUCTION.get():
+            cls._validate_children(children)
 
         children_normalized = [
             (
@@ -1478,6 +1481,53 @@ class Component(BaseComponent, ABC):
         ]
 
         return cls._create(children_normalized, **props)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Set an attribute, dropping construction-staged state.
+
+        Components are immutable by contract once created: the arena fast
+        path stages the component's var harvest (``_vars_cache``) at
+        construction, and downstream consumers treat it as authoritative.
+        The framework's own post-create writes flow through here; a write
+        to any field the harvest reads invalidates it so the next read
+        recomputes from live fields. Writes to non-harvest fields (e.g.
+        the RadixThemes ``alias`` patch, DebounceInput's method swaps)
+        keep the staged harvest. In-place container mutation inside
+        ``add_style`` overrides is covered separately: the style fold
+        calls ``_clear_compile_caches`` after running them.
+
+        Args:
+            name: The attribute name.
+            value: The attribute value.
+        """
+        object.__setattr__(self, name, value)
+        if (
+            "_vars_cache" in self.__dict__
+            and name in type(self)._arena_harvest_fields()
+        ):
+            del self.__dict__["_vars_cache"]
+
+    @classmethod
+    def _arena_harvest_fields(cls) -> frozenset[str]:
+        """The field names the ``_get_vars`` harvest reads.
+
+        Returns:
+            Props plus the common identity/style/event fields — a write to
+            any of these invalidates a staged ``_vars_cache``.
+        """
+        cached = cls.__dict__.get("_arena_harvest_fields_cache")
+        if cached is None:
+            cached = frozenset(cls._construction_schema().props) | {
+                "style",
+                "special_props",
+                "event_triggers",
+                "class_name",
+                "id",
+                "key",
+                "custom_attrs",
+            }
+            cls._arena_harvest_fields_cache = cached
+        return cached
 
     @classmethod
     def _arena_create_eligible(cls) -> bool:
@@ -1631,6 +1681,15 @@ class Component(BaseComponent, ABC):
             mirror = cls._arena_mirror_kwargs(props)
             if mirror is not None:
                 comp.__dict__.update(mirror)
+                # Stage the var harvest at construction (the data the
+                # freeze consumes for hooks/imports — VarData already
+                # lives Rust-side post Var-cutover, so the cache tuple is
+                # the staged index into it). `_get_vars` fills
+                # `_vars_cache` itself; `__setattr__` drops it on any
+                # post-create write, keeping the immutability contract
+                # safe for the audited create()-override mutators.
+                for _ in comp._get_vars():
+                    pass
                 return comp
         comp._post_init(children=list(children), **props)
         return comp

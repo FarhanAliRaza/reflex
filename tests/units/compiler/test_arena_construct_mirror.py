@@ -328,6 +328,43 @@ def test_validation_skipped_under_arena():
     assert comp is not None
 
 
+def test_construction_stages_vars_cache():
+    with arena_construction():
+        comp = rx.input(value=_STATE_VAR)
+    staged = comp.__dict__.get("_vars_cache")
+    assert staged is not None
+    # rx.input's create() wraps the value in a null-guard ternary, so the
+    # staged var's expression embeds the state var.
+    assert any(_STATE_VAR._js_expr in v._js_expr for v in staged)
+    # css-shorthand vars ride the synthetic style var.
+    with arena_construction():
+        styled = rx.text("hi", color=_STATE_VAR)
+    assert any(v._js_expr == "style" for v in styled.__dict__["_vars_cache"])
+
+
+def test_non_harvest_writes_keep_staged_vars():
+    with arena_construction():
+        comp = rx.input(value=_STATE_VAR)  # radix create() patches alias
+    assert "_vars_cache" in comp.__dict__
+    comp.alias = "Renamed"
+    assert "_vars_cache" in comp.__dict__
+
+
+def test_setattr_invalidates_staged_vars():
+    with arena_construction():
+        comp = rx.input(value=_STATE_VAR)
+    assert "_vars_cache" in comp.__dict__
+    # The audited mutation shape (Upload-style field assignment) must drop
+    # the staged harvest; the next read recomputes from live fields.
+    other = Var("otherVar", _var_data=VarData()).to(str)
+    comp.special_props = [other]
+    assert "_vars_cache" not in comp.__dict__
+    recomputed = list(comp._get_vars())
+    assert any(v._js_expr == "otherVar" for v in recomputed)
+    # And the recompute re-primes the cache.
+    assert "_vars_cache" in comp.__dict__
+
+
 def test_scope_is_context_local():
     from reflex_base.components.component import _ARENA_CONSTRUCTION
 
