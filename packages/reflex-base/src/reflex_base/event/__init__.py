@@ -1969,6 +1969,76 @@ def parse_args_spec(arg_spec: ArgsSpec | Sequence[ArgsSpec]):
     ), annotations
 
 
+# M4 arena event fast path: `parse_args_spec` output cached per spec object.
+# Keyed by id() with the spec referenced from the value, so the id stays
+# claimed for the cache's lifetime (specs are class-level constants — the
+# cache is small and append-only by design).
+_PARSED_ARGS_SPEC_CACHE: dict[int, tuple[Any, tuple[Var, ...], list]] = {}
+
+
+def _parse_args_spec_cached(
+    arg_spec: ArgsSpec | Sequence[ArgsSpec],
+) -> tuple[Var, ...]:
+    """Cached `parse_args_spec` for the arena construction fast path.
+
+    The placeholder arg Vars are pure functions of the spec object
+    (signature + annotations), immutable, and carry no VarData — sharing
+    them across chains is safe.
+
+    Args:
+        arg_spec: The spec of the args.
+
+    Returns:
+        The parsed placeholder arg Vars.
+    """
+    cache_key = id(arg_spec)
+    hit = _PARSED_ARGS_SPEC_CACHE.get(cache_key)
+    if hit is not None and hit[0] is arg_spec:
+        return hit[1]
+    args, annotations = parse_args_spec(arg_spec)
+    args_tuple = tuple(args)
+    _PARSED_ARGS_SPEC_CACHE[cache_key] = (arg_spec, args_tuple, annotations)
+    return args_tuple
+
+
+def create_event_chain_fast(
+    value: "EventType",
+    args_spec: ArgsSpec | Sequence[ArgsSpec],
+    key: str | None = None,
+) -> "EventChain | Var":
+    """Arena construction fast path for :meth:`EventChain.create`.
+
+    For the dominant shapes — an `EventHandler`/`EventSpec` or a list of
+    them — this skips the spec-vs-callback validation
+    (`check_fn_match_arg_spec`, `_check_event_args_subclass_of_callback`,
+    the `get_type_hints` walks) and reuses the cached parsed spec args,
+    producing the identical `EventChain`. Every other input shape (Vars,
+    prebuilt chains, lambdas) delegates to `EventChain.create` unchanged.
+    The skipped validation only raises/warns — the documented behavior
+    difference behind the arena flag.
+
+    Args:
+        value: The value to create the event chain from.
+        args_spec: The args_spec of the event trigger being bound.
+        key: The key of the event trigger being bound.
+
+    Returns:
+        The event chain.
+    """
+    if isinstance(value, (EventHandler, EventSpec)):
+        value = [value]
+    if isinstance(value, list) and all(
+        isinstance(v, (EventHandler, EventSpec)) for v in value
+    ):
+        spec_args = _parse_args_spec_cached(args_spec)
+        events = []
+        for v in value:
+            spec = v.add_args(*spec_args) if isinstance(v, EventSpec) else v(*spec_args)
+            events.append(spec.with_args(get_handler_args(spec)))
+        return EventChain(events=events, args_spec=args_spec)
+    return EventChain.create(value=value, args_spec=args_spec, key=key)
+
+
 def args_specs_from_fields(
     fields_dict: Mapping[str, BaseField],
 ) -> dict[str, ArgsSpec | Sequence[ArgsSpec]]:
@@ -2152,7 +2222,11 @@ def call_event_fn(
             e = _dispatch_mixed_event_var(e)
 
         # Make sure the event spec is valid.
-        if not (isinstance(e, EventSpec) or var_isinstance(e, FunctionVar) or var_isinstance(e, EventVar)):
+        if not (
+            isinstance(e, EventSpec)
+            or var_isinstance(e, FunctionVar)
+            or var_isinstance(e, EventVar)
+        ):
             hint = ""
             if isinstance(e, VarOperationCall):
                 hint = " Hint: use `fn.partial(...)` instead of calling the FunctionVar directly."
@@ -2807,6 +2881,8 @@ class EventNamespace:
     check_fn_match_arg_spec = staticmethod(check_fn_match_arg_spec)
     resolve_annotation = staticmethod(resolve_annotation)
     parse_args_spec = staticmethod(parse_args_spec)
+    _parse_args_spec_cached = staticmethod(_parse_args_spec_cached)
+    create_event_chain_fast = staticmethod(create_event_chain_fast)
     args_specs_from_fields = staticmethod(args_specs_from_fields)
     unwrap_var_annotation = staticmethod(unwrap_var_annotation)
 

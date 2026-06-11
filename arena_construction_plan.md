@@ -1,10 +1,14 @@
 # Arena-born components: construct into Rust, keep only user code in Python
 
-Status: **proven feasible** (P0 evidence below) — design fixed after a construction-path +
-builder-surface exploration (2026-06-11); milestones M1-M5 below are the executable plan.
-M1 landed 2026-06-11. Predecessor: `rust_port_plan.md` (freeze pipeline, complete), the
-probe-walk two-wave plan (superseded — it kept Python construction and probed it; this
-removes Python construction).
+Status: **COMPLETE (2026-06-11)** — all milestones landed (M1, M2, M3 phases 1+2a, M4,
+M5 default-on), each byte-gated (oracle 27/27, fork-pair docs diff 427/427). One design
+element — M3's staged-node seal (`push_node` + Rust-side prop storage) — was formally
+SUPERSEDED by phase-2a measurement: the mirror fast path captures the construction win
+without it, and the staged seal's remaining value (~100-200 ns/prop on the freeze's
+13% props slice) no longer justifies its bulk and byte-risk (details in M3 below).
+Predecessor: `rust_port_plan.md` (freeze pipeline, complete), the probe-walk two-wave
+plan (superseded — it kept Python construction and probed it; this removes Python
+construction).
 
 ## 1. Why: the measured problem
 
@@ -218,19 +222,41 @@ full validation. Documented behavior difference behind the flag.
     `var_operation` wrapper), shared by both paths and untouched by construction work.
     `rx.button(on_click=…)`'s 157 µs is dominated by `EventChain.create` itself —
     exactly M4's target (cache parsed arg-specs per (class, trigger)).
-  - **Phase 2b (next): `push_node` + staged nodes + the seal.** Mirror stays as the
-    Python-side handle state; push converts kwargs to owned Rust data so the seal can
-    fill snapshot slots without per-node Python reads. Note from phase-2a: since
-    mirrors are complete storage, staged data can be a pure optimization layer with
-    INVALIDATION (drop `_arena_idx` on doubt) instead of write-through sync — and
-    staging only js-prop values means the audited mutation surface (alias/style/
-    children/custom_attrs — never js props) cannot desync it.
-- **M4 — Event optimization.** Cache parsed arg-specs per (class, trigger); assemble
-  chains via `assemble_chain_js` without per-trigger `LiteralVar.create`. Kills
-  `rx.input`'s 112 µs/node pathology end-to-end. *Risk: medium.*
-- **M5 — Default-on + measure + cleanup.** Flip the flag default under the Rust pipeline;
-  denylist audit; re-profile docs (target ~4s); strip `bench_push_node` scaffolding;
-  update this doc + STATUS_TODO with measured numbers. *Risk: low.*
+  - ~~Phase 2b: `push_node` + staged nodes + the seal.~~ **SUPERSEDED by phase-2a
+    measurement (2026-06-11).** The staged seal's value was predicated on replacing
+    per-node Python reads — but the freeze's prop reads were already reduced to
+    `read_field` dict probes + native-var struct reads (tasks B and #10), so staging
+    props in Rust saves only ~100-200 ns/prop on the props slice (13% of an ~9 ms
+    freeze), against substantial implementation bulk, the write-through/invalidation
+    protocol, and byte-risk. Should it ever be revisited: mirrors are complete
+    storage, so staged data can be a pure optimization layer with INVALIDATION (drop
+    `_arena_idx` on doubt) instead of write-through sync — and staging only js-prop
+    values means the audited mutation surface (alias/style/children/custom_attrs —
+    never js props) cannot desync it.
+- **M4 — Event optimization. DONE (2026-06-11).** `create_event_chain_fast`
+  (event/__init__.py): for `EventHandler`/`EventSpec` values, reuses
+  `_parse_args_spec_cached` (parsed placeholder-arg Vars cached per spec object —
+  id-keyed with the spec referenced, so ids stay claimed; specs are class-level
+  constants) and skips the spec-vs-callback validation (`check_fn_match_arg_spec`,
+  `_check_event_args_subclass_of_callback`, `get_type_hints` walks — raise/warn only);
+  all other shapes delegate to `EventChain.create` unchanged. Used only by the arena
+  mirror; runtime `EventChain.create` untouched. Measured: chain build 10.7 → 4.5 µs
+  (2.4×); `rx.button(on_click=<stable handler>)` 42.3 → 19.6 µs (2.2×). Note: the
+  plan's "rx.input 112 µs" was mis-attributed — see the phase-2a finding; chain
+  assembly was already Rust (`assemble_chain_js`), so the remaining win was exactly
+  parse-caching + validation skip. Gate: fork-pair docs diff 427/427 byte-identical
+  (shared cached arg Vars shift no bytes); parity suite 21 fixtures; oracle 27/27.
+- **M5 — Default-on + measure + cleanup. DONE (2026-06-11).** `REFLEX_ARENA_CONSTRUCT`
+  is now kill-switch semantics (default ON under the Rust pipeline; `=0` restores
+  `_post_init` everywhere). Denylist audit: none needed — memo classes self-exclude
+  via the `_post_init`-is-base check, and the fork-pair 427/427 gate ran with zero
+  denylist entries. `bench_push_node` scaffolding stripped from session.rs. Measured
+  reality vs the §5 projection: docs cache-off wall time is ~35-41 s and EVALUATION-
+  dominated (docgen markdown + demo exec); construction savings (~83k in-scope nodes
+  × ~10-20 µs ≈ 1-1.5 s) are real but inside this container's ±7 s run variance — the
+  reliable numbers are the per-call factors (text 1.9×, style 1.3×, events 2.2×) and
+  the 88% fast rate. The "~4 s target" assumed the staged seal zeroed the freeze; that
+  path is superseded (M3 note) and the freeze remains ~9 ms/page from prior waves.
 
 ## 4b. Critical files
 
@@ -259,19 +285,22 @@ against flag-off output, then `CI=1 uv run reflex run-rust` smoke → per-milest
 differential suites named above → freeze/seal timers re-measured. Known pre-existing
 failures (STATUS_TODO): the 6 compiler ones + full-suite DynamicState pollution.
 
-## 5. Projection (docs app, single-threaded, warm cache)
+## 5. Projection vs measured outcome (docs app)
 
-| | today | after P6 |
-|---|---|---|
-| user code (docgen/markdown/demos) | ~2 s | ~2 s |
-| component construction | ~7 s | ~0.2 s |
-| freeze re-read | ~7.5 s¹ | ~0 |
-| override probes + events | (inside above) | ~0.5 s |
-| Rust memoize+emit + writes | <0.5 s | <0.5 s |
+Original projection (P0): ~16 s → ~4 s, assuming construction ~7 s and the staged seal
+zeroing the ~7.5 s freeze re-read. Measured outcome (2026-06-11, after M5):
 
-¹ uncacheable pages only, on warm runs. End-to-end: **~16 s → ~4 s** without pools or
-cache dependence; a normal-sized app's compile becomes near-free. Numbers are projections
-from the P0 bench; each phase re-measures.
+- Per-construction: `_post_init` skipped for **88%** of in-scope docs constructions;
+  per-call factors (full `create()`, incl. children normalization — not the bare-push
+  P0 bench): text 1.9×, style-box 1.3×, input 1.3×, events 2.2×.
+- The P0 construction-share estimate conflated `create()`-override work (e.g.
+  rx.input's ternary Var, ~78 of its "112 µs") with constructor overhead; the
+  removable slice was smaller than projected.
+- Docs cache-off wall time ~35-41 s, dominated by docgen evaluation (irreducible user
+  code) — construction savings (~1-1.5 s) are real but inside the measurement
+  container's run variance. The freeze stays ~9 ms/page (prior waves' result); the
+  staged-seal path that would have attacked it further is superseded by measurement
+  (M3 note).
 
 ## 6. Kill criteria
 

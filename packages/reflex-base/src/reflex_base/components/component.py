@@ -33,6 +33,7 @@ from reflex_base.event import (
     EventChain,
     EventSpec,
     args_specs_from_fields,
+    create_event_chain_fast,
     no_args_event_spec,
     pointer_event_spec,
 )
@@ -1565,7 +1566,7 @@ class Component(BaseComponent, ABC):
             elif key in triggers:
                 if events is None:
                     events = {}
-                events[key] = EventChain.create(
+                events[key] = create_event_chain_fast(
                     value=value,
                     args_spec=cls.get_event_triggers()[key],
                     key=key,

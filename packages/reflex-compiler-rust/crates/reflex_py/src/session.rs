@@ -10,7 +10,7 @@
 //! `content_hash` ferried over the wire is recorded but unused.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyFloat, PyList, PyString, PyTuple};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use reflex_codegen::harvest::{collect_custom_code, collect_dynamic_imports};
 use reflex_codegen::hooks_emit::{render_hooks_rx_memo, render_hooks_unfiltered};
@@ -21,8 +21,7 @@ use reflex_codegen::{
     memoize_arena_pass, CodeBuffer,
 };
 use reflex_db::CompilerDb;
-use reflex_intern::{intern, resolve_unchecked, Symbol};
-use reflex_vars::RustVar;
+use reflex_intern::resolve_unchecked;
 use reflex_pyread::{
     collect_all_imports as pyread_collect_all_imports,
     collect_all_imports_into as pyread_collect_all_imports_into, freeze_component,
@@ -59,98 +58,6 @@ pub struct CompilerSession {
     /// suppress.
     direct_get_props_calls: std::rc::Rc<std::cell::Cell<u64>>,
     direct_rename_props_reads: std::rc::Rc<std::cell::Cell<u64>>,
-    /// Prototype scaffolding for the arena-construction benchmark
-    /// (`bench_push_node`) — NOT part of the compile pipeline. Holds
-    /// the nodes pushed by the benchmark and the per-class schemas
-    /// that simulate the construction-time classification table.
-    bench_arena: std::cell::RefCell<Vec<BenchNode>>,
-    bench_schemas: std::cell::RefCell<std::collections::HashMap<String, BenchSchema>>,
-}
-
-/// Benchmark-only per-class schema: which prop names are event
-/// triggers. The real design derives this once per class from
-/// `get_fields()` + `get_event_triggers()`; the benchmark seeds a
-/// representative trigger set on first touch of each class.
-struct BenchSchema {
-    events: std::collections::HashSet<String>,
-}
-
-/// Benchmark-only converted prop value — the owned Rust data a real
-/// `push_node` would store per prop.
-enum BenchValue {
-    Str(Symbol),
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    /// JS literal rendered from a list/dict prop (the work
-    /// `LiteralVar.create` does today for plain containers).
-    Json(String),
-    /// Native Var prop — JS expression read directly off the struct.
-    Var(Symbol),
-    /// Event trigger value — kept as a Python handle for the probe
-    /// phase (chain assembly happens at emit, already in Rust).
-    Event(Py<PyAny>),
-    None_,
-}
-
-#[allow(dead_code)] // tag/children stored to size the node realistically; only props read back
-struct BenchNode {
-    tag: Symbol,
-    props: Vec<(Symbol, BenchValue)>,
-    children: Vec<u32>,
-}
-
-/// Render a plain Python container as a JS literal string —
-/// benchmark stand-in for the literal conversion `LiteralVar.create`
-/// performs on list/dict props today.
-fn bench_write_js_literal(v: &Bound<'_, PyAny>, out: &mut String) -> PyResult<()> {
-    use std::fmt::Write;
-    if v.is_none() {
-        out.push_str("null");
-    } else if let Ok(b) = v.downcast::<PyBool>() {
-        out.push_str(if b.is_true() { "true" } else { "false" });
-    } else if let Ok(s) = v.downcast::<PyString>() {
-        out.push('"');
-        for c in s.to_str()?.chars() {
-            match c {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                _ => out.push(c),
-            }
-        }
-        out.push('"');
-    } else if let Ok(rv) = v.downcast::<RustVar>() {
-        out.push_str(rv.get().js_expr_str());
-    } else if let Ok(list) = v.downcast::<PyList>() {
-        out.push('[');
-        for (i, item) in list.iter().enumerate() {
-            if i > 0 {
-                out.push_str(", ");
-            }
-            bench_write_js_literal(&item, out)?;
-        }
-        out.push(']');
-    } else if let Ok(d) = v.downcast::<PyDict>() {
-        out.push_str("({ ");
-        let mut first = true;
-        for (k, val) in d.iter() {
-            if !first {
-                out.push_str(", ");
-            }
-            first = false;
-            let _ = write!(out, "[{:?}] : ", k.str()?.to_string_lossy());
-            bench_write_js_literal(&val, out)?;
-        }
-        out.push_str(" })");
-    } else if let Ok(i) = v.extract::<i64>() {
-        let _ = write!(out, "{i}");
-    } else if let Ok(f) = v.extract::<f64>() {
-        let _ = write!(out, "{f}");
-    } else {
-        out.push_str(&v.str()?.to_string_lossy());
-    }
-    Ok(())
 }
 
 impl CompilerSession {
@@ -242,87 +149,6 @@ impl CompilerSession {
         Ok((page_js, memo_bodies, imports_dict, app_wraps_dict))
     }
 
-    /// PROTOTYPE — arena-construction benchmark, not a compiler entry
-    /// point. One PyO3 call per component: classify `props` against
-    /// the (cached) per-class schema, convert each value to owned Rust
-    /// data, push a node, return its index. Measures the per-node cost
-    /// the proposed construct-into-arena design would pay in place of
-    /// Python `Component.__init__`.
-    fn bench_push_node_impl(
-        &self,
-        tag: &str,
-        props: &Bound<'_, PyDict>,
-        children: Option<Vec<u32>>,
-    ) -> PyResult<u32> {
-        let mut schemas = self.bench_schemas.borrow_mut();
-        let schema = schemas.entry(tag.to_owned()).or_insert_with(|| BenchSchema {
-            events: [
-                "on_click", "on_change", "on_blur", "on_focus", "on_submit", "on_mount",
-                "on_unmount", "on_double_click", "on_key_down", "on_drop",
-            ]
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect(),
-        });
-        let mut out: Vec<(Symbol, BenchValue)> = Vec::with_capacity(props.len());
-        for (k, v) in props.iter() {
-            let key = k.downcast::<PyString>()?.to_str()?;
-            let key_sym = intern(key);
-            let value = if schema.events.contains(key) {
-                BenchValue::Event(v.clone().unbind())
-            } else if let Ok(rv) = v.downcast::<RustVar>() {
-                BenchValue::Var(intern(rv.get().js_expr_str()))
-            } else if let Ok(s) = v.downcast::<PyString>() {
-                BenchValue::Str(intern(s.to_str()?))
-            } else if v.is_none() {
-                BenchValue::None_
-            } else if let Ok(b) = v.downcast::<PyBool>() {
-                BenchValue::Bool(b.is_true())
-            } else if let Ok(f) = v.downcast::<PyFloat>() {
-                BenchValue::Float(f.value())
-            } else if let Ok(i) = v.extract::<i64>() {
-                BenchValue::Int(i)
-            } else {
-                let mut s = String::with_capacity(32);
-                bench_write_js_literal(&v, &mut s)?;
-                BenchValue::Json(s)
-            };
-            out.push((key_sym, value));
-        }
-        let mut arena = self.bench_arena.borrow_mut();
-        arena.push(BenchNode {
-            tag: intern(tag),
-            props: out,
-            children: children.unwrap_or_default(),
-        });
-        Ok((arena.len() - 1) as u32)
-    }
-
-    /// PROTOTYPE — materialize one prop of a benched node back to
-    /// Python (the proxy `__getattr__` read path the design needs for
-    /// override classes). Returns the stored value's Python form.
-    fn bench_read_prop_impl(&self, py: Python<'_>, idx: u32, name: &str) -> PyResult<PyObject> {
-        let arena = self.bench_arena.borrow();
-        let node = arena
-            .get(idx as usize)
-            .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("no such node"))?;
-        let name_sym = intern(name);
-        for (k, v) in &node.props {
-            if *k == name_sym {
-                return Ok(match v {
-                    BenchValue::Str(s) => resolve_unchecked(*s).into_py(py),
-                    BenchValue::Int(i) => i.into_py(py),
-                    BenchValue::Float(f) => f.into_py(py),
-                    BenchValue::Bool(b) => b.into_py(py),
-                    BenchValue::Json(s) => s.clone().into_py(py),
-                    BenchValue::Var(s) => resolve_unchecked(*s).into_py(py),
-                    BenchValue::Event(o) => o.clone_ref(py),
-                    BenchValue::None_ => py.None(),
-                });
-            }
-        }
-        Ok(py.None())
-    }
 }
 
 /// Memoize + emit a frozen `Snapshot` into `(page_js, memo_bodies)`. The
@@ -397,8 +223,6 @@ impl CompilerSession {
             freeze_trivial_skips: std::rc::Rc::new(std::cell::Cell::new(0)),
             direct_get_props_calls: std::rc::Rc::new(std::cell::Cell::new(0)),
             direct_rename_props_reads: std::rc::Rc::new(std::cell::Cell::new(0)),
-            bench_arena: std::cell::RefCell::new(Vec::new()),
-            bench_schemas: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -1106,33 +930,6 @@ impl CompilerSession {
         Ok((page_js, memo_bodies, imports_dict, app_wraps_dict))
     }
 
-    /// PROTOTYPE — arena-construction benchmark entry. See
-    /// `bench_push_node_impl` for what it measures.
-    #[pyo3(signature = (tag, props, children=None))]
-    fn bench_push_node(
-        &self,
-        tag: &str,
-        props: &Bound<'_, PyDict>,
-        children: Option<Vec<u32>>,
-    ) -> PyResult<u32> {
-        self.bench_push_node_impl(tag, props, children)
-    }
-
-    /// PROTOTYPE — companion to `bench_push_node`: node count.
-    fn bench_arena_len(&self) -> usize {
-        self.bench_arena.borrow().len()
-    }
-
-    /// PROTOTYPE — companion to `bench_push_node`: reset between runs.
-    fn bench_arena_clear(&self) {
-        self.bench_arena.borrow_mut().clear();
-    }
-
-    /// PROTOTYPE — proxy-read path: materialize one stored prop back
-    /// to Python.
-    fn bench_read_prop(&self, py: Python<'_>, idx: u32, name: &str) -> PyResult<PyObject> {
-        self.bench_read_prop_impl(py, idx, name)
-    }
 }
 
 /// Open `out_path` for buffered write and run `f` on the writer, mapping

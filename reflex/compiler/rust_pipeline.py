@@ -226,11 +226,11 @@ def compile_pages(
         # Python `_add_style_recursive` tree walk here; the freeze applies
         # the per-node fold lazily under the fold-root mark, using the
         # `app_style` dict passed to the arena entry below.
-        # M3 arena construction (default OFF): with REFLEX_ARENA_CONSTRUCT=1,
-        # page evaluation runs under the construction fast-path scope —
-        # eligible Component.create calls skip `_post_init`.
+        # M3/M5 arena construction (default ON; REFLEX_ARENA_CONSTRUCT=0 to
+        # kill): page evaluation runs under the construction fast-path
+        # scope — eligible Component.create calls skip `_post_init`.
         fold_in_freeze = os.environ.get("REFLEX_STYLE_FOLD", "") != "0"
-        arena_construct = os.environ.get("REFLEX_ARENA_CONSTRUCT", "") == "1"
+        arena_construct = os.environ.get("REFLEX_ARENA_CONSTRUCT", "") != "0"
         with arena_construction(arena_construct):
             component = compile_unevaluated_page(
                 route, unev, app.style, app.theme, apply_style=not fold_in_freeze

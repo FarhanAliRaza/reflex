@@ -450,7 +450,38 @@ divergence, NOT introduced here). `app.style` rides
     set-rebuild iteration order (original-vs-its-copy churns memo names
     with byte-identical normalized output).
 
-### M4 scoping notes (event optimization — read before starting)
+## DONE — arena M4 + M5: events fast path; arena default-ON (2026-06-11)
+
+**M4:** `create_event_chain_fast` + `_parse_args_spec_cached`
+(event/__init__.py, exported via EventNamespace): parsed placeholder-arg
+Vars cached per spec object (id-keyed, spec referenced so ids stay
+claimed; specs are class constants), spec-vs-callback validation skipped
+(raise/warn only); non-handler shapes delegate to `EventChain.create`.
+Used only by the arena mirror — runtime EventChain.create untouched.
+Measured: chain build 10.7 → 4.5 µs (2.4×); `rx.button(on_click=
+<stable handler>)` 42.3 → 19.6 µs (2.2×).
+
+**M5:** `REFLEX_ARENA_CONSTRUCT` flipped to kill-switch semantics
+(default ON under rust_pipeline; `=0` restores `_post_init`). Denylist
+audit: none needed (memo classes self-exclude; fork-pair 427/427 ran
+with zero entries). `bench_push_node` scaffolding stripped from
+session.rs (+ unused imports). The plan doc now records the measured
+outcome vs the P0 projection and formally supersedes the staged-node
+seal (M3 phase 2b) by measurement.
+
+- Gates: oracle 27/27; suites green (known 6); parity suite 21
+  fixtures; fork-pair docs diff 427/427 byte-identical post-flip;
+  cargo tests green; docs compile smoke 427/427 with arena default-on.
+- **Newly observed PRE-EXISTING pollution pair** (not from this work;
+  verified present with arena code stashed):
+  `tests/units/components/test_memo.py` followed by
+  `tests/units/test_event.py::test_call_event_handler` →
+  "DID NOT RAISE TypeError" — a component-memo registration makes
+  `LiteralVar.create(<function>)` succeed process-wide afterward.
+  test_event passes 100/100 in isolation. Same family as the
+  DynamicState pollution: global-registry leakage between test modules.
+
+### M4 scoping notes (superseded by the DONE above)
 
 `EventChain.create` measured at **46 µs/trigger** (single-spec on_click,
 stable handler): `call_event_handler` is 77% of it — roughly 28 µs

@@ -133,6 +133,46 @@ def test_special_attrs_mirror():
     assert "aria-label" in js
 
 
+def test_event_lambda_values_delegate():
+    # Callable values delegate to EventChain.create (full path) — parity.
+    js = _assert_arena_parity(
+        lambda: rx.box(rx.button("l", on_click=lambda: rx.console_log("lam")))
+    )
+    assert "lam" in js
+
+
+def test_parsed_args_spec_cache_shares_per_spec():
+    from reflex_base.event import _parse_args_spec_cached, no_args_event_spec
+
+    first = _parse_args_spec_cached(no_args_event_spec)
+    assert _parse_args_spec_cached(no_args_event_spec) is first
+
+    def other_spec(value: Var[str]) -> tuple[Var[str]]:
+        return (value,)
+
+    other = _parse_args_spec_cached(other_spec)
+    assert other is not first
+    assert len(other) == 1
+    assert _parse_args_spec_cached(other_spec) is other
+
+
+def test_event_signature_validation_skipped_under_arena():
+    from reflex_base.event import EventHandler
+    from reflex_base.utils.exceptions import EventFnArgMismatchError
+
+    def needs_three(a, b, c):
+        return None
+
+    handler = EventHandler(fn=needs_three)
+    with pytest.raises(EventFnArgMismatchError):
+        rx.button("b", on_click=handler)
+    # Documented difference: the arena fast path skips
+    # check_fn_match_arg_spec / arg-type subclass validation.
+    with arena_construction():
+        comp = rx.button("b", on_click=handler)
+    assert comp is not None
+
+
 def test_event_triggers_kwarg_dict_mirrors():
     from reflex_base.event import EventChain, no_args_event_spec
 
