@@ -1,5 +1,56 @@
 # Status & TODO — compile perf program (2026-06-10)
 
+## ACTIVE — the Python-reduction loop (owner goal, 2026-06-11)
+
+Directive: profile → convert the biggest framework-Python slice to
+Rust/native reads → byte-gate (oracle + fork-pair 427) → commit →
+re-profile. Continue until only user overrides remain Python.
+
+Program counters so far (docs compile, profiled, identical conditions):
+total Python function calls **57.5M → 49.2M**; isinstance+abc
+**3.35M → 2.24M**; `_post_init` 84.9k → 12.1k calls; `_get_vars`
+frames 991k → 676k; LiteralVar creates 448k → 300k; `Style.__init__`
+177k → 67k; the `_add_style_recursive` walk and per-var
+`_get_all_var_data` calls eliminated.
+
+Next targets, ranked by the live profile (/tmp/p2c.prof methodology —
+`scripts/diff_arena_construction.py` is the byte gate; profile harness
+pattern in the session transcripts: cProfile around
+`rust_pipeline.compile_pages`, app import outside):
+
+1. **Hooks-gate port for event/ref-bearing nodes** (the remaining
+   `_get_vars_hooks` 170k frames + `_get_hooks_internal` fallback):
+   port `_get_events_hooks` + the mount-lifecycle hook (chain rendering
+   — reuse `assemble_chain_js`) + the ref hook string (`format_ref` is
+   a string op) so `read_hooks_internal`'s staged branch also covers
+   nodes WITH triggers/ids. Substantial; chain-render parity is the
+   risk.
+2. **forms.py:266 `_get_vars` override** (61k+ frames): el-form classes
+   add extra vars; either port the override's contribution or stage it
+   at construction via a per-class hook.
+3. **`import_var` property** (143k Python calls + ImportVar builds in
+   `build_imports_dict` step 3): pure function of (tag, alias,
+   is_default) — value-keyed memo or native build. CARE: the property
+   returns the Python `ImportVar` type; check type identity vs
+   `RustImportVar` for downstream isinstance/merge consumers before
+   swapping.
+4. **First-freeze priming of import-time (docgen-cached) rich nodes**:
+   their first freeze runs the Python harvest once; subsequent freezes
+   hit the staged branch already. Optionally widen the arena scope to
+   the whole compile (the 2.1k freeze-time foreach re-renders too).
+5. Micro: `_post_init`'s setattr loop → dict update (290k Python
+   `__setattr__` frames on the rich path); `BaseComponent.__init__`
+   (112k calls, 0.62s profiled).
+
+"User calls our fast Rust code" (the goal's second half) is already
+the architecture: `Component.create` → mirror → staged tuple → native
+freeze reads; the remaining Python per eligible node is the mirror
+classification itself (~3.4s cum profiled for 73k nodes) — its Rust
+port is the original plan's `push_node`, which becomes worthwhile only
+after items 1-2 shrink the surrounding Python.
+
+
+
 Companion to `RUST_PIPELINE_FINDINGS.md` (numbers + reasoning live there) and
 `PARITY_ORACLE.md` (what the gate guarantees and what it doesn't).
 Byte gate for every step: `uv run python scripts/parity_oracle.py check`
