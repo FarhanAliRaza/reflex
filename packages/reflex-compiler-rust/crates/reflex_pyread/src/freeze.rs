@@ -513,6 +513,11 @@ fn hooks_internal_native_safe(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -
                 ("_get_vars_hooks", &refs.component_get_vars_hooks_base),
                 ("_get_events_hooks", &refs.component_get_events_hooks_base),
                 ("_get_hooks_internal", &refs.component_get_hooks_internal_base),
+                ("_get_ref_hook", &refs.component_get_ref_hook_base),
+                (
+                    "_get_mount_lifecycle_hook",
+                    &refs.component_get_mount_lifecycle_hook_base,
+                ),
             ]
             .iter()
             .all(|(name, base)| {
@@ -1477,10 +1482,30 @@ fn build_imports_dict<'py>(
     let mut staged_done = false;
     if vars_native_safe(component, refs) {
         if let Some(items) = staged_vars_items(component, refs) {
-            if items.iter().all(|v| native_var(v, refs).is_some()) {
+            {
                 for v in &items {
-                    let Some(vd) = native_var(v, refs).and_then(|rv| rv.var_data_ref())
-                    else {
+                    let Some(rv) = native_var(v, refs) else {
+                        // Per-var Python fallback (e.g. ArgsFunctionOperation
+                        // in event chains): the exact per-var body of
+                        // `build_imports_var_walk`.
+                        if let Ok(vd) =
+                            refs.call_cached0(v, refs.attrs.m_get_all_var_data.bind(py), |c| {
+                                &mut c.get_all_var_data
+                            })
+                        {
+                            if !vd.is_none() {
+                                if let Ok(imports_obj) = vd.getattr("imports") {
+                                    if let Ok(vi) = refs.dict_builtin.call1((imports_obj,)) {
+                                        if let Ok(d) = vi.downcast::<PyDict>() {
+                                            extend_imports_dict(&result, d)?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    };
+                    let Some(vd) = rv.var_data_ref() else {
                         continue;
                     };
                     if vd.imports.is_empty() {
@@ -2038,55 +2063,143 @@ where
     let py = component.py();
     let mut out: SmallVec<[HookEntry; N]> = SmallVec::new();
     // Phase II (immutable components): the construction-staged var harvest
-    // replaces the whole `_get_hooks_internal` chain when the node has no
-    // event triggers (no events hooks, no mount-lifecycle hook), no
-    // id-derived ref hook, and the class keeps the chain's base methods.
-    // Hook positions are INTERNAL by construction: native `VarData` stores
-    // flat hook lines and the `PyVarData.position` getter is always None,
-    // so the Python path resolves every vars-hook to position 0 as well.
+    // replaces the `_get_hooks_internal` chain when the class keeps the
+    // chain's base methods. Composition mirrors the Python dict merge —
+    // events hooks (a CONSTANT, `Hooks.EVENTS`, whenever the node has
+    // triggers), then the ref hook and mount-lifecycle hook (small Python
+    // calls made only when id / on_mount/on_unmount are present — chain
+    // rendering stays in Python), then the staged vars hooks read natively.
+    // Hook positions are INTERNAL throughout: native `VarData` stores flat
+    // hook lines and the `PyVarData.position` getter is always None, so
+    // the Python path resolves every entry to position 0 as well.
     if hooks_internal_native_safe(component, refs) {
         if let Some(items) = staged_vars_items(component, refs) {
-            let inst_dict = crate::pyo3_reader::instance_dict(component, refs);
-            let triggers_empty = match read_field(
-                component,
-                inst_dict.as_ref(),
-                "event_triggers",
-                &refs.attrs.event_triggers,
-                refs,
-            ) {
-                Some(v) if !v.is_none() => !v.is_truthy().unwrap_or(true),
-                _ => true,
-            };
-            let id_unset = match read_field(
-                component,
-                inst_dict.as_ref(),
-                "id",
-                &refs.attrs.id,
-                refs,
-            ) {
-                Some(v) => v.is_none(),
-                None => true,
-            };
-            if triggers_empty
-                && id_unset
-                && items.iter().all(|v| native_var(v, refs).is_some())
             {
-                // First-seen dedup, var order then hook order — matches the
-                // Python dict-update insertion semantics.
+                let inst_dict = crate::pyo3_reader::instance_dict(component, refs);
+                let triggers = read_field(
+                    component,
+                    inst_dict.as_ref(),
+                    "event_triggers",
+                    &refs.attrs.event_triggers,
+                    refs,
+                );
                 let mut seen: SmallVec<[Symbol; 8]> = SmallVec::new();
+                let mut push_entry = |out: &mut SmallVec<[HookEntry; N]>,
+                                      seen: &mut SmallVec<[Symbol; 8]>,
+                                      sym: Symbol| {
+                    // dict-update semantics: first-seen order; later
+                    // values all carry the same INTERNAL position, so
+                    // dedup alone reproduces the merge.
+                    if !seen.contains(&sym) {
+                        seen.push(sym);
+                        out.push(HookEntry::new(sym, 0));
+                    }
+                };
+                let mut has_lifecycle = false;
+                if let Some(t) = &triggers {
+                    if t.is_truthy().unwrap_or(false) {
+                        push_entry(&mut out, &mut seen, intern(&refs.hooks_events_code));
+                        if let Ok(d) = t.downcast::<PyDict>() {
+                            has_lifecycle = ["on_mount", "on_unmount"].iter().any(|k| {
+                                d.get_item(k)
+                                    .ok()
+                                    .flatten()
+                                    .map(|v| !v.is_none())
+                                    .unwrap_or(false)
+                            });
+                        }
+                    }
+                }
+                let id_set = match read_field(
+                    component,
+                    inst_dict.as_ref(),
+                    "id",
+                    &refs.attrs.id,
+                    refs,
+                ) {
+                    Some(v) => !v.is_none(),
+                    None => false,
+                };
+                if id_set {
+                    if let Ok(hook) = component.call_method0("_get_ref_hook") {
+                        if !hook.is_none() {
+                            if let Ok(code) = py_str(&hook) {
+                                if !code.is_empty() {
+                                    push_entry(&mut out, &mut seen, intern(&code));
+                                }
+                            }
+                        }
+                    }
+                }
+                if has_lifecycle {
+                    if let Ok(hook) = component.call_method0("_get_mount_lifecycle_hook") {
+                        if !hook.is_none() {
+                            if let Ok(code) = py_str(&hook) {
+                                if !code.is_empty() {
+                                    push_entry(&mut out, &mut seen, intern(&code));
+                                }
+                            }
+                        }
+                    }
+                }
                 for v in &items {
-                    let Some(vd) = native_var(v, refs).and_then(|rv| rv.var_data_ref())
+                    if let Some(rv) = native_var(v, refs) {
+                        let Some(vd) = rv.var_data_ref() else {
+                            continue;
+                        };
+                        for code in &vd.hooks {
+                            if code.is_empty() {
+                                continue;
+                            }
+                            push_entry(&mut out, &mut seen, intern(code));
+                        }
+                        continue;
+                    }
+                    // Per-var Python fallback (e.g. ArgsFunctionOperation in
+                    // event chains): same reads `_get_vars_hooks` performs —
+                    // `.hooks` is a dict of code → VarData|None (positions
+                    // honored) or an iterable of code strings (INTERNAL).
+                    let Ok(vd) =
+                        refs.call_cached0(v, refs.attrs.m_get_all_var_data.bind(py), |c| {
+                            &mut c.get_all_var_data
+                        })
                     else {
                         continue;
                     };
-                    for code in &vd.hooks {
-                        if code.is_empty() {
-                            continue;
+                    if vd.is_none() {
+                        continue;
+                    }
+                    let Ok(hooks) = vd.getattr("hooks") else {
+                        continue;
+                    };
+                    if let Ok(d) = hooks.downcast::<PyDict>() {
+                        for (k, val) in d.iter() {
+                            let code = py_str(&k)?;
+                            if code.is_empty() {
+                                continue;
+                            }
+                            // dict-update semantics: first-seen ORDER but
+                            // last-wins POSITION on duplicate keys.
+                            let sym = intern(&code);
+                            let pos = read_hook_position(&val).unwrap_or(0);
+                            if seen.contains(&sym) {
+                                if let Some(entry) =
+                                    out.iter_mut().find(|e| e.code == sym)
+                                {
+                                    entry.position = pos;
+                                }
+                            } else {
+                                seen.push(sym);
+                                out.push(HookEntry::new(sym, pos));
+                            }
                         }
-                        let sym = intern(code);
-                        if !seen.contains(&sym) {
-                            seen.push(sym);
-                            out.push(HookEntry::new(sym, 0));
+                    } else if let Ok(iter) = hooks.iter() {
+                        for k in iter.flatten() {
+                            let code = py_str(&k)?;
+                            if code.is_empty() {
+                                continue;
+                            }
+                            push_entry(&mut out, &mut seen, intern(&code));
                         }
                     }
                 }

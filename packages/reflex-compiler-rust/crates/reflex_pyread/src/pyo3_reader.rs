@@ -99,6 +99,13 @@ pub struct PyRefs<'py> {
     pub component_get_vars_hooks_base: Bound<'py, PyAny>,
     pub component_get_events_hooks_base: Bound<'py, PyAny>,
     pub component_get_hooks_internal_base: Bound<'py, PyAny>,
+    pub component_get_ref_hook_base: Bound<'py, PyAny>,
+    pub component_get_mount_lifecycle_hook_base: Bound<'py, PyAny>,
+    /// `Hooks.EVENTS` — the constant `_get_events_hooks` returns (keyed
+    /// at position INTERNAL) whenever the node has event triggers. Held
+    /// as a String and interned at the push site so the process intern
+    /// order (which memo subtree hashes fold) matches the Python path's.
+    pub hooks_events_code: String,
     /// `Component._exclude_props` — identity baseline so the freeze only
     /// calls the override on classes that actually exclude props.
     pub component_exclude_props_base: Bound<'py, PyAny>,
@@ -955,6 +962,17 @@ impl<'py> PyRefs<'py> {
         let component_get_vars_hooks_base = base_method("_get_vars_hooks")?;
         let component_get_events_hooks_base = base_method("_get_events_hooks")?;
         let component_get_hooks_internal_base = base_method("_get_hooks_internal")?;
+        let component_get_ref_hook_base = base_method("_get_ref_hook")?;
+        let component_get_mount_lifecycle_hook_base = base_method("_get_mount_lifecycle_hook")?;
+        let hooks_events_code = py
+            .import_bound("reflex_base.constants")
+            .and_then(|m| m.getattr("Hooks"))
+            .and_then(|h| h.getattr("EVENTS"))
+            .and_then(|v| v.extract::<String>())
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.constants.Hooks.EVENTS",
+                source,
+            })?;
         let events_imports = py
             .import_bound("reflex_base.constants.compiler")
             .and_then(|m| m.getattr("Imports"))
@@ -1059,6 +1077,9 @@ impl<'py> PyRefs<'py> {
             component_get_vars_hooks_base,
             component_get_events_hooks_base,
             component_get_hooks_internal_base,
+            component_get_ref_hook_base,
+            component_get_mount_lifecycle_hook_base,
+            hooks_events_code,
             component_exclude_props_base,
             component_render_base,
             events_imports,
