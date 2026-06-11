@@ -85,6 +85,11 @@ pub struct PyRefs<'py> {
     /// fast-paths only nodes whose class does NOT override it; overrides
     /// (e.g. recharts' `{"wrapperStyle": ...}`) go through `_get_style`.
     pub component_get_style_base: Bound<'py, PyAny>,
+    /// The base `Component._add_style` (unbound function) — identity
+    /// baseline for the M2 style-fold gate. A class that overrides it
+    /// directly takes the fold path, where `_apply_style_fold` raises
+    /// the same UserWarning the legacy fold raised.
+    pub component_add_style_base: Bound<'py, PyAny>,
     /// `Component._exclude_props` — identity baseline so the freeze only
     /// calls the override on classes that actually exclude props.
     pub component_exclude_props_base: Bound<'py, PyAny>,
@@ -210,6 +215,17 @@ pub struct PyRefs<'py> {
     /// `None` for callers that don't need wraps (memo freezes).
     pub app_wraps: RefCell<Option<Py<PyDict>>>,
     pub app_wraps_seen: RefCell<HashSet<usize>>,
+    /// M2 deferred style fold: the `App.style` dict. `Some` only on page
+    /// freezes from `compile_page_from_component_arena(..., app_style=…)`.
+    /// The fold activates at the node carrying the `_style_fold_root`
+    /// instance mark (set by `compile_unevaluated_page(apply_style=False)`)
+    /// and propagates along `children`-list edges only — mirroring the
+    /// legacy `_add_style_recursive` scope exactly.
+    pub style_fold_style: RefCell<Option<Py<PyAny>>>,
+    /// M2: per-call memo — class ptr → whether `App.style` has an entry
+    /// for the class (`styles.get(type(self))` / `styles.get(cls.create)`).
+    /// Per-call because `App.style` can differ across compiles.
+    pub style_fold_entries: RefCell<HashMap<usize, bool>>,
     /// Pre-interned attribute / method names. Each PyO3 ``getattr``
     /// or ``call_method0`` that took ``&str`` previously allocated a
     /// fresh ``PyString`` per call; passing the pre-interned
@@ -289,6 +305,10 @@ pub struct InternedAttrs {
     pub m_get_added_hooks: Py<PyString>,
     pub m_iter_parent_classes_with_method: Py<PyString>,
     pub m_default_value: Py<PyString>,
+    pub m_apply_style_fold: Py<PyString>,
+    pub m_add_style: Py<PyString>,
+    pub m_create: Py<PyString>,
+    pub style_fold_root: Py<PyString>,
 }
 
 impl InternedAttrs {
@@ -347,6 +367,10 @@ impl InternedAttrs {
             m_get_added_hooks: s("_get_added_hooks"),
             m_iter_parent_classes_with_method: s("_iter_parent_classes_with_method"),
             m_default_value: s("default_value"),
+            m_apply_style_fold: s("_apply_style_fold"),
+            m_add_style: s("_add_style"),
+            m_create: s("create"),
+            style_fold_root: s("_style_fold_root"),
         }
     }
 }
@@ -444,6 +468,11 @@ pub struct ClassMetadata {
     /// Whether `_get_style` on this class is the base implementation
     /// (drives the Rust emotion path). ``None`` until first observation.
     pub style_is_base: Option<bool>,
+    /// M2 style-fold gate, class-level half: true when the class has no
+    /// `add_style` MRO chain AND `_add_style` is the base implementation
+    /// — the fold then depends only on per-node state (App.style entry,
+    /// style-is-dict). ``None`` until first observation.
+    pub style_fold_base: Option<bool>,
     /// Whether `_get_imports` on this class is the base implementation
     /// (drives the Rust `build_imports_dict` path).
     pub imports_is_base: Option<bool>,
@@ -623,6 +652,7 @@ impl Default for ClassMetadata {
             method_handles: ClassMethodHandles::default(),
             default_imports_safe: None,
             style_is_base: None,
+            style_fold_base: None,
             imports_is_base: None,
             rustvar_direct: None,
             add_custom_code_chain_empty: None,
@@ -872,6 +902,14 @@ impl<'py> PyRefs<'py> {
                 attr: "reflex_base.components.component.Component._get_style",
                 source,
             })?;
+        let component_add_style_base = py
+            .import_bound("reflex_base.components.component")
+            .and_then(|m| m.getattr("Component"))
+            .and_then(|c| c.getattr("_add_style"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.components.component.Component._add_style",
+                source,
+            })?;
         let events_imports = py
             .import_bound("reflex_base.constants.compiler")
             .and_then(|m| m.getattr("Imports"))
@@ -971,6 +1009,7 @@ impl<'py> PyRefs<'py> {
             format_library_name,
             format_as_emotion,
             component_get_style_base,
+            component_add_style_base,
             component_exclude_props_base,
             component_render_base,
             events_imports,
@@ -993,6 +1032,8 @@ impl<'py> PyRefs<'py> {
             imports_seen: RefCell::new(HashSet::with_capacity(64)),
             app_wraps: RefCell::new(None),
             app_wraps_seen: RefCell::new(HashSet::with_capacity(8)),
+            style_fold_style: RefCell::new(None),
+            style_fold_entries: RefCell::new(HashMap::with_capacity(8)),
             attrs: InternedAttrs::new(py),
             method_cache: RefCell::new(HashMap::with_capacity(32)),
             class_cache: None,

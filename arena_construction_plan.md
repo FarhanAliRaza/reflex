@@ -148,15 +148,28 @@ full validation. Documented behavior difference behind the flag.
   (`tests/units/reflex_base/components/test_construction_schema.py`,
   `tests/units/compiler/test_construction_schema.py`). Oracle 27/27; docs app 427/427
   compiles. *Risk: low.*
-- **M2 — Style fold at the seal, on RICH objects first.** `compile_unevaluated_page`
-  gains `apply_style: bool = True`; rust_pipeline passes False; the freeze replicates
-  `_add_style_recursive` (component.py:1448) per node (add_style MRO probes for override
-  classes via the existing `class_bool_flag` gate, App.style per-class entry, instance
-  style last-wins, VarData merge order), reusing `emotion_from_style` (freeze.rs:2541).
-  Ordering rationale: this lands BEFORE arena construction so arena nodes never need
-  `.style` Python reads. Kill switch `REFLEX_STYLE_FOLD=0`. Gate: oracle style cases +
-  NEW differential suite vs `_add_style_recursive` (accordion/app-style/style-Var/
-  Breakpoints/pseudo) + byte-diff of all 427 docs pages. *Risk: high (byte-visible CSS).*
+- **M2 — Style fold at the seal, on RICH objects first. DONE (2026-06-11).**
+  `compile_unevaluated_page` gained `apply_style: bool = True`; rust_pipeline passes
+  False (fold-in-freeze on by default; kill switch `REFLEX_STYLE_FOLD=0`) and hands
+  `app.style` to the arena entry. Shape that landed (cheaper than a full Rust port,
+  byte-safe by construction): the non-recursive fold extracted to
+  `Component._apply_style_fold` (single source with `_add_style_recursive`); the freeze
+  replicates only the GATE in Rust (per-class `add_style`-chain + `_add_style`-base via
+  `class_bool_flag`, per-class-per-freeze App.style entry probe, per-node style-is-dict)
+  and calls the Python helper for folding nodes only (~2% of docs nodes — the ones that
+  paid Python anyway); the Python recursion over the other ~98% is gone. Scope exactness:
+  fold activates at a `_style_fold_root` instance mark set by `compile_unevaluated_page`
+  (the Fragment/meta wrap is never folded), propagates along children edges only — match
+  arms/default yes (alias children), foreach bodies NO (freeze re-renders them fresh;
+  legacy bytes never saw them folded). Gate shipped: oracle 27/27; 16-fixture
+  differential suite (`tests/units/compiler/test_rust_style_fold.py`: add_style chains/
+  MRO order, App.style by class + by `cls.create`, instance-style-wins, style-Var kwarg,
+  Breakpoints/pseudo, foreach/match/cond, wrapper/meta scoping via Title, VarData
+  imports, UserWarning parity, end-to-end kill-switch byte-equality); docs app per-page
+  A/B over all 427 pages — **426 byte-identical**, the 427th (data-editor) fails its own
+  legacy A/A (random unique hook names; pre-existing, pinned uncacheable). Harness note:
+  A/B must compare two deepcopies — memo subtree hashes are sensitive to set-rebuild
+  iteration order, so original-vs-copy churns memo names with zero behavioral diff.
 - **M3 — Arena construction + seal (the cliff; default-off flag).** Productionize
   `push_node` from the bench prototype; `_create` fast path + raw-kwarg mirroring;
   `__setattr__` write-through; plain-str child fast path (push Bare text node directly,

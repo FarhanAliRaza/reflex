@@ -25,6 +25,7 @@ the PyO3 component reader (``reflex_pyread``).
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -220,7 +221,14 @@ def compile_pages(
         # below to avoid double-emitting.
         n_states_before = len(all_base_state_classes)
         n_bundled_before = len(bundled_libraries)
-        component = compile_unevaluated_page(route, unev, app.style, app.theme)
+        # M2 style fold: with the fold-in-freeze enabled (default), skip the
+        # Python `_add_style_recursive` tree walk here; the freeze applies
+        # the per-node fold lazily under the fold-root mark, using the
+        # `app_style` dict passed to the arena entry below.
+        fold_in_freeze = os.environ.get("REFLEX_STYLE_FOLD", "") != "0"
+        component = compile_unevaluated_page(
+            route, unev, app.style, app.theme, apply_style=not fold_in_freeze
+        )
         page_is_stateful = len(all_base_state_classes) > n_states_before
         if page_is_stateful:
             # Statefulness detection: matches the legacy plugin
@@ -259,6 +267,7 @@ def compile_pages(
             route,
             title=None,
             meta_tags=None,
+            app_style=(app.style or {}) if fold_in_freeze else None,
         )
         sess.merge_imports_into(all_imports, page_imports)
         collected_app_wraps.update(page_app_wraps)

@@ -335,6 +335,127 @@ fn native_var<'a>(value: &'a Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Option<&'a 
     }
 }
 
+/// M2 deferred style fold: whether `component` carries the
+/// `_style_fold_root` instance mark, set by
+/// `compile_unevaluated_page(apply_style=False)` on the exact subtree the
+/// legacy `_add_style_recursive` would have walked. Probed only while the
+/// fold is inactive, and only when the caller supplied an `App.style`.
+fn style_fold_mark_present(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> bool {
+    if refs.style_fold_style.borrow().is_none() {
+        return false;
+    }
+    let py = component.py();
+    crate::pyo3_reader::instance_dict(component, refs)
+        .and_then(|d| {
+            d.get_item(refs.attrs.style_fold_root.bind(py))
+                .ok()
+                .flatten()
+        })
+        .is_some()
+}
+
+/// M2: per-class memo — does `App.style` have an entry for this class?
+/// Mirrors the legacy gate's `style.get(type(self))` /
+/// `style.get(self.create)` probes (`_get_component_style` uses the same
+/// two keys). Per-call cache: `App.style` is fixed within one compile.
+fn style_fold_entry_present(
+    component: &Bound<'_, PyAny>,
+    refs: &PyRefs<'_>,
+) -> Result<bool, PyReadError> {
+    let py = component.py();
+    let ty_key = component.get_type().as_ptr() as usize;
+    if let Some(v) = refs.style_fold_entries.borrow().get(&ty_key) {
+        return Ok(*v);
+    }
+    let style_obj = refs
+        .style_fold_style
+        .borrow()
+        .as_ref()
+        .map(|s| s.clone_ref(py));
+    let Some(style_obj) = style_obj else {
+        return Ok(false);
+    };
+    let style = style_obj.bind(py);
+    // Legacy short-circuit: `not style` — an empty App.style has no entries.
+    let present = if !style.is_truthy().unwrap_or(false) {
+        false
+    } else {
+        let by_class = style
+            .call_method1("get", (component.get_type(),))
+            .map(|v| !v.is_none())
+            .unwrap_or(false);
+        by_class
+            || component
+                .getattr(refs.attrs.m_create.bind(py))
+                .and_then(|create| style.call_method1("get", (create,)))
+                .map(|v| !v.is_none())
+                .unwrap_or(false)
+    };
+    refs.style_fold_entries.borrow_mut().insert(ty_key, present);
+    Ok(present)
+}
+
+/// M2: replicate the legacy `_add_style_recursive` per-node gate and, for
+/// folding nodes, call the Python `_apply_style_fold` — which mutates
+/// `self.style` exactly as the legacy fold did. Must run BEFORE any
+/// style/var-data read of the node. Gate (component.py fast path): skip
+/// iff `isinstance(self.style, dict)` AND the class has no `add_style`
+/// MRO chain AND `_add_style` is the base implementation AND `App.style`
+/// has no entry for the class.
+fn maybe_fold_style(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<(), PyReadError> {
+    let py = component.py();
+    let class_base = class_bool_flag(
+        component,
+        refs,
+        |m| m.style_fold_base,
+        |m, v| m.style_fold_base = Some(v),
+        || {
+            let ty = component.get_type();
+            ty.getattr(refs.attrs.m_add_style.bind(py))
+                .map(|f| f.is(&refs.component_add_style_base))
+                .unwrap_or(false)
+                && ty
+                    .call_method1(
+                        refs.attrs.m_iter_parent_classes_with_method.bind(py),
+                        ("add_style",),
+                    )
+                    .and_then(|chain| chain.len())
+                    .map(|len| len == 0)
+                    .unwrap_or(false)
+        },
+    );
+    let needs_fold = !class_base
+        || style_fold_entry_present(component, refs)?
+        || {
+            // Per-node half: a non-dict style (raw Var assigned via
+            // `_unsafe_create`) still takes the fold.
+            let style = component
+                .getattr(refs.attrs.style.bind(py))
+                .map_err(|source| PyReadError::Attr {
+                    attr: "component.style",
+                    source,
+                })?;
+            style.downcast::<pyo3::types::PyDict>().is_err()
+        };
+    if needs_fold {
+        let style_obj = refs
+            .style_fold_style
+            .borrow()
+            .as_ref()
+            .map(|s| s.clone_ref(py));
+        if let Some(style_obj) = style_obj {
+            refs.bump_crossings(1);
+            component
+                .call_method1(refs.attrs.m_apply_style_fold.bind(py), (style_obj,))
+                .map_err(|source| PyReadError::Attr {
+                    attr: "Component._apply_style_fold",
+                    source,
+                })?;
+        }
+    }
+    Ok(())
+}
+
 /// B: a class-level boolean fact, cached on `ClassMetadata`. `get`/`set`
 /// select the field; `compute` runs once per class.
 fn class_bool_flag(
@@ -533,14 +654,18 @@ pub fn freeze_component<'py>(
     refs.app_wraps_seen.borrow_mut().clear();
     let mut builder = SnapshotBuilder::new();
     let mut pending: Vec<(i32, String, Py<PyAny>)> = Vec::new();
-    let root_idx = freeze_node(py, root, &mut builder, refs, &mut pending)?;
+    // M2: the style fold starts inactive — it activates at the node
+    // carrying the `_style_fold_root` mark (the page subtree the legacy
+    // fold would have walked). App-wrap drains below stay unfolded: the
+    // legacy path folds wrappers separately in `_app_root` compilation.
+    let root_idx = freeze_node(py, root, &mut builder, refs, &mut pending, false)?;
     builder.set_root(root_idx);
     // Drain the wrapper queue. Each wrapper's own `freeze_node` walk
     // may push more wrappers via its descendants — we keep draining
     // until the queue is empty.
     while let Some((sort_key, name, wrapper_py)) = pending.pop() {
         let wrapper = wrapper_py.bind(py).clone();
-        let wrapper_root = freeze_node(py, &wrapper, &mut builder, refs, &mut pending)?;
+        let wrapper_root = freeze_node(py, &wrapper, &mut builder, refs, &mut pending, false)?;
         builder.snapshot_mut().app_wraps.push(reflex_ir::AppWrap {
             sort_key,
             name: intern(&name),
@@ -613,9 +738,10 @@ fn freeze_node<'py>(
     builder: &mut SnapshotBuilder,
     refs: &PyRefs<'py>,
     pending: &mut Vec<(i32, String, Py<PyAny>)>,
+    fold: bool,
 ) -> Result<NodeIdx, PyReadError> {
     let slot = builder.reserve();
-    freeze_into_slot(py, component, slot, builder, refs, pending)?;
+    freeze_into_slot(py, component, slot, builder, refs, pending, fold)?;
     Ok(slot)
 }
 
@@ -625,6 +751,7 @@ fn freeze_node<'py>(
 /// slots and only then recurses into each — this keeps every node's
 /// `children` range a strict slice of *direct* children, never
 /// straying into grandchildren further down the arena.
+#[allow(clippy::too_many_arguments)]
 fn freeze_into_slot<'py>(
     py: Python<'py>,
     component: &Bound<'py, PyAny>,
@@ -632,6 +759,7 @@ fn freeze_into_slot<'py>(
     builder: &mut SnapshotBuilder,
     refs: &PyRefs<'py>,
     pending: &mut Vec<(i32, String, Py<PyAny>)>,
+    fold: bool,
 ) -> Result<(), PyReadError> {
     // Capture id(component) so callers can map the snapshot back to
     // live Python Components without a second tree walk (used by the
@@ -641,6 +769,14 @@ fn freeze_into_slot<'py>(
     // boundary-crossing counter (exposed via
     // CompilerSession.freeze_pyo3_call_count for the A perf test).
     class_visit_tick(component, refs);
+
+    // M2 deferred style fold: activate at the marked fold root, then
+    // fold this node (if the legacy gate says so) BEFORE any read of
+    // its style or var-data below.
+    let fold = fold || style_fold_mark_present(component, refs);
+    if fold {
+        maybe_fold_style(component, refs)?;
+    }
 
     // A: invoke the batched extractor once per Component. The
     // result tuple is currently a side effect — full
@@ -674,7 +810,7 @@ fn freeze_into_slot<'py>(
     // live in `control_flow.match_arms`, not in `children`), the
     // range stays empty.
     let (children_start, children_end) = if kind.has_children() {
-        freeze_children_for(py, component, kind, self_idx, builder, refs, pending)?
+        freeze_children_for(py, component, kind, self_idx, builder, refs, pending, fold)?
     } else {
         let n = builder.next_idx();
         (n, n)
@@ -3412,6 +3548,7 @@ fn populate_control_flow<'py>(
 /// its `NodeSnapshot.children` field. The returned range covers
 /// exactly the direct children's slots; descendants land past
 /// `children_end` in the arena.
+#[allow(clippy::too_many_arguments)]
 fn freeze_children_for<'py>(
     py: Python<'py>,
     component: &Bound<'py, PyAny>,
@@ -3420,11 +3557,20 @@ fn freeze_children_for<'py>(
     builder: &mut SnapshotBuilder,
     refs: &PyRefs<'py>,
     pending: &mut Vec<(i32, String, Py<PyAny>)>,
+    fold: bool,
 ) -> Result<(NodeIdx, NodeIdx), PyReadError> {
     match kind {
+        // M2 fold note: the foreach body is FRESHLY rendered by
+        // `render_component()` (not the legacy-folded `children[0]` ref),
+        // so the legacy bytes never saw a folded foreach body — the fold
+        // must not propagate into it.
         NodeKind::Foreach => freeze_foreach_body(py, component, self_idx, builder, refs, pending),
-        NodeKind::Match => freeze_match_children(py, component, self_idx, builder, refs, pending),
-        _ => freeze_children_iter(py, component, builder, refs, pending),
+        // Match bodies alias `self.children` entries — the legacy fold
+        // walked them, so the fold propagates.
+        NodeKind::Match => {
+            freeze_match_children(py, component, self_idx, builder, refs, pending, fold)
+        }
+        _ => freeze_children_iter(py, component, builder, refs, pending, fold),
     }
 }
 
@@ -3437,6 +3583,7 @@ fn freeze_children_iter<'py>(
     builder: &mut SnapshotBuilder,
     refs: &PyRefs<'py>,
     pending: &mut Vec<(i32, String, Py<PyAny>)>,
+    fold: bool,
 ) -> Result<(NodeIdx, NodeIdx), PyReadError> {
     let start = builder.next_idx();
     let children_obj = match component.getattr(refs.attrs.children.bind(py)) {
@@ -3462,7 +3609,7 @@ fn freeze_children_iter<'py>(
     }
     let end = builder.next_idx();
     for (slot, child) in child_slots.into_iter().zip(children.into_iter()) {
-        freeze_into_slot(py, &child, slot, builder, refs, pending)?;
+        freeze_into_slot(py, &child, slot, builder, refs, pending, fold)?;
     }
     Ok((start, end))
 }
@@ -3514,7 +3661,9 @@ fn freeze_foreach_body<'py>(
         })?;
     let start = builder.reserve();
     let end = builder.next_idx();
-    freeze_into_slot(py, &body, start, builder, refs, pending)?;
+    // fold=false: this body is a fresh `render_fn` product the legacy
+    // fold never touched (it folded the kept `children[0]` ref instead).
+    freeze_into_slot(py, &body, start, builder, refs, pending, false)?;
     Ok((start, end))
 }
 
@@ -3522,6 +3671,7 @@ fn freeze_foreach_body<'py>(
 /// the optional `default` body. Records each `(case_expr → body_idx)`
 /// pairing into `snapshot.control_flow.match_arms` and the default into
 /// `match_default` so `emit_jsx_from_snapshot` can render the arms.
+#[allow(clippy::too_many_arguments)]
 fn freeze_match_children<'py>(
     py: Python<'py>,
     component: &Bound<'py, PyAny>,
@@ -3529,6 +3679,7 @@ fn freeze_match_children<'py>(
     builder: &mut SnapshotBuilder,
     refs: &PyRefs<'py>,
     pending: &mut Vec<(i32, String, Py<PyAny>)>,
+    fold: bool,
 ) -> Result<(NodeIdx, NodeIdx), PyReadError> {
     let start = builder.next_idx();
     let mut arms: SmallVec<[(Symbol, NodeIdx); 2]> = SmallVec::new();
@@ -3558,7 +3709,7 @@ fn freeze_match_children<'py>(
                     continue;
                 }
                 let body = entries.last().expect("len >= 2");
-                let body_idx = freeze_node(py, body, builder, refs, pending)?;
+                let body_idx = freeze_node(py, body, builder, refs, pending, fold)?;
                 for case_obj in &entries[..entries.len() - 1] {
                     // `match_cases` entries are `(conditions_list, body)` —
                     // each condition gets its own `case` label (legacy
@@ -3609,7 +3760,7 @@ fn freeze_match_children<'py>(
     }
     if let Ok(default) = component.getattr("default") {
         if !default.is_none() {
-            let default_idx = freeze_node(py, &default, builder, refs, pending)?;
+            let default_idx = freeze_node(py, &default, builder, refs, pending, fold)?;
             builder
                 .snapshot_mut()
                 .control_flow

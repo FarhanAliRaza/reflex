@@ -414,7 +414,43 @@ the compile path consumes it yet.
   Full `make_pyi` regen drifts 16 hashes on a CLEAN tree here
   (environment drift, not committed).
 
-### M2 scoping notes (read before implementing the style fold)
+## DONE — arena M2: style fold moved into the freeze (2026-06-11)
+
+The Rust pipeline no longer runs the Python `_add_style_recursive` tree
+walk. `compile_unevaluated_page(apply_style=False)` marks the fold root
+(`_style_fold_root` instance attr — exactly the pre-Fragment/meta
+subtree); the freeze replicates the legacy per-node GATE in Rust
+(per-class add_style-chain + `_add_style`-base via `class_bool_flag` on
+`ClassMetadata.style_fold_base`; per-class-per-freeze App.style entry
+probe in `PyRefs::style_fold_entries`; per-node style-is-dict) and calls
+the extracted Python `Component._apply_style_fold` for folding nodes
+only (~2% on docs). Fold propagates along children edges only: match
+arms/default fold (alias `self.children`), foreach bodies do NOT (the
+freeze re-renders them fresh via `render_component()` — legacy bytes
+never saw folded foreach bodies; pre-existing rust-vs-`reflex run`
+divergence, NOT introduced here). `app.style` rides
+`compile_page_from_component_arena(..., app_style=)`. Kill switch
+`REFLEX_STYLE_FOLD=0` restores the Python fold.
+
+- Gates: oracle 27/27; unit suites green (same known 6); 16-fixture
+  differential suite `tests/units/compiler/test_rust_style_fold.py`
+  (incl. end-to-end fold-on vs fold-off `compile_pages` byte equality);
+  docs per-page A/B over 427 pages: 426 byte-identical, data-editor
+  fails its own legacy A/A (random `getData_*` hook names; pinned
+  uncacheable anyway).
+- Measurement notes: docs compile cache-off ~48s fold-on vs ~45-61s
+  fold-off across runs — evaluation noise dominates; the fold's ~1.15s
+  of recursion frames is the expected win, and the architectural point
+  is M3 readiness (arena nodes never need `.style` Python reads).
+- Diff-harness findings (will matter for M3's gates):
+  - Docs compiles are NOT byte-comparable across processes OR across
+    re-evaluations in one process (state-name counters, memo symbol
+    churn). Per-page A/B must evaluate ONCE and deepcopy per side.
+  - Both sides must be deepcopies: memo `subtree_hash` is sensitive to
+    set-rebuild iteration order (original-vs-its-copy churns memo names
+    with byte-identical normalized output).
+
+### M2 scoping notes (kept for reference; superseded by the DONE above)
 
 Construction-path facts established for M2, beyond the plan text:
 

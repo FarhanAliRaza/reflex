@@ -909,6 +909,7 @@ def compile_unevaluated_page(
     page: UnevaluatedPage,
     style: ComponentStyle | None = None,
     theme: Component | None = None,
+    apply_style: bool = True,
 ) -> Component:
     """Compiles an uncompiled page into a component and adds meta information.
 
@@ -917,6 +918,11 @@ def compile_unevaluated_page(
         page: The uncompiled page object.
         style: The style of the page.
         theme: The theme of the page.
+        apply_style: Whether to run the Python style fold over the page
+            subtree. The Rust pipeline passes False and instead marks the
+            fold root so the freeze applies the per-node fold lazily during
+            the snapshot walk (M2 style fold); the caller must then pass
+            ``app_style`` to the page freeze.
 
     Returns:
         The compiled component and whether state should be enabled.
@@ -928,7 +934,12 @@ def compile_unevaluated_page(
         # Generate the component if it is a callable.
         component = into_component(page.component)
 
-        component._add_style_recursive(style or {}, theme)
+        if apply_style:
+            component._add_style_recursive(style or {}, theme)
+        else:
+            # The fold scope is exactly this subtree: the Fragment/meta
+            # wrappers added below are never folded on the legacy path.
+            object.__setattr__(component, "_style_fold_root", True)
 
         from reflex_base.utils.format import make_default_page_title
 

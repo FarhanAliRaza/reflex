@@ -1527,6 +1527,45 @@ class Component(BaseComponent, ABC):
             component_style = Style(style)
         return component_style
 
+    def _apply_style_fold(self, style: ComponentStyle | Style) -> None:
+        """Apply the non-recursive portion of the style fold to this component.
+
+        Merges, in order (latest wins): the class's ``add_style`` defaults,
+        the ``App.style`` entry for this class, and the instance style —
+        then replaces ``self.style`` with the merged ``Style`` carrying the
+        merged ``VarData``. Called per node by ``_add_style_recursive`` on
+        the legacy path, and by the Rust freeze for folding nodes when the
+        fold is deferred (``compile_unevaluated_page(apply_style=False)``).
+
+        Args:
+            style: A dict from component class to styling (``App.style``).
+
+        Raises:
+            UserWarning: If `_add_style` has been overridden.
+        """
+        if type(self)._add_style != Component._add_style:
+            msg = "Do not override _add_style directly. Use add_style instead."
+            raise UserWarning(msg)
+        # 1. Default style from `_add_style`/`add_style`.
+        new_style = self._add_style()
+        style_vars = [new_style._var_data]
+
+        # 2. User-defined style from `App.style`.
+        component_style = self._get_component_style(style)
+        if component_style:
+            new_style.update(component_style)
+            style_vars.append(component_style._var_data)
+
+        # 4. style dict and css props passed to the component instance.
+        new_style.update(self.style)
+        style_vars.append(self.style._var_data)
+
+        new_style._var_data = VarData.merge(*style_vars)
+
+        # Assign the new style
+        self.style = new_style
+        self._clear_compile_caches()
+
     def _add_style_recursive(
         self, style: ComponentStyle | Style, theme: Component | None = None
     ) -> Component:
@@ -1572,24 +1611,7 @@ class Component(BaseComponent, ABC):
                 if isinstance(child, Component):
                     child._add_style_recursive(style, theme)
             return self
-        new_style = self._add_style()
-        style_vars = [new_style._var_data]
-
-        # 2. User-defined style from `App.style`.
-        component_style = self._get_component_style(style)
-        if component_style:
-            new_style.update(component_style)
-            style_vars.append(component_style._var_data)
-
-        # 4. style dict and css props passed to the component instance.
-        new_style.update(self.style)
-        style_vars.append(self.style._var_data)
-
-        new_style._var_data = VarData.merge(*style_vars)
-
-        # Assign the new style
-        self.style = new_style
-        self._clear_compile_caches()
+        self._apply_style_fold(style)
 
         # Recursively add style to the children.
         for child in self.children:

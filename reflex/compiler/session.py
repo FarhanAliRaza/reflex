@@ -488,6 +488,7 @@ class CompilerSession:
         meta_tags: list[tuple[str, str]] | None = None,
         custom_code: list[str] | None = None,
         hooks_body: str | None = None,
+        app_style: dict | None = None,
     ) -> tuple[str, list[tuple[str, str]], dict[str, list], dict[tuple[int, str], Any]]:
         """PR4: arena-path page compile (planx.md cutover).
 
@@ -522,6 +523,11 @@ class CompilerSession:
                 the state-context lines and ``return``. Per-node
                 ``hooks_internal``/``hooks_user`` are harvested from
                 the snapshot automatically.
+            app_style: the ``App.style`` dict for the M2 deferred style
+                fold. When set, the freeze applies the per-node fold
+                (``_apply_style_fold``) under the subtree marked by
+                ``compile_unevaluated_page(apply_style=False)``. ``None``
+                disables fold handling (the tree must already be folded).
 
         Returns:
             ``(page_js, memo_bodies, imports, app_wraps)``:
@@ -545,6 +551,7 @@ class CompilerSession:
                 meta,
                 list(custom_code) if custom_code else None,
                 hooks_body,
+                app_style,
             )
         )
         return (

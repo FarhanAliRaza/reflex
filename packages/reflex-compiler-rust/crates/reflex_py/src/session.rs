@@ -154,6 +154,7 @@ fn bench_write_js_literal(v: &Bound<'_, PyAny>, out: &mut String) -> PyResult<()
 }
 
 impl CompilerSession {
+    #[allow(clippy::too_many_arguments)]
     fn compile_page_from_component_arena_impl<'py>(
         &self,
         py: Python<'py>,
@@ -164,6 +165,7 @@ impl CompilerSession {
         meta_tags: Option<&Bound<'py, PyList>>,
         custom_code: Option<Vec<String>>,
         hooks_body: Option<&str>,
+        app_style: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<(
         String,
         Vec<(String, String)>,
@@ -219,9 +221,13 @@ impl CompilerSession {
         // Python `_get_all_app_wrap_components` tree walk per page.
         let app_wraps_dict = PyDict::new_bound(py);
         *refs.app_wraps.borrow_mut() = Some(app_wraps_dict.clone().unbind());
+        // M2 deferred style fold: hand the `App.style` dict to the freeze
+        // so it can apply the per-node fold under the fold-root mark.
+        *refs.style_fold_style.borrow_mut() = app_style.map(|s| s.clone().unbind());
         let snapshot = freeze_component_with_class_cache(py, component, &refs)?;
         *refs.bun_imports.borrow_mut() = None;
         *refs.app_wraps.borrow_mut() = None;
+        *refs.style_fold_style.borrow_mut() = None;
 
         let (page_js, memo_bodies) = emit_snapshot_to_js(
             py,
@@ -1066,7 +1072,8 @@ impl CompilerSession {
     /// 2. Python `page_to_ir(component)` (msgpack pack)
     /// 3. Rust `compile_page_from_bytes` (msgpack parse + emit)
     /// 4. Python `emit_memo_modules` (per-body re-walk + render)
-    #[pyo3(signature = (component, route_ident, route, title=None, meta_tags=None, custom_code=None, hooks_body=None))]
+    #[pyo3(signature = (component, route_ident, route, title=None, meta_tags=None, custom_code=None, hooks_body=None, app_style=None))]
+    #[allow(clippy::too_many_arguments)]
     fn compile_page_from_component_arena<'py>(
         &self,
         py: Python<'py>,
@@ -1077,6 +1084,7 @@ impl CompilerSession {
         meta_tags: Option<&Bound<'py, PyList>>,
         custom_code: Option<Vec<String>>,
         hooks_body: Option<&str>,
+        app_style: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<(
         String,
         Vec<(String, String)>,
@@ -1093,6 +1101,7 @@ impl CompilerSession {
                 meta_tags,
                 custom_code,
                 hooks_body,
+                app_style,
             )?;
         Ok((page_js, memo_bodies, imports_dict, app_wraps_dict))
     }
