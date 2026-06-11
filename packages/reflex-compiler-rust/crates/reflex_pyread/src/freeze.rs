@@ -428,14 +428,21 @@ fn maybe_fold_style(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<(
         || style_fold_entry_present(component, refs)?
         || {
             // Per-node half: a non-dict style (raw Var assigned via
-            // `_unsafe_create`) still takes the fold.
-            let style = component
-                .getattr(refs.attrs.style.bind(py))
-                .map_err(|source| PyReadError::Attr {
-                    attr: "component.style",
-                    source,
-                })?;
-            style.downcast::<pyo3::types::PyDict>().is_err()
+            // `_unsafe_create`) still takes the fold. `read_field` probes
+            // the instance dict and falls back to the SHARED class default
+            // — unlike getattr, it doesn't materialize a fresh `Style()`
+            // per unset-style node through the descriptor factory.
+            let inst_dict = crate::pyo3_reader::instance_dict(component, refs);
+            match read_field(
+                component,
+                inst_dict.as_ref(),
+                "style",
+                &refs.attrs.style,
+                refs,
+            ) {
+                Some(style) => style.downcast::<pyo3::types::PyDict>().is_err(),
+                None => false,
+            }
         };
     if needs_fold {
         let style_obj = refs
@@ -2593,8 +2600,19 @@ fn read_style(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<Symbol,
     if !is_base {
         return read_style_via_get_style(component, refs);
     }
-    let style = match component.getattr(refs.attrs.style.bind(py)) {
-        Ok(s) if !s.is_none() => s,
+    // `read_field` over getattr: the instance-dict probe falls back to the
+    // SHARED class default for unset styles instead of materializing a
+    // fresh `Style()` per node through the descriptor factory (read-only
+    // here — the empty-style short-circuit below renders nothing).
+    let inst_dict = crate::pyo3_reader::instance_dict(component, refs);
+    let style = match read_field(
+        component,
+        inst_dict.as_ref(),
+        "style",
+        &refs.attrs.style,
+        refs,
+    ) {
+        Some(s) if !s.is_none() => s,
         _ => return Ok(Symbol::EMPTY),
     };
     // A whole-style reactive `Var` (`isinstance(self.style, Var)` branch of
