@@ -456,6 +456,65 @@ fn maybe_fold_style(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<(
     Ok(())
 }
 
+/// Phase II (immutable components): the construction-staged var harvest —
+/// the `_vars_cache` tuple primed by the arena fast path at create time.
+/// `None` when the component wasn't staged, or a post-create write to a
+/// harvest field invalidated it (`Component.__setattr__`).
+fn staged_vars_items<'py>(
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
+) -> Option<Vec<Bound<'py, PyAny>>> {
+    let py = component.py();
+    let d = crate::pyo3_reader::instance_dict(component, refs)?;
+    let cached = d.get_item(refs.attrs.vars_cache.bind(py)).ok().flatten()?;
+    let tuple = cached.downcast_into::<pyo3::types::PyTuple>().ok()?;
+    Some(tuple.iter().collect())
+}
+
+/// Phase II gate, imports half: the staged tuple may replace the Python
+/// `_get_vars` walk in `build_imports_dict` only when the class keeps the
+/// base `_get_vars` (forms.py overrides it to add extra vars).
+fn vars_native_safe(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> bool {
+    class_bool_flag(
+        component,
+        refs,
+        |m| m.vars_native_safe,
+        |m, v| m.vars_native_safe = Some(v),
+        || {
+            component
+                .get_type()
+                .getattr("_get_vars")
+                .map(|f| f.is(&refs.component_get_vars_base))
+                .unwrap_or(false)
+        },
+    )
+}
+
+/// Phase II gate, hooks half: the staged tuple may replace the whole
+/// `_get_hooks_internal` chain only when every method in the chain is the
+/// base implementation.
+fn hooks_internal_native_safe(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> bool {
+    class_bool_flag(
+        component,
+        refs,
+        |m| m.hooks_internal_native_safe,
+        |m, v| m.hooks_internal_native_safe = Some(v),
+        || {
+            let ty = component.get_type();
+            [
+                ("_get_vars", &refs.component_get_vars_base),
+                ("_get_vars_hooks", &refs.component_get_vars_hooks_base),
+                ("_get_events_hooks", &refs.component_get_events_hooks_base),
+                ("_get_hooks_internal", &refs.component_get_hooks_internal_base),
+            ]
+            .iter()
+            .all(|(name, base)| {
+                ty.getattr(*name).map(|f| f.is(*base)).unwrap_or(false)
+            })
+        },
+    )
+}
+
 /// B: a class-level boolean fact, cached on `ClassMetadata`. `get`/`set`
 /// select the field; `compute` runs once per class.
 fn class_bool_flag(
@@ -1145,6 +1204,41 @@ fn imports_list_for<'py>(
 /// Append a `VarData.imports`-shaped tuple of `(lib, ImportVars)` pairs into
 /// `result`, preserving pair order (the `merge_imports(*pairs)` semantics —
 /// no last-wins collapsing).
+/// The Python half of `build_imports_dict` step 5: walk `_get_vars()` and
+/// merge each var's `dict(var_data.imports)`. Used when the node has no
+/// staged `_vars_cache` (or its class/vars fail the native gates).
+fn build_imports_var_walk<'py>(
+    py: Python<'py>,
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
+    result: &Bound<'py, PyDict>,
+) -> Result<(), PyReadError> {
+    if let Ok(vars) = component.call_method0("_get_vars") {
+        if let Ok(iter) = vars.iter() {
+            for var in iter.flatten() {
+                let var_data =
+                    match refs.call_cached0(&var, refs.attrs.m_get_all_var_data.bind(py), |c| {
+                        &mut c.get_all_var_data
+                    }) {
+                        Ok(vd) if !vd.is_none() => vd,
+                        _ => continue,
+                    };
+                let Ok(imports_obj) = var_data.getattr("imports") else {
+                    continue;
+                };
+                // `dict(var_data.imports)`: tuple-of-pairs -> last-wins dict.
+                let Ok(vi) = refs.dict_builtin.call1((imports_obj,)) else {
+                    continue;
+                };
+                if let Ok(d) = vi.downcast::<PyDict>() {
+                    extend_imports_dict(result, d)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn extend_imports_pairs<'py>(
     result: &Bound<'py, PyDict>,
     pairs: &Bound<'py, PyAny>,
@@ -1310,28 +1404,58 @@ fn build_imports_dict<'py>(
         }
     }
     // 5. var_imports: `dict(var_data.imports)` for each Var the component uses.
-    if let Ok(vars) = component.call_method0("_get_vars") {
-        if let Ok(iter) = vars.iter() {
-            for var in iter.flatten() {
-                let var_data =
-                    match refs.call_cached0(&var, refs.attrs.m_get_all_var_data.bind(py), |c| {
-                        &mut c.get_all_var_data
-                    }) {
-                        Ok(vd) if !vd.is_none() => vd,
-                        _ => continue,
+    //    Phase II fast path: the construction-staged `_vars_cache` tuple is
+    //    read natively when every entry is a native var — no `_get_vars`
+    //    generator and no per-var `_get_all_var_data` Python calls. The
+    //    `native_var` gate guarantees `_get_all_var_data` is the base
+    //    descriptor, so `var_data_ref()` is the same data the Python path
+    //    reads through `PyVarData`.
+    let mut staged_done = false;
+    if vars_native_safe(component, refs) {
+        if let Some(items) = staged_vars_items(component, refs) {
+            if items.iter().all(|v| native_var(v, refs).is_some()) {
+                for v in &items {
+                    let Some(vd) = native_var(v, refs).and_then(|rv| rv.var_data_ref())
+                    else {
+                        continue;
                     };
-                let Ok(imports_obj) = var_data.getattr("imports") else {
-                    continue;
-                };
-                // `dict(var_data.imports)`: tuple-of-pairs -> last-wins dict.
-                let Ok(vi) = refs.dict_builtin.call1((imports_obj,)) else {
-                    continue;
-                };
-                if let Ok(d) = vi.downcast::<PyDict>() {
-                    extend_imports_dict(&result, d)?;
+                    if vd.imports.is_empty() {
+                        continue;
+                    }
+                    // `dict(var_data.imports)`: tuple-of-pairs → last-wins
+                    // value, first-seen key order — replicated before the
+                    // extend, exactly like the Python path below.
+                    let mut ordered: Vec<(&String, &Vec<reflex_vars::ImportVar>)> =
+                        Vec::with_capacity(vd.imports.len());
+                    for (lib, ivs) in &vd.imports {
+                        if let Some(slot) = ordered.iter_mut().find(|(l, _)| *l == lib) {
+                            slot.1 = ivs;
+                        } else {
+                            ordered.push((lib, ivs));
+                        }
+                    }
+                    for (lib, ivs) in ordered {
+                        let lib_obj = PyString::new_bound(py, lib).into_any();
+                        let target = imports_list_for(&result, &lib_obj)?;
+                        for iv in ivs {
+                            let obj = Bound::new(
+                                py,
+                                reflex_vars::PyImportVar::from_struct(iv.clone()),
+                            )
+                            .map_err(|source| PyReadError::Attr {
+                                attr: "PyImportVar::from_struct",
+                                source,
+                            })?;
+                            let _ = target.append(obj);
+                        }
+                    }
                 }
+                staged_done = true;
             }
         }
+    }
+    if !staged_done {
+        build_imports_var_walk(py, component, refs, &result)?;
     }
     // 6. add_imports overrides: parse_imports(clz.add_imports(self)) per class.
     if let Ok(classes) = component.call_method1(
@@ -1849,6 +1973,63 @@ where
 {
     let py = component.py();
     let mut out: SmallVec<[HookEntry; N]> = SmallVec::new();
+    // Phase II (immutable components): the construction-staged var harvest
+    // replaces the whole `_get_hooks_internal` chain when the node has no
+    // event triggers (no events hooks, no mount-lifecycle hook), no
+    // id-derived ref hook, and the class keeps the chain's base methods.
+    // Hook positions are INTERNAL by construction: native `VarData` stores
+    // flat hook lines and the `PyVarData.position` getter is always None,
+    // so the Python path resolves every vars-hook to position 0 as well.
+    if hooks_internal_native_safe(component, refs) {
+        if let Some(items) = staged_vars_items(component, refs) {
+            let inst_dict = crate::pyo3_reader::instance_dict(component, refs);
+            let triggers_empty = match read_field(
+                component,
+                inst_dict.as_ref(),
+                "event_triggers",
+                &refs.attrs.event_triggers,
+                refs,
+            ) {
+                Some(v) if !v.is_none() => !v.is_truthy().unwrap_or(true),
+                _ => true,
+            };
+            let id_unset = match read_field(
+                component,
+                inst_dict.as_ref(),
+                "id",
+                &refs.attrs.id,
+                refs,
+            ) {
+                Some(v) => v.is_none(),
+                None => true,
+            };
+            if triggers_empty
+                && id_unset
+                && items.iter().all(|v| native_var(v, refs).is_some())
+            {
+                // First-seen dedup, var order then hook order — matches the
+                // Python dict-update insertion semantics.
+                let mut seen: SmallVec<[Symbol; 8]> = SmallVec::new();
+                for v in &items {
+                    let Some(vd) = native_var(v, refs).and_then(|rv| rv.var_data_ref())
+                    else {
+                        continue;
+                    };
+                    for code in &vd.hooks {
+                        if code.is_empty() {
+                            continue;
+                        }
+                        let sym = intern(code);
+                        if !seen.contains(&sym) {
+                            seen.push(sym);
+                            out.push(HookEntry::new(sym, 0));
+                        }
+                    }
+                }
+                return Ok(out);
+            }
+        }
+    }
     let v = match refs.call_cached0(component, refs.attrs.m_get_hooks_internal.bind(py), |c| {
         &mut c.get_hooks_internal
     }) {

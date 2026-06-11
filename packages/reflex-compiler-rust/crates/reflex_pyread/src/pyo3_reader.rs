@@ -90,6 +90,15 @@ pub struct PyRefs<'py> {
     /// directly takes the fold path, where `_apply_style_fold` raises
     /// the same UserWarning the legacy fold raised.
     pub component_add_style_base: Bound<'py, PyAny>,
+    /// Phase II (immutable components) identity baselines: the staged
+    /// `_vars_cache` tuple may only replace the Python harvest when the
+    /// class keeps the base implementations of the whole chain —
+    /// `_get_vars` (forms.py overrides it), `_get_vars_hooks`,
+    /// `_get_events_hooks`, and `_get_hooks_internal`.
+    pub component_get_vars_base: Bound<'py, PyAny>,
+    pub component_get_vars_hooks_base: Bound<'py, PyAny>,
+    pub component_get_events_hooks_base: Bound<'py, PyAny>,
+    pub component_get_hooks_internal_base: Bound<'py, PyAny>,
     /// `Component._exclude_props` — identity baseline so the freeze only
     /// calls the override on classes that actually exclude props.
     pub component_exclude_props_base: Bound<'py, PyAny>,
@@ -309,6 +318,7 @@ pub struct InternedAttrs {
     pub m_add_style: Py<PyString>,
     pub m_create: Py<PyString>,
     pub style_fold_root: Py<PyString>,
+    pub vars_cache: Py<PyString>,
 }
 
 impl InternedAttrs {
@@ -371,6 +381,7 @@ impl InternedAttrs {
             m_add_style: s("_add_style"),
             m_create: s("create"),
             style_fold_root: s("_style_fold_root"),
+            vars_cache: s("_vars_cache"),
         }
     }
 }
@@ -473,6 +484,12 @@ pub struct ClassMetadata {
     /// — the fold then depends only on per-node state (App.style entry,
     /// style-is-dict). ``None`` until first observation.
     pub style_fold_base: Option<bool>,
+    /// Phase II: whether the staged `_vars_cache` tuple may replace the
+    /// Python var walk in `build_imports_dict` (`_get_vars` is base).
+    pub vars_native_safe: Option<bool>,
+    /// Phase II: whether the staged tuple may replace the whole
+    /// `_get_hooks_internal` chain (all four chain methods are base).
+    pub hooks_internal_native_safe: Option<bool>,
     /// Whether `_get_imports` on this class is the base implementation
     /// (drives the Rust `build_imports_dict` path).
     pub imports_is_base: Option<bool>,
@@ -653,6 +670,8 @@ impl Default for ClassMetadata {
             default_imports_safe: None,
             style_is_base: None,
             style_fold_base: None,
+            vars_native_safe: None,
+            hooks_internal_native_safe: None,
             imports_is_base: None,
             rustvar_direct: None,
             add_custom_code_chain_empty: None,
@@ -910,6 +929,25 @@ impl<'py> PyRefs<'py> {
                 attr: "reflex_base.components.component.Component._add_style",
                 source,
             })?;
+        let component_cls = py
+            .import_bound("reflex_base.components.component")
+            .and_then(|m| m.getattr("Component"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.components.component.Component",
+                source,
+            })?;
+        let base_method = |name: &'static str| -> Result<Bound<'py, PyAny>, PyReadError> {
+            component_cls
+                .getattr(name)
+                .map_err(|source| PyReadError::Attr {
+                    attr: "Component base method",
+                    source,
+                })
+        };
+        let component_get_vars_base = base_method("_get_vars")?;
+        let component_get_vars_hooks_base = base_method("_get_vars_hooks")?;
+        let component_get_events_hooks_base = base_method("_get_events_hooks")?;
+        let component_get_hooks_internal_base = base_method("_get_hooks_internal")?;
         let events_imports = py
             .import_bound("reflex_base.constants.compiler")
             .and_then(|m| m.getattr("Imports"))
@@ -1010,6 +1048,10 @@ impl<'py> PyRefs<'py> {
             format_as_emotion,
             component_get_style_base,
             component_add_style_base,
+            component_get_vars_base,
+            component_get_vars_hooks_base,
+            component_get_events_hooks_base,
+            component_get_hooks_internal_base,
             component_exclude_props_base,
             component_render_base,
             events_imports,

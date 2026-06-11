@@ -3295,19 +3295,7 @@ impl PyVarData {
     /// duplicates preserved.
     #[getter]
     fn imports<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
-        let mut modules: Vec<Bound<'py, pyo3::types::PyTuple>> =
-            Vec::with_capacity(self.inner.imports.len());
-        for (lib, vars) in &self.inner.imports {
-            let mut ivs: Vec<Bound<'py, PyAny>> = Vec::with_capacity(vars.len());
-            for iv in vars {
-                ivs.push(Bound::new(py, PyImportVar { inner: iv.clone() })?.into_any());
-            }
-            let inner = pyo3::types::PyTuple::new_bound(py, ivs);
-            let pair: [Bound<'py, PyAny>; 2] =
-                [PyString::new_bound(py, lib).into_any(), inner.into_any()];
-            modules.push(pyo3::types::PyTuple::new_bound(py, pair));
-        }
-        Ok(pyo3::types::PyTuple::new_bound(py, modules))
+        imports_pairs_to_py(py, &self.inner.imports)
     }
 
     /// Deps as a tuple of bare `RustVar`s (the framework reads only `_js_expr`).
@@ -3341,6 +3329,28 @@ impl PyImportVar {
     pub fn from_struct(inner: ImportVar) -> Self {
         Self { inner }
     }
+}
+
+/// Convert native `(lib, imports)` pairs into the `ParsedImportTuple`
+/// Python shape `((lib, (ImportVar, ...)), ...)` — shared by the
+/// `PyVarData.imports` getter and the freeze's staged-vars fast path so
+/// both produce identical objects.
+pub fn imports_pairs_to_py<'py>(
+    py: Python<'py>,
+    pairs: &[(String, Vec<ImportVar>)],
+) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+    let mut modules: Vec<Bound<'py, pyo3::types::PyTuple>> = Vec::with_capacity(pairs.len());
+    for (lib, vars) in pairs {
+        let mut ivs: Vec<Bound<'py, PyAny>> = Vec::with_capacity(vars.len());
+        for iv in vars {
+            ivs.push(Bound::new(py, PyImportVar { inner: iv.clone() })?.into_any());
+        }
+        let inner = pyo3::types::PyTuple::new_bound(py, ivs);
+        let pair: [Bound<'py, PyAny>; 2] =
+            [PyString::new_bound(py, lib).into_any(), inner.into_any()];
+        modules.push(pyo3::types::PyTuple::new_bound(py, pair));
+    }
+    Ok(pyo3::types::PyTuple::new_bound(py, modules))
 }
 
 /// A Rust-backed `ImportVar` exposed to Python. The framework reads `tag`

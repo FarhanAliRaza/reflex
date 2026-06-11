@@ -281,7 +281,23 @@ dict. No arena, no generations: the tuple is owned by the component; immutabilit
   `create()`'s `_validate_children` is now skipped under the arena scope (raises only;
   321 k isinstance/compile). Gates: 24-fixture parity suite, fork-pair docs diff
   427/427 byte-identical, oracle 27/27, suites green.
-- **Phase II — NEXT: freeze consumes `_vars_cache` natively.** In freeze.rs, the two
+- **Phase II — DONE (2026-06-11): freeze consumes `_vars_cache` natively.**
+  Landed as specced below; measured outcome and the follow-up it exposed:
+  `_get_hooks_internal` Python executions halved (276k → 143k calls, 4.06 → 2.69 s
+  cum profiled; `_get_vars_hooks` 2.59 → 1.66 s), and the imports walk's per-var
+  `_get_all_var_data` Python calls are gone for staged nodes. Remaining `_get_vars`
+  frames split: 160k = the construction-time PRIMING itself (phase I runs the Python
+  harvest once at create — i.e. staged nodes still pay the harvest, just earlier),
+  81k+79k = el-forms classes overriding `_get_vars` (gated out by design), and the
+  rest = event/ref-bearing nodes (hooks gate) and rich/invalidated nodes.
+  **Next refinement: build the staged tuple directly from mirror-held values**
+  (prop vars, style var_data, chain vars are all in hand in `_arena_mirror_kwargs`)
+  instead of running `_get_vars` — kills the priming double-pay. Requires the
+  class-default-Var handling analyzed earlier: per-class precomputed default prop
+  vars (defaults are class-level; factory-produced Var defaults make a class
+  ineligible). Gates: oracle 27/27; 40 parity fixtures; fork-pair docs diff
+  **427/427 byte-identical** with the native branch live; suites green (known 6).
+  Original spec follows. In freeze.rs, the two
   `_get_vars` consumers are `read_hooks_internal` (freeze.rs:1843 →
   `_get_hooks_internal` → `_get_vars_hooks`, component.py:2372) and
   `build_imports_dict`'s var-imports step (`_get_imports`'s `var_imports`,
