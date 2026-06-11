@@ -2084,7 +2084,7 @@ where
                     refs,
                 );
                 let mut seen: SmallVec<[Symbol; 8]> = SmallVec::new();
-                let mut push_entry = |out: &mut SmallVec<[HookEntry; N]>,
+                let push_entry = |out: &mut SmallVec<[HookEntry; N]>,
                                       seen: &mut SmallVec<[Symbol; 8]>,
                                       sym: Symbol| {
                     // dict-update semantics: first-seen order; later
