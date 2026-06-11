@@ -365,6 +365,29 @@ def test_setattr_invalidates_staged_vars():
     assert "_vars_cache" in comp.__dict__
 
 
+def test_direct_vars_build_matches_get_vars():
+    # The direct mirror-built harvest must equal what _get_vars computes
+    # on the same instance: same exprs, same var_data, same order.
+    fixtures = [
+        lambda: rx.input(value=_STATE_VAR, placeholder="p"),
+        lambda: rx.text("hi", size="3", class_name="a b", key="k", id="i"),
+        lambda: rx.text("sty", color=_STATE_VAR, _hover={"color": "red"}),
+        lambda: rx.button("ev", on_click=rx.console_log("x")),
+        lambda: rx.el.div("attrs", custom_attrs={"data-x": _STATE_VAR}),
+        lambda: rx.text(f"embedded {_STATE_VAR} tail"),
+    ]
+    for build in fixtures:
+        with arena_construction():
+            comp = build()
+        direct = comp.__dict__.pop("_vars_cache", None)
+        assert direct is not None
+        recomputed = tuple(comp._get_vars())
+        assert len(direct) == len(recomputed)
+        for a, b in zip(direct, recomputed, strict=True):
+            assert a._js_expr == b._js_expr
+            assert (a._get_all_var_data() is None) == (b._get_all_var_data() is None)
+
+
 def test_scope_is_context_local():
     from reflex_base.components.component import _ARENA_CONSTRUCTION
 

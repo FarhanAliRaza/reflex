@@ -1665,6 +1665,110 @@ class Component(BaseComponent, ABC):
         return mirror
 
     @classmethod
+    def _arena_vars_class_info(cls) -> tuple | None:
+        """Per-class facts for building the var harvest without ``_get_vars``.
+
+        Returns:
+            ``(prop_default_vars, class_name_default, id_default,
+            key_default)`` — Var-valued class-level prop defaults (shared
+            instances, exactly what an unset-prop getattr returns) plus the
+            resolved identity-prop defaults. ``None`` when the class is
+            ineligible for the direct build (a factory-produced Var default,
+            or non-stock factories on the identity/container fields) — those
+            classes prime the cache through ``_get_vars`` instead.
+        """
+        cached = cls.__dict__.get("_arena_vars_info_cache", False)
+        if cached is not False:
+            return cached
+        fields = cls.get_fields()
+        info: tuple | None
+        prop_default_vars: dict[str, Any] = {}
+        for name in cls.get_props():
+            f = fields[name]
+            if f.default_factory is not None:
+                if _is_var(f.default_factory()):
+                    cls._arena_vars_info_cache = None
+                    return None
+            elif f.default is not MISSING and _is_var(f.default):
+                prop_default_vars[name] = f.default
+        identity_defaults = []
+        for name in ("class_name", "id", "key"):
+            f = fields[name]
+            if f.default_factory is not None:
+                cls._arena_vars_info_cache = None
+                return None
+            identity_defaults.append(f.default if f.default is not MISSING else None)
+        for name in ("custom_attrs", "special_props", "event_triggers"):
+            f = fields[name]
+            if f.default_factory not in (dict, list):
+                cls._arena_vars_info_cache = None
+                return None
+        info = (prop_default_vars, *identity_defaults)
+        cls._arena_vars_info_cache = info
+        return info
+
+    @classmethod
+    def _arena_build_vars(cls, mirror: dict[str, Any], info: tuple) -> tuple:
+        """Build the ``_vars_cache`` tuple from mirror-held values.
+
+        Replicates ``_get_vars``' output exactly — same var objects, same
+        order — without the per-prop getattr walk or the generator: event
+        trigger vars, prop vars in ``get_props`` order (class-default Vars
+        for unset props), the synthetic style var, special props, and the
+        identity props with the f-string VarData collapse.
+
+        Args:
+            mirror: The constructed instance ``__dict__`` payload.
+            info: The per-class facts from ``_arena_vars_class_info``.
+
+        Returns:
+            The harvest tuple, ready for ``_vars_cache``.
+        """
+        prop_default_vars, cn_default, id_default, key_default = info
+        out: list[Var] = []
+        event_triggers = mirror.get("event_triggers")
+        if event_triggers:
+            for _, event_vars in cls._get_vars_from_event_triggers(event_triggers):
+                out.extend(event_vars)
+        for prop in cls._construction_schema().props:
+            value = mirror.get(prop, MISSING)
+            if value is MISSING:
+                default_var = prop_default_vars.get(prop)
+                if default_var is not None:
+                    out.append(default_var)
+            elif _is_var(value):
+                out.append(value)
+        style = mirror.get("style")
+        if style:
+            out.append(
+                Var(
+                    _js_expr="style",
+                    _var_type=str,
+                    _var_data=VarData.merge(style._var_data),
+                )
+            )
+        special_props = mirror.get("special_props")
+        if special_props:
+            out.extend(special_props)
+        custom_attrs = mirror.get("custom_attrs")
+        for comp_prop in (
+            mirror.get("class_name", cn_default),
+            mirror.get("id", id_default),
+            mirror.get("key", key_default),
+            *(custom_attrs.values() if custom_attrs else ()),
+        ):
+            if _is_var(comp_prop):
+                out.append(comp_prop)
+            elif (
+                isinstance(comp_prop, str)
+                and constants.REFLEX_VAR_OPENING_TAG in comp_prop
+            ):
+                var = LiteralVar.create(comp_prop)
+                if var._get_all_var_data() is not None:
+                    out.append(var)
+        return tuple(out)
+
+    @classmethod
     def _create(cls: type[T], children: Sequence[BaseComponent], **props: Any) -> T:
         """Create the component.
 
@@ -1684,12 +1788,15 @@ class Component(BaseComponent, ABC):
                 # Stage the var harvest at construction (the data the
                 # freeze consumes for hooks/imports — VarData already
                 # lives Rust-side post Var-cutover, so the cache tuple is
-                # the staged index into it). `_get_vars` fills
-                # `_vars_cache` itself; `__setattr__` drops it on any
-                # post-create write, keeping the immutability contract
-                # safe for the audited create()-override mutators.
-                for _ in comp._get_vars():
-                    pass
+                # the staged index into it). Built directly from the
+                # mirror when the class allows; `__setattr__` drops it on
+                # any post-create harvest-field write.
+                info = cls._arena_vars_class_info()
+                if info is not None:
+                    comp.__dict__["_vars_cache"] = cls._arena_build_vars(mirror, info)
+                else:
+                    for _ in comp._get_vars():
+                        pass
                 return comp
         comp._post_init(children=list(children), **props)
         return comp
@@ -2116,8 +2223,14 @@ class Component(BaseComponent, ABC):
         ):
             if _is_var(comp_prop):
                 vars.append(comp_prop)
-            elif isinstance(comp_prop, str):
-                # Collapse VarData encoded in f-strings.
+            elif (
+                isinstance(comp_prop, str)
+                and constants.REFLEX_VAR_OPENING_TAG in comp_prop
+            ):
+                # Collapse VarData encoded in f-strings. The marker
+                # pre-check hoists the decoder's own first test: without
+                # the opening tag, `LiteralVar.create` cannot yield
+                # VarData, so the construction is skipped entirely.
                 var = LiteralVar.create(comp_prop)
                 if var._get_all_var_data() is not None:
                     vars.append(var)
