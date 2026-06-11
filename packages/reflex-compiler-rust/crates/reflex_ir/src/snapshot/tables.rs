@@ -55,6 +55,10 @@ pub struct ControlFlowExtras {
     pub cond_test: HashMap<NodeIdx, Symbol>,
     /// `Foreach.iter`: pre-rendered JS expression for the iterable.
     pub foreach_iter: HashMap<NodeIdx, Symbol>,
+    /// `Foreach` callback parameter names `(arg, index)` from the
+    /// `IterTag` — the frozen body JSX references these names, so the
+    /// emitters must use them rather than fixed placeholders.
+    pub foreach_args: HashMap<NodeIdx, (Symbol, Symbol)>,
     /// `Match.value`: pre-rendered JS expression for the matched value.
     pub match_value: HashMap<NodeIdx, Symbol>,
     /// `Match.arms`: `(case_expr, body_node_idx)` pairs per match node.
@@ -63,6 +67,13 @@ pub struct ControlFlowExtras {
     pub match_default: HashMap<NodeIdx, NodeIdx>,
     /// `Expr.value`: pre-rendered JS expression for inline-rendered Vars.
     pub expr_value: HashMap<NodeIdx, Symbol>,
+    /// Per-node ``add_custom_code`` MRO contributions (mirrors the chain
+    /// half of ``_get_all_custom_code``; the node's own
+    /// ``_get_custom_code`` lives in ``NodeSnapshot.custom_code``).
+    pub custom_code_extra: HashMap<NodeIdx, SmallVec<[Symbol; 2]>>,
+    /// Per-node spread props (``Tag.special_props``): pre-rendered Var
+    /// expressions emitted as ``...{expr}`` after the keyed props.
+    pub special_props: HashMap<NodeIdx, SmallVec<[Symbol; 1]>>,
     /// `Memoize.key`: memo wrapper key (React `key=` value).
     pub memo_key: HashMap<NodeIdx, Symbol>,
 }

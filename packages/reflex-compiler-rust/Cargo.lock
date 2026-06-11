@@ -293,6 +293,7 @@ dependencies = [
  "reflex_arena",
  "reflex_intern",
  "reflex_ir",
+ "reflex_vars",
  "smallvec",
  "thiserror",
 ]

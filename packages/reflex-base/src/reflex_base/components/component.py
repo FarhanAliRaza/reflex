@@ -46,6 +46,7 @@ from reflex_base.vars.base import (
     FunctionStringVar,
     LiteralVar,
     ObjectVar,
+    RustLiteralVar,
     StringVar,
     Var,
     cached_property_no_lock,
@@ -53,8 +54,54 @@ from reflex_base.vars.base import (
     var_isinstance,
 )
 
+_NEVER_VAR_TYPES = frozenset({
+    type(None),
+    str,
+    bool,
+    int,
+    float,
+    list,
+    dict,
+    tuple,
+    set,
+})
+
+
+def _is_var(value: Any) -> bool:
+    """Whether ``value`` is a Var, with exact-type fast paths.
+
+    ``isinstance(value, Var)`` takes the abc virtual-subclass slow path
+    (the native ``RustVar`` is registered, not inherited). Prop values are
+    overwhelmingly either native vars or plain literals (``None``/``str``
+    for unset fields), so settle both without the abc machinery.
+
+    Args:
+        value: The value to check.
+
+    Returns:
+        True if the value is a Var.
+    """
+    t = type(value)
+    if t is RustVar or t is RustLiteralVar:
+        return True
+    if t in _NEVER_VAR_TYPES:
+        return False
+    return isinstance(value, Var)
+
+
 if TYPE_CHECKING:
     import reflex.state
+
+# Constant halves of `_get_hooks_imports`, read by the Rust freeze so it can
+# derive hook-implied imports from already-frozen data (ref presence,
+# on_mount/on_unmount triggers) instead of re-rendering the hooks.
+_REF_HOOK_IMPORTS: ParsedImportDict = {
+    "react": [ImportVar(tag="useRef")],
+    f"$/{Dirs.STATE_PATH}": [ImportVar(tag="refs")],
+}
+_LIFECYCLE_HOOK_IMPORTS: ParsedImportDict = {
+    "react": [ImportVar(tag="useEffect")],
+}
 
 FIELD_TYPE = TypeVar("FIELD_TYPE")
 
@@ -310,16 +357,27 @@ class BaseComponentMeta(FieldBasedMeta, ABCMeta):
             if value.is_javascript is True
         }
 
-        # Install each own field as a class-level descriptor so unset instance
-        # attributes resolve to their default through ``ComponentField.__get__``
-        # (inherited fields resolve via the MRO). A name bound to a plain value
-        # — a ``@property``, method, or literal default — serves the attribute
-        # itself, so only absent names and field() markers get the descriptor.
+        # Resolve unset instance attributes to their defaults at the class
+        # level (inherited fields resolve via the MRO). A name bound to a
+        # plain value — a ``@property``, method, or literal default — serves
+        # the attribute itself, so only absent names and field() markers are
+        # touched. Scalar defaults are installed as plain class attributes:
+        # attribute lookup then resolves at C speed with the same semantics
+        # as ``ComponentField.__get__`` (shared value, instance ``__dict__``
+        # shadows it). The descriptor is only needed when reads must run
+        # code: factory defaults (materialize per instance), no-default
+        # fields (raise ``AttributeError`` even when a parent class attr
+        # exists), and defaults that are themselves descriptors (e.g. a
+        # ``Var``), which a plain class attr would wrongly bind through.
         for field_name, field_ in own_fields.items():
             if field_name not in namespace or isinstance(
                 namespace[field_name], ComponentField
             ):
-                namespace[field_name] = field_
+                default = field_.default
+                if default is MISSING or hasattr(type(default), "__get__"):
+                    namespace[field_name] = field_
+                else:
+                    namespace[field_name] = default
 
 
 class BaseComponent(metaclass=BaseComponentMeta):
@@ -1412,11 +1470,21 @@ class Component(BaseComponent, ABC):
         if type(self)._add_style != Component._add_style:
             msg = "Do not override _add_style directly. Use add_style instead."
             raise UserWarning(msg)
+        # Per-class fast path: with no `add_style` override on the MRO
+        # (cached lookup) and no `App.style` entry for this class, the
+        # fold below reduces to rebuilding `self.style` from itself —
+        # skip straight to the children. Var styles (assigned via
+        # `_create_unchecked`) still take the fold.
         if (
-            not style
-            and not isinstance(self.style, Var)
-            and not self.style
+            isinstance(self.style, dict)
             and not type(self)._iter_parent_classes_with_method("add_style")
+            and (
+                not style
+                or (
+                    style.get(type(self)) is None  # pyright: ignore [reportArgumentType]
+                    and style.get(self.create) is None  # pyright: ignore [reportArgumentType]
+                )
+            )
         ):
             for child in self.children:
                 if isinstance(child, Component):
@@ -1685,7 +1753,7 @@ class Component(BaseComponent, ABC):
         # Get Vars associated with component props.
         for prop in self.get_props():
             prop_var = getattr(self, prop)
-            if isinstance(prop_var, Var):
+            if _is_var(prop_var):
                 vars.append(prop_var)
 
         # Style keeps track of its own VarData instance, so embed in a temp Var that is yielded.
@@ -1708,7 +1776,7 @@ class Component(BaseComponent, ABC):
             self.key,
             *self.custom_attrs.values(),
         ):
-            if isinstance(comp_prop, Var):
+            if _is_var(comp_prop):
                 vars.append(comp_prop)
             elif isinstance(comp_prop, str):
                 # Collapse VarData encoded in f-strings.

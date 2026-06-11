@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from reflex_base import constants
+from reflex_base.compiler.templates import _RenderUtils
 from reflex_base.components.component import (
     BaseComponent,
     Component,
@@ -470,6 +471,45 @@ def _compile_memo_components(
             _extend_imports_in_place(aggregate_imports, file_imports)
 
     return per_memo_files, aggregate_imports
+
+
+def _format_memo_imports(
+    harvested: dict[str, list[ImportVar]], export_name: str
+) -> tuple[str, dict[str, list[ImportVar]]]:
+    """Build one rx.memo module's import header (legacy format).
+
+    Called once per memo by the Rust ``compile_rx_memo_arena`` emitter over
+    the freeze-harvested import dict — the one Python step in that path,
+    because full ``ImportVar`` fidelity (default imports, render flags)
+    lives in these dicts. Mirrors the import handling of
+    :func:`reflex.compiler.utils.compile_experimental_component_memo` +
+    :func:`_compile_single_memo_component` exactly.
+
+    Args:
+        harvested: The freeze-harvested imports for the memo's tree.
+        export_name: The memo's export name, for self-import stripping.
+
+    Returns:
+        The rendered import lines and the merged import dict (the memo's
+        bun-install contribution).
+    """
+    self_module = f"$/{constants.Dirs.COMPONENTS_PATH}/{export_name}"
+    component_imports = {
+        lib: fields for lib, fields in harvested.items() if lib != self_module
+    }
+    component_imports.setdefault("@emotion/react", []).append(ImportVar("jsx"))
+    imports = utils.merge_imports(
+        {
+            "react": [ImportVar(tag="memo")],
+            f"$/{constants.Dirs.STATE_PATH}": [ImportVar(tag="isTrue")],
+        },
+        component_imports,
+    )
+    _apply_common_imports(imports)
+    lines = "\n".join(
+        _RenderUtils.get_import(imp) for imp in utils.compile_imports(imports)
+    )
+    return lines, imports
 
 
 def _compile_single_memo_component(

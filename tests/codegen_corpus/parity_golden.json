@@ -1,0 +1,640 @@
+{
+ "bench:complicated": {
+  "imports": {
+   "$/utils/context": [
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "@emotion/react": [
+    "('keyframes', None, False, True, True, '/')"
+   ],
+   "@radix-ui/react-accordion@1.2.12": [
+    "('Content', 'RadixAccordionContent', False, True, True, '/')",
+    "('Header', 'RadixAccordionHeader', False, True, True, '/')",
+    "('Item', 'RadixAccordionItem', False, True, True, '/')",
+    "('Root', 'RadixAccordionRoot', False, True, True, '/')",
+    "('Trigger', 'RadixAccordionTrigger', False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')",
+    "('Flex', 'RadixThemesFlex', False, True, True, '/')",
+    "('Heading', 'RadixThemesHeading', False, True, True, '/')",
+    "('Link', 'RadixThemesLink', False, True, True, '/')",
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "lucide-react@1.14.0": [
+    "('Banana', 'LucideBanana', False, True, True, '/')",
+    "('ChevronDown', 'LucideChevronDown', False, True, True, '/')",
+    "('Home', 'LucideHome', False, True, True, '/')",
+    "('Info', 'LucideInfo', False, True, True, '/')",
+    "('Worm', 'LucideWorm', False, True, True, '/')"
+   ],
+   "react": [
+    "('useContext', None, False, True, True, '/')"
+   ],
+   "react-router": [
+    "('Link', 'ReactRouterLink', False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "AccordionRoot_memo_0ecbca2fbe9c84e5",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { Flex as RadixThemesFlex, Box as RadixThemesBox, Heading as RadixThemesHeading, Link as RadixThemesLink, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { Root as RadixAccordionRoot, Item as RadixAccordionItem, Header as RadixAccordionHeader, Content as RadixAccordionContent, Trigger as RadixAccordionTrigger } from \"@radix-ui/react-accordion\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Link as ReactRouterLink } from \"react-router\";\nimport { keyframes, jsx } from \"@emotion/react\";\nimport { ChevronDown as LucideChevronDown, Home as LucideHome, Info as LucideInfo, Worm as LucideWorm, Banana as LucideBanana } from \"lucide-react\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\n\nexport const AccordionRoot_memo_0ecbca2fbe9c84e5 = memo(({ children }) => {\n  const reflex___state____state__tests___benchmarks___fixtures____side_bar_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____side_bar_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixAccordionRoot, {collapsible: true, css: ({ [\"width\"] : \"100%\" }), defaultValue: (() => { switch (JSON.stringify(reflex___state____state__tests___benchmarks___fixtures____side_bar_state.current_page_rx_state_)) {case JSON.stringify(\"Python\"):  return (\"Python\");  break;case JSON.stringify(\"JavaScript\"):  return (\"JavaScript\");  break;default:  return (null);  break;};})(), type: \"multiple\"}, jsx(RadixAccordionItem, {className: \"AccordionItem\", css: ({ [\"width\"] : \"100%\" }), value: \"Python\", variant: \"ghost\"}, jsx(RadixAccordionHeader, {className: \"AccordionHeader\"}, jsx(RadixAccordionTrigger, {className: \"AccordionTrigger\"}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", css: ({ [\"width\"] : \"100%\" }), direction: \"row\", justify: \"between\", gap: \"3\"}, jsx(RadixThemesFlex, {align: \"center\", className: \"rx-Stack\", direction: \"row\", gap: \"3\"}, jsx(LucideWorm, {}), \"Python\"), jsx(LucideChevronDown, {className: \"AccordionChevron\"})))), jsx(RadixAccordionContent, {className: \"AccordionContent\", css: ({ [\"borderInlineStart\"] : \"1px solid\", [\"paddingInlineStart\"] : \"1em\", [\"marginInlineStart\"] : \"1.5em\" })}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", direction: \"column\", gap: \"3\"}, jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/python\"}, \"Python\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/django\"}, \"Django\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/flask\"}, \"Flask\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/fastapi\"}, \"FastAPI\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/pyramid\"}, \"Pyramid\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/tornado\"}, \"Tornado\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/turbogears\"}, \"TurboGears\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/web2py\"}, \"Web2py\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/zope\"}, \"Zope\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/plone\"}, \"Plone\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/quixote\"}, \"Quixote\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/bottle\"}, \"Bottle\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/cherrypy\"}, \"CherryPy\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/falcon\"}, \"Falcon\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/sanic\"}, \"Sanic\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/starlette\"}, \"Starlette\")))))), jsx(RadixAccordionItem, {className: \"AccordionItem\", css: ({ [\"width\"] : \"100%\" }), value: \"JavaScript\", variant: \"ghost\"}, jsx(RadixAccordionHeader, {className: \"AccordionHeader\"}, jsx(RadixAccordionTrigger, {className: \"AccordionTrigger\"}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", css: ({ [\"width\"] : \"100%\" }), direction: \"row\", justify: \"between\", gap: \"3\"}, jsx(RadixThemesFlex, {align: \"center\", className: \"rx-Stack\", direction: \"row\", gap: \"3\"}, jsx(LucideBanana, {}), \"JavaScript\"), jsx(LucideChevronDown, {className: \"AccordionChevron\"})))), jsx(RadixAccordionContent, {className: \"AccordionContent\", css: ({ [\"borderInlineStart\"] : \"1px solid\", [\"paddingInlineStart\"] : \"1em\", [\"marginInlineStart\"] : \"1.5em\" })}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", direction: \"column\", gap: \"3\"}, jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/javascript\"}, \"JavaScript\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/angular\"}, \"Angular\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/react\"}, \"React\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/vue\"}, \"Vue\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/ember\"}, \"Ember\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/backbone\"}, \"Backbone\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/meteor\"}, \"Meteor\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/svelte\"}, \"Svelte\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/preact\"}, \"Preact\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/mithril\"}, \"Mithril\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/aurelia\"}, \"Aurelia\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/polymer\"}, \"Polymer\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/knockout\"}, \"Knockout\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/dojo\"}, \"Dojo\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/riot\"}, \"Riot\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/alpine\"}, \"Alpine\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/stimulus\"}, \"Stimulus\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/marko\"}, \"Marko\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/sapper\"}, \"Sapper\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/nuxt\"}, \"Nuxt\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/next\"}, \"Next\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/gatsby\"}, \"Gatsby\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/gridsome\"}, \"Gridsome\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/nest\"}, \"Nest\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/express\"}, \"Express\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/koa\"}, \"Koa\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/hapi\"}, \"Hapi\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/loopback\"}, \"LoopBack\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/feathers\"}, \"Feathers\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/sails\"}, \"Sails\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/adonis\"}, \"Adonis\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/meteor\"}, \"Meteor\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/derby\"}, \"Derby\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/socketio\"}, \"Socket.IO\")))))));\n});\n"
+   ],
+   [
+    "AccordionRoot_memo_835b7d390ff9215c",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { Flex as RadixThemesFlex, Box as RadixThemesBox, Heading as RadixThemesHeading, Link as RadixThemesLink, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { Root as RadixAccordionRoot, Item as RadixAccordionItem, Header as RadixAccordionHeader, Content as RadixAccordionContent, Trigger as RadixAccordionTrigger } from \"@radix-ui/react-accordion\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Link as ReactRouterLink } from \"react-router\";\nimport { keyframes, jsx } from \"@emotion/react\";\nimport { ChevronDown as LucideChevronDown, Home as LucideHome, Info as LucideInfo, Worm as LucideWorm, Banana as LucideBanana } from \"lucide-react\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\n\nexport const AccordionRoot_memo_835b7d390ff9215c = memo(({ children }) => {\n  const reflex___state____state__tests___benchmarks___fixtures____side_bar_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____side_bar_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixAccordionRoot, {collapsible: true, css: ({ [\"width\"] : \"100%\" }), defaultValue: (() => { switch (JSON.stringify(reflex___state____state__tests___benchmarks___fixtures____side_bar_state.current_page_rx_state_)) {case JSON.stringify(\"Home\"):  return (\"Home\");  break;case JSON.stringify(\"About\"):  return (\"About\");  break;default:  return (null);  break;};})(), type: \"multiple\"}, jsx(RadixAccordionItem, {className: \"AccordionItem\", css: ({ [\"width\"] : \"100%\" }), value: \"Home\", variant: \"ghost\"}, jsx(RadixAccordionHeader, {className: \"AccordionHeader\"}, jsx(RadixAccordionTrigger, {className: \"AccordionTrigger\"}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", css: ({ [\"width\"] : \"100%\" }), direction: \"row\", justify: \"between\", gap: \"3\"}, jsx(RadixThemesFlex, {align: \"center\", className: \"rx-Stack\", direction: \"row\", gap: \"3\"}, jsx(LucideHome, {}), \"Home\"), jsx(LucideChevronDown, {className: \"AccordionChevron\"})))), jsx(RadixAccordionContent, {className: \"AccordionContent\", css: ({ [\"borderInlineStart\"] : \"1px solid\", [\"paddingInlineStart\"] : \"1em\", [\"marginInlineStart\"] : \"1.5em\" })}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", direction: \"column\", gap: \"3\"}, jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/\"}, \"Home\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/contact\"}, \"Contact\")))))), jsx(RadixAccordionItem, {className: \"AccordionItem\", css: ({ [\"width\"] : \"100%\" }), value: \"About\", variant: \"ghost\"}, jsx(RadixAccordionHeader, {className: \"AccordionHeader\"}, jsx(RadixAccordionTrigger, {className: \"AccordionTrigger\"}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", css: ({ [\"width\"] : \"100%\" }), direction: \"row\", justify: \"between\", gap: \"3\"}, jsx(RadixThemesFlex, {align: \"center\", className: \"rx-Stack\", direction: \"row\", gap: \"3\"}, jsx(LucideInfo, {}), \"About\"), jsx(LucideChevronDown, {className: \"AccordionChevron\"})))), jsx(RadixAccordionContent, {className: \"AccordionContent\", css: ({ [\"borderInlineStart\"] : \"1px solid\", [\"paddingInlineStart\"] : \"1em\", [\"marginInlineStart\"] : \"1.5em\" })}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", direction: \"column\", gap: \"3\"}, jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/about\"}, \"About\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/faq\"}, \"FAQ\")))))));\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Flex as RadixThemesFlex, Box as RadixThemesBox, Heading as RadixThemesHeading, Link as RadixThemesLink, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { Root as RadixAccordionRoot, Item as RadixAccordionItem, Header as RadixAccordionHeader, Content as RadixAccordionContent, Trigger as RadixAccordionTrigger } from \"@radix-ui/react-accordion\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Link as ReactRouterLink } from \"react-router\";\nimport { keyframes, jsx } from \"@emotion/react\";\nimport { ChevronDown as LucideChevronDown, Home as LucideHome, Info as LucideInfo, Worm as LucideWorm, Banana as LucideBanana } from \"lucide-react\";\nimport { AccordionRoot_memo_0ecbca2fbe9c84e5 } from \"$/utils/components/AccordionRoot_memo_0ecbca2fbe9c84e5\";\nimport { AccordionRoot_memo_835b7d390ff9215c } from \"$/utils/components/AccordionRoot_memo_835b7d390ff9215c\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\n\nexport default function Component() {\n  const reflex___state____state__tests___benchmarks___fixtures____side_bar_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____side_bar_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", direction: \"row\", gap: \"3\"}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", css: ({ [\"width\"] : \"fit-content\" }), direction: \"column\", gap: \"3\"}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", css: ({ [\"width\"] : \"100%\" }), direction: \"column\", gap: \"3\"}, jsx(RadixThemesHeading, {size: \"5\"}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/\"}, \"General\"))), jsx(AccordionRoot_memo_835b7d390ff9215c, {key: \"9465296725883822428\"}, jsx(RadixAccordionItem, {className: \"AccordionItem\", css: ({ [\"width\"] : \"100%\" }), value: \"Home\", variant: \"ghost\"}, jsx(RadixAccordionHeader, {className: \"AccordionHeader\"}, jsx(RadixAccordionTrigger, {className: \"AccordionTrigger\"}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", css: ({ [\"width\"] : \"100%\" }), direction: \"row\", justify: \"between\", gap: \"3\"}, jsx(RadixThemesFlex, {align: \"center\", className: \"rx-Stack\", direction: \"row\", gap: \"3\"}, jsx(LucideHome, {}), \"Home\"), jsx(LucideChevronDown, {className: \"AccordionChevron\"})))), jsx(RadixAccordionContent, {className: \"AccordionContent\", css: ({ [\"borderInlineStart\"] : \"1px solid\", [\"paddingInlineStart\"] : \"1em\", [\"marginInlineStart\"] : \"1.5em\" })}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", direction: \"column\", gap: \"3\"}, jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/\"}, \"Home\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/contact\"}, \"Contact\")))))), jsx(RadixAccordionItem, {className: \"AccordionItem\", css: ({ [\"width\"] : \"100%\" }), value: \"About\", variant: \"ghost\"}, jsx(RadixAccordionHeader, {className: \"AccordionHeader\"}, jsx(RadixAccordionTrigger, {className: \"AccordionTrigger\"}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", css: ({ [\"width\"] : \"100%\" }), direction: \"row\", justify: \"between\", gap: \"3\"}, jsx(RadixThemesFlex, {align: \"center\", className: \"rx-Stack\", direction: \"row\", gap: \"3\"}, jsx(LucideInfo, {}), \"About\"), jsx(LucideChevronDown, {className: \"AccordionChevron\"})))), jsx(RadixAccordionContent, {className: \"AccordionContent\", css: ({ [\"borderInlineStart\"] : \"1px solid\", [\"paddingInlineStart\"] : \"1em\", [\"marginInlineStart\"] : \"1.5em\" })}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", direction: \"column\", gap: \"3\"}, jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/about\"}, \"About\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/faq\"}, \"FAQ\")))))))), jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", css: ({ [\"width\"] : \"100%\" }), direction: \"column\", gap: \"3\"}, jsx(RadixThemesHeading, {size: \"5\"}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects\"}, \"Projects\"))), jsx(AccordionRoot_memo_0ecbca2fbe9c84e5, {key: \"1066168043213456613\"}, jsx(RadixAccordionItem, {className: \"AccordionItem\", css: ({ [\"width\"] : \"100%\" }), value: \"Python\", variant: \"ghost\"}, jsx(RadixAccordionHeader, {className: \"AccordionHeader\"}, jsx(RadixAccordionTrigger, {className: \"AccordionTrigger\"}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", css: ({ [\"width\"] : \"100%\" }), direction: \"row\", justify: \"between\", gap: \"3\"}, jsx(RadixThemesFlex, {align: \"center\", className: \"rx-Stack\", direction: \"row\", gap: \"3\"}, jsx(LucideWorm, {}), \"Python\"), jsx(LucideChevronDown, {className: \"AccordionChevron\"})))), jsx(RadixAccordionContent, {className: \"AccordionContent\", css: ({ [\"borderInlineStart\"] : \"1px solid\", [\"paddingInlineStart\"] : \"1em\", [\"marginInlineStart\"] : \"1.5em\" })}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", direction: \"column\", gap: \"3\"}, jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/python\"}, \"Python\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/django\"}, \"Django\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/flask\"}, \"Flask\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/fastapi\"}, \"FastAPI\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/pyramid\"}, \"Pyramid\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/tornado\"}, \"Tornado\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/turbogears\"}, \"TurboGears\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/web2py\"}, \"Web2py\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/zope\"}, \"Zope\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/plone\"}, \"Plone\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/quixote\"}, \"Quixote\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/bottle\"}, \"Bottle\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/cherrypy\"}, \"CherryPy\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/falcon\"}, \"Falcon\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/sanic\"}, \"Sanic\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/starlette\"}, \"Starlette\")))))), jsx(RadixAccordionItem, {className: \"AccordionItem\", css: ({ [\"width\"] : \"100%\" }), value: \"JavaScript\", variant: \"ghost\"}, jsx(RadixAccordionHeader, {className: \"AccordionHeader\"}, jsx(RadixAccordionTrigger, {className: \"AccordionTrigger\"}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", css: ({ [\"width\"] : \"100%\" }), direction: \"row\", justify: \"between\", gap: \"3\"}, jsx(RadixThemesFlex, {align: \"center\", className: \"rx-Stack\", direction: \"row\", gap: \"3\"}, jsx(LucideBanana, {}), \"JavaScript\"), jsx(LucideChevronDown, {className: \"AccordionChevron\"})))), jsx(RadixAccordionContent, {className: \"AccordionContent\", css: ({ [\"borderInlineStart\"] : \"1px solid\", [\"paddingInlineStart\"] : \"1em\", [\"marginInlineStart\"] : \"1.5em\" })}, jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", direction: \"column\", gap: \"3\"}, jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/javascript\"}, \"JavaScript\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/angular\"}, \"Angular\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/react\"}, \"React\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/vue\"}, \"Vue\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/ember\"}, \"Ember\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/backbone\"}, \"Backbone\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/meteor\"}, \"Meteor\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/svelte\"}, \"Svelte\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/preact\"}, \"Preact\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/mithril\"}, \"Mithril\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/aurelia\"}, \"Aurelia\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/polymer\"}, \"Polymer\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/knockout\"}, \"Knockout\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/dojo\"}, \"Dojo\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/riot\"}, \"Riot\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/alpine\"}, \"Alpine\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/stimulus\"}, \"Stimulus\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/marko\"}, \"Marko\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/sapper\"}, \"Sapper\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/nuxt\"}, \"Nuxt\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/next\"}, \"Next\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/gatsby\"}, \"Gatsby\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/gridsome\"}, \"Gridsome\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/nest\"}, \"Nest\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/express\"}, \"Express\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/koa\"}, \"Koa\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/hapi\"}, \"Hapi\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/loopback\"}, \"LoopBack\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/feathers\"}, \"Feathers\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/sails\"}, \"Sails\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/adonis\"}, \"Adonis\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/meteor\"}, \"Meteor\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/derby\"}, \"Derby\"))), jsx(RadixThemesBox, {}, jsx(RadixThemesLink, {asChild: true, css: ({ [\"&:hover\"] : ({ [\"color\"] : \"var(--accent-8)\" }) })}, jsx(ReactRouterLink, {to: \"/projects/socketio\"}, \"Socket.IO\"))))))))), jsx(RadixThemesBox, {}, jsx(RadixThemesHeading, {size: \"1\"}, \"Complicated Page\"), jsx(RadixThemesText, {as: \"p\"}, \"Lorem ipsum dolor sit amet, dolor ut dolore pariatur aliqua enim tempor sed. Labore excepteur sed exercitation. Ullamco aliquip lorem sunt enim in incididunt. Magna anim officia sint cillum labore. Ut eu non dolore minim nostrud magna eu, aute ex in incididunt irure eu. Fugiat et magna magna est excepteur eiusmod minim. Quis eiusmod et non pariatur dolor veniam incididunt, eiusmod irure enim sed dolor lorem pariatur do. Occaecat duis irure excepteur dolore. Proident ut laborum pariatur sit sit, nisi nostrud voluptate magna commodo laborum esse velit. Voluptate non minim deserunt adipiscing irure deserunt cupidatat. Laboris veniam commodo incididunt veniam lorem occaecat, fugiat ipsum dolor cupidatat. Ea officia sed eu excepteur culpa adipiscing, tempor consectetur ullamco eu. Anim ex proident nulla sunt culpa, voluptate veniam proident est adipiscing sint elit velit. Laboris adipiscing est culpa cillum magna. Sit veniam nulla nulla, aliqua eiusmod commodo lorem cupidatat commodo occaecat. Fugiat cillum dolor incididunt mollit eiusmod sint. Non lorem dolore labore excepteur minim laborum sed. Irure nisi do lorem nulla sunt commodo, deserunt quis mollit consectetur minim et esse est, proident nostrud officia enim sed reprehenderit. Magna cillum consequat aute reprehenderit duis sunt ullamco. Labore qui mollit voluptate. Duis dolor sint aute amet aliquip officia, est non mollit tempor enim quis fugiat, eu do culpa consectetur magna. Do ullamco aliqua voluptate culpa excepteur reprehenderit reprehenderit. Occaecat nulla sit est magna. Deserunt ea voluptate veniam cillum. Amet cupidatat duis est tempor fugiat ex eu, officia est sunt consectetur labore esse exercitation. Nisi cupidatat irure est nisi. Officia amet eu veniam reprehenderit. In amet incididunt tempor commodo ea labore. Mollit dolor aliquip excepteur, voluptate aute occaecat id officia proident. Ullamco est amet tempor. Proident aliquip proident mollit do aliquip ipsum, culpa quis aute id irure. Velit excepteur cillum cillum ut cupidatat. Occaecat qui elit esse nulla minim. Consequat velit id ad pariatur tempor. Eiusmod deserunt aliqua ex sed quis non. Dolor sint commodo ex in deserunt nostrud excepteur, pariatur ex aliqua anim adipiscing amet proident. Laboris eu laborum magna lorem ipsum fugiat velit.\")));\n}\n\nexport const __reflex_route = \"/complicated\";\nexport const __reflex_route_ident = \"Complicated\";\n",
+  "stats": {
+   "node_count": 275,
+   "unique_var_ids": 2,
+   "var_data_len": 2,
+   "vars_used_total": 2
+  }
+ },
+ "bench:stateful": {
+  "imports": {
+   "$/utils/context": [
+    "('EventLoopContext', None, False, True, True, '/')",
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "$/utils/state": [
+    "('ReflexEvent', None, False, True, True, '/')",
+    "('applyEventActions', None, False, True, True, '/')",
+    "('isTrue', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Button', 'RadixThemesButton', False, True, True, '/')",
+    "('Flex', 'RadixThemesFlex', False, True, True, '/')",
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "react": [
+    "('Fragment', None, False, True, True, '/')",
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Bare_memo_861c1f1df1c4e439",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText, Button as RadixThemesButton } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { ReflexEvent, applyEventActions, isTrue, refs } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Bare_memo_861c1f1df1c4e439 = memo(({ children }) => {\n  const reflex___state____state__tests___benchmarks___fixtures____benchmark_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____benchmark_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return reflex___state____state__tests___benchmarks___fixtures____benchmark_state.counter_rx_state_;\n});\n"
+   ],
+   [
+    "Button_memo_329528a60187b5f1",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText, Button as RadixThemesButton } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { ReflexEvent, applyEventActions, isTrue, refs } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Button_memo_329528a60187b5f1 = memo(({ children }) => {\n  const reflex___state____state__tests___benchmarks___fixtures____benchmark_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____benchmark_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n\nconst on_click_1a77155b088e6271 = useCallback(((_e) => (addEvents([(ReflexEvent(\"reflex___state____state.tests___benchmarks___fixtures____benchmark_state.decrement\", ({  }), ({  })))], [_e], ({  })))), [addEvents, ReflexEvent])\n\n  return jsx(RadixThemesButton, {onClick: on_click_1a77155b088e6271}, \"Decrement\");\n});\n"
+   ],
+   [
+    "Button_memo_f1478297258c78a1",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText, Button as RadixThemesButton } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { ReflexEvent, applyEventActions, isTrue, refs } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Button_memo_f1478297258c78a1 = memo(({ children }) => {\n  const reflex___state____state__tests___benchmarks___fixtures____benchmark_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____benchmark_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n\nconst on_click_2fd59491bcf3c733 = useCallback(((_e) => (addEvents([(ReflexEvent(\"reflex___state____state.tests___benchmarks___fixtures____benchmark_state.increment\", ({  }), ({  })))], [_e], ({  })))), [addEvents, ReflexEvent])\n\n  return jsx(RadixThemesButton, {onClick: on_click_2fd59491bcf3c733}, \"Increment\");\n});\n"
+   ],
+   [
+    "Cond_memo_20ef00004e140e66",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText, Button as RadixThemesButton } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { ReflexEvent, applyEventActions, isTrue, refs } from \"$/utils/state\";\nimport { Cond_memo_87e098d2fec07ecd } from \"$/utils/components/Cond_memo_87e098d2fec07ecd\";\nimport { Cond_memo_e5bf60525ef50d4c } from \"$/utils/components/Cond_memo_e5bf60525ef50d4c\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Cond_memo_20ef00004e140e66 = memo(({ children }) => {\n  const reflex___state____state__tests___benchmarks___fixtures____benchmark_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____benchmark_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return (((reflex___state____state__tests___benchmarks___fixtures____benchmark_state.counter_rx_state_ < 0)) ? jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, \"Counter is negative\")) : jsx(Fragment, {}, jsx(Fragment, {}, jsx(Cond_memo_e5bf60525ef50d4c, {key: \"16555056662133935436\"}, jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, \"Counter is odd\")), jsx(Fragment, {}))), jsx(Fragment, {}, jsx(Cond_memo_87e098d2fec07ecd, {key: \"9790993621888040653\"}, jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, \"Counter is even\")), jsx(Fragment, {})))));\n});\n"
+   ],
+   [
+    "Cond_memo_87e098d2fec07ecd",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText, Button as RadixThemesButton } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { ReflexEvent, applyEventActions, isTrue, refs } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Cond_memo_87e098d2fec07ecd = memo(({ children }) => {\n  const reflex___state____state__tests___benchmarks___fixtures____benchmark_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____benchmark_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return ((reflex___state____state__tests___benchmarks___fixtures____benchmark_state.show_even_rx_state_) ? jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, \"Counter is even\")) : jsx(Fragment, {}));\n});\n"
+   ],
+   [
+    "Cond_memo_e5bf60525ef50d4c",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText, Button as RadixThemesButton } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { ReflexEvent, applyEventActions, isTrue, refs } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Cond_memo_e5bf60525ef50d4c = memo(({ children }) => {\n  const reflex___state____state__tests___benchmarks___fixtures____benchmark_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____benchmark_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return ((reflex___state____state__tests___benchmarks___fixtures____benchmark_state.show_odd_rx_state_) ? jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, \"Counter is odd\")) : jsx(Fragment, {}));\n});\n"
+   ],
+   [
+    "Foreach_memo_51e363900fe184cd",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText, Button as RadixThemesButton } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { ReflexEvent, applyEventActions, isTrue, refs } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Foreach_memo_51e363900fe184cd = memo(({ children }) => {\n  const reflex___state____state__tests___benchmarks___fixtures____benchmark_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____benchmark_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return (reflex___state____state__tests___benchmarks___fixtures____benchmark_state.nested_elements_rx_state_).map((elem_rx_state_, idx_rx_state_) => jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, (idx_rx_state_+\" \"+elem_rx_state_?.[\"identifier\"])), (elem_rx_state_?.[\"value\"]).map((value_rx_state_, index_fdf4bbf2e8e806e567902fe455e169d5) => jsx(RadixThemesText, {as: \"p\", key: index_fdf4bbf2e8e806e567902fe455e169d5}, value_rx_state_))));\n});\n"
+   ],
+   [
+    "Foreach_memo_66ad8d8a446f39af",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText, Button as RadixThemesButton } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { ReflexEvent, applyEventActions, isTrue, refs } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Foreach_memo_66ad8d8a446f39af = memo(({ children }) => {\n  const reflex___state____state__tests___benchmarks___fixtures____benchmark_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____benchmark_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return (reflex___state____state__tests___benchmarks___fixtures____benchmark_state.elements_rx_state_).map((elem_rx_state_, index_fdf4bbf2e8e806e567902fe455e169d5) => jsx(RadixThemesText, {as: \"p\", key: index_fdf4bbf2e8e806e567902fe455e169d5}, elem_rx_state_));\n});\n"
+   ],
+   [
+    "Match_memo_30881c0413f0d886",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText, Button as RadixThemesButton } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { ReflexEvent, applyEventActions, isTrue, refs } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Match_memo_30881c0413f0d886 = memo(({ children }) => {\n  const reflex___state____state__tests___benchmarks___fixtures____benchmark_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____benchmark_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return (() => {\n  switch (JSON.stringify(reflex___state____state__tests___benchmarks___fixtures____benchmark_state.current_key_rx_state_)) {\n    case JSON.stringify(\"key_1\"):\n      return jsx(RadixThemesText, {as: \"p\"}, \"Key 1\");\n      break;\n    case JSON.stringify(\"key_2\"):\n      return jsx(RadixThemesText, {as: \"p\"}, \"Key 2\");\n      break;\n    case JSON.stringify(\"key_3\"):\n      return jsx(RadixThemesText, {as: \"p\"}, \"Key 3\");\n      break;\n    default:\n      return jsx(RadixThemesText, {as: \"p\"}, \"Key not found\");\n      break;\n  }\n})();\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText, Button as RadixThemesButton } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { ReflexEvent, applyEventActions, isTrue, refs } from \"$/utils/state\";\nimport { Foreach_memo_51e363900fe184cd } from \"$/utils/components/Foreach_memo_51e363900fe184cd\";\nimport { Foreach_memo_66ad8d8a446f39af } from \"$/utils/components/Foreach_memo_66ad8d8a446f39af\";\nimport { Match_memo_30881c0413f0d886 } from \"$/utils/components/Match_memo_30881c0413f0d886\";\nimport { Cond_memo_20ef00004e140e66 } from \"$/utils/components/Cond_memo_20ef00004e140e66\";\nimport { Cond_memo_87e098d2fec07ecd } from \"$/utils/components/Cond_memo_87e098d2fec07ecd\";\nimport { Cond_memo_e5bf60525ef50d4c } from \"$/utils/components/Cond_memo_e5bf60525ef50d4c\";\nimport { Button_memo_329528a60187b5f1 } from \"$/utils/components/Button_memo_329528a60187b5f1\";\nimport { Button_memo_f1478297258c78a1 } from \"$/utils/components/Button_memo_f1478297258c78a1\";\nimport { Bare_memo_861c1f1df1c4e439 } from \"$/utils/components/Bare_memo_861c1f1df1c4e439\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const reflex___state____state__tests___benchmarks___fixtures____benchmark_state = useContext(StateContexts.reflex___state____state__tests___benchmarks___fixtures____benchmark_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesFlex, {align: \"start\", className: \"rx-Stack\", direction: \"row\", gap: \"3\"}, jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, jsx(Bare_memo_861c1f1df1c4e439, {key: \"9663633113900966969\"})), jsx(Button_memo_f1478297258c78a1, {key: \"17386008472168724641\"}, \"Increment\"), jsx(Button_memo_329528a60187b5f1, {key: \"3644864166881637873\"}, \"Decrement\"), jsx(Fragment, {}, jsx(Cond_memo_20ef00004e140e66, {key: \"2373115529957477990\"}, jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, \"Counter is negative\")), jsx(Fragment, {}, jsx(Fragment, {}, jsx(Cond_memo_e5bf60525ef50d4c, {key: \"16555056662133935436\"}, jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, \"Counter is odd\")), jsx(Fragment, {}))), jsx(Fragment, {}, jsx(Cond_memo_87e098d2fec07ecd, {key: \"9790993621888040653\"}, jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, \"Counter is even\")), jsx(Fragment, {}))))))), jsx(Fragment, {}, jsx(Match_memo_30881c0413f0d886, {key: \"3497075914493188230\"})), jsx(Foreach_memo_66ad8d8a446f39af, {key: \"7398725387832736175\"}, jsx(RadixThemesText, {as: \"p\", key: index_fdf4bbf2e8e806e567902fe455e169d5}, elem_rx_state_)), jsx(Foreach_memo_51e363900fe184cd, {key: \"5900669407178360013\"}, jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, (idx_rx_state_+\" \"+elem_rx_state_?.[\"identifier\"])), (elem_rx_state_?.[\"value\"]).map((value_rx_state_, index_fdf4bbf2e8e806e567902fe455e169d5) => jsx(RadixThemesText, {as: \"p\", key: index_fdf4bbf2e8e806e567902fe455e169d5}, value_rx_state_)))));\n}\n\nexport const __reflex_route = \"/stateful\";\nexport const __reflex_route_ident = \"Stateful\";\n",
+  "stats": {
+   "node_count": 46,
+   "unique_var_ids": 1,
+   "var_data_len": 1,
+   "vars_used_total": 1
+  }
+ },
+ "corpus:01_text": {
+  "imports": {
+   "@radix-ui/themes@3.3.0": [
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesText, {as: \"p\"}, \"hello corpus\");\n}\n\nexport const __reflex_route = \"/text\";\nexport const __reflex_route_ident = \"Text\";\n",
+  "stats": {
+   "node_count": 2,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:02_box": {
+  "imports": {
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')",
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesBox, {}, jsx(RadixThemesText, {as: \"p\"}, \"inside box\"));\n}\n\nexport const __reflex_route = \"/box\";\nexport const __reflex_route_ident = \"Box\";\n",
+  "stats": {
+   "node_count": 3,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:03_nested_box": {
+  "imports": {
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')",
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesBox, {}, jsx(RadixThemesBox, {}, jsx(RadixThemesBox, {}, jsx(RadixThemesText, {as: \"p\"}, \"inner most\"))));\n}\n\nexport const __reflex_route = \"/nested\";\nexport const __reflex_route_ident = \"Nested\";\n",
+  "stats": {
+   "node_count": 5,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:04_multi_children": {
+  "imports": {
+   "@radix-ui/themes@3.3.0": [
+    "('Flex', 'RadixThemesFlex', False, True, True, '/')",
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesFlex, {}, jsx(RadixThemesText, {as: \"p\"}, \"alpha\"), jsx(RadixThemesText, {as: \"p\"}, \"beta\"), jsx(RadixThemesText, {as: \"p\"}, \"gamma\"));\n}\n\nexport const __reflex_route = \"/multi\";\nexport const __reflex_route_ident = \"Multi\";\n",
+  "stats": {
+   "node_count": 7,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:05_styled": {
+  "imports": {
+   "$/utils/state": [
+    "('refs', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')"
+   ],
+   "react": [
+    "('useRef', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Box_memo_6a459e2bae292c23",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { Box as RadixThemesBox } from \"@radix-ui/themes\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Box_memo_6a459e2bae292c23 = memo(({ children }) => {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\nconst ref_root = useRef(null); refs[\"ref_root\"] = ref_root;\n\n\n  return jsx(RadixThemesBox, {className: \"main-panel\", id: \"root\", ref: ref_root}, \"styled content\");\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { Box as RadixThemesBox } from \"@radix-ui/themes\";\nimport { Box_memo_6a459e2bae292c23 } from \"$/utils/components/Box_memo_6a459e2bae292c23\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(Box_memo_6a459e2bae292c23, {key: \"7657700651856112675\"}, \"styled content\");\n}\n\nexport const __reflex_route = \"/styled\";\nexport const __reflex_route_ident = \"Styled\";\n",
+  "stats": {
+   "node_count": 2,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:06_cond": {
+  "imports": {
+   "$/utils/context": [
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "$/utils/state": [
+    "('isTrue', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "react": [
+    "('Fragment', None, False, True, True, '/')",
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Cond_memo_9f0ae2993924545a",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { isTrue, refs, ReflexEvent } from \"$/utils/state\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Cond_memo_9f0ae2993924545a = memo(({ children }) => {\n  const reflex___state____state___corpus_fixture_06_cond____cond_state = useContext(StateContexts.reflex___state____state___corpus_fixture_06_cond____cond_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return ((reflex___state____state___corpus_fixture_06_cond____cond_state.logged_in_rx_state_) ? jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, \"welcome back\")) : jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, \"please log in\")));\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { isTrue, refs, ReflexEvent } from \"$/utils/state\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { Cond_memo_9f0ae2993924545a } from \"$/utils/components/Cond_memo_9f0ae2993924545a\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const reflex___state____state___corpus_fixture_06_cond____cond_state = useContext(StateContexts.reflex___state____state___corpus_fixture_06_cond____cond_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(Fragment, {}, jsx(Cond_memo_9f0ae2993924545a, {key: \"11460221349514204250\"}, jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, \"welcome back\")), jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, \"please log in\"))));\n}\n\nexport const __reflex_route = \"/cond\";\nexport const __reflex_route_ident = \"Cond\";\n",
+  "stats": {
+   "node_count": 8,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:07_foreach": {
+  "imports": {
+   "$/utils/context": [
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Flex', 'RadixThemesFlex', False, True, True, '/')",
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "react": [
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Foreach_memo_fdfae030d9ef8059",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Foreach_memo_fdfae030d9ef8059 = memo(({ children }) => {\n  const reflex___state____state___corpus_fixture_07_foreach____foreach_state = useContext(StateContexts.reflex___state____state___corpus_fixture_07_foreach____foreach_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return (reflex___state____state___corpus_fixture_07_foreach____foreach_state.items_rx_state_).map((item_rx_state_, index_fdf4bbf2e8e806e567902fe455e169d5) => jsx(RadixThemesText, {as: \"p\", key: index_fdf4bbf2e8e806e567902fe455e169d5}, item_rx_state_));\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Flex as RadixThemesFlex, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Foreach_memo_fdfae030d9ef8059 } from \"$/utils/components/Foreach_memo_fdfae030d9ef8059\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const reflex___state____state___corpus_fixture_07_foreach____foreach_state = useContext(StateContexts.reflex___state____state___corpus_fixture_07_foreach____foreach_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesFlex, {}, jsx(Foreach_memo_fdfae030d9ef8059, {key: \"18301186536192835673\"}, jsx(RadixThemesText, {as: \"p\", key: index_fdf4bbf2e8e806e567902fe455e169d5}, item_rx_state_)));\n}\n\nexport const __reflex_route = \"/list\";\nexport const __reflex_route_ident = \"List\";\n",
+  "stats": {
+   "node_count": 4,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:08_match": {
+  "imports": {
+   "$/utils/context": [
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "react": [
+    "('Fragment', None, False, True, True, '/')",
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Match_memo_8903384ecd2f9d0d",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Match_memo_8903384ecd2f9d0d = memo(({ children }) => {\n  const reflex___state____state___corpus_fixture_08_match____match_state = useContext(StateContexts.reflex___state____state___corpus_fixture_08_match____match_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return (() => {\n  switch (JSON.stringify(reflex___state____state___corpus_fixture_08_match____match_state.mode_rx_state_)) {\n    case JSON.stringify(\"a\"):\n      return jsx(RadixThemesText, {as: \"p\"}, \"alpha\");\n      break;\n    case JSON.stringify(\"b\"):\n      return jsx(RadixThemesText, {as: \"p\"}, \"beta\");\n      break;\n    default:\n      return jsx(RadixThemesText, {as: \"p\"}, \"default\");\n      break;\n  }\n})();\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { Match_memo_8903384ecd2f9d0d } from \"$/utils/components/Match_memo_8903384ecd2f9d0d\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const reflex___state____state___corpus_fixture_08_match____match_state = useContext(StateContexts.reflex___state____state___corpus_fixture_08_match____match_state);\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(Fragment, {}, jsx(Match_memo_8903384ecd2f9d0d, {key: \"9872796719227313421\"}));\n}\n\nexport const __reflex_route = \"/match\";\nexport const __reflex_route_ident = \"MatchPage\";\n",
+  "stats": {
+   "node_count": 8,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:09_state_var": {
+  "imports": {
+   "$/utils/context": [
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "react": [
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Bare_memo_4aec6f9da58967f0",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Bare_memo_4aec6f9da58967f0 = memo(({ children }) => {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return reflex___state____state___corpus_fixture_09_state_var___s.name_rx_state_;\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Bare_memo_4aec6f9da58967f0 } from \"$/utils/components/Bare_memo_4aec6f9da58967f0\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesText, {as: \"p\"}, jsx(Bare_memo_4aec6f9da58967f0, {key: \"5398812776188176368\"}));\n}\n\nexport const __reflex_route = \"/state_var\";\nexport const __reflex_route_ident = \"StateVar\";\n",
+  "stats": {
+   "node_count": 2,
+   "unique_var_ids": 1,
+   "var_data_len": 1,
+   "vars_used_total": 1
+  }
+ },
+ "corpus:10_state_in_box": {
+  "imports": {
+   "$/utils/context": [
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')"
+   ],
+   "react": [
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Bare_memo_a5d35cfd8c8710ac",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Bare_memo_a5d35cfd8c8710ac = memo(({ children }) => {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return reflex___state____state___corpus_fixture_10_state_in_box___s.count_rx_state_;\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Bare_memo_a5d35cfd8c8710ac } from \"$/utils/components/Bare_memo_a5d35cfd8c8710ac\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesBox, {className: \"counter\"}, jsx(Bare_memo_a5d35cfd8c8710ac, {key: \"11948996480398201004\"}));\n}\n\nexport const __reflex_route = \"/state_in_box\";\nexport const __reflex_route_ident = \"StateInBox\";\n",
+  "stats": {
+   "node_count": 2,
+   "unique_var_ids": 1,
+   "var_data_len": 1,
+   "vars_used_total": 1
+  }
+ },
+ "corpus:11_computed_var": {
+  "imports": {
+   "$/utils/context": [
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "react": [
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Bare_memo_cf9f1e3ab6fd808b",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Bare_memo_cf9f1e3ab6fd808b = memo(({ children }) => {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return reflex___state____state___corpus_fixture_11_computed_var___s.total_rx_state_;\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Bare_memo_cf9f1e3ab6fd808b } from \"$/utils/components/Bare_memo_cf9f1e3ab6fd808b\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesText, {as: \"p\"}, jsx(Bare_memo_cf9f1e3ab6fd808b, {key: \"14960709724675080331\"}));\n}\n\nexport const __reflex_route = \"/computed\";\nexport const __reflex_route_ident = \"Computed\";\n",
+  "stats": {
+   "node_count": 2,
+   "unique_var_ids": 1,
+   "var_data_len": 1,
+   "vars_used_total": 1
+  }
+ },
+ "corpus:12_event_handler": {
+  "imports": {
+   "$/utils/context": [
+    "('EventLoopContext', None, False, True, True, '/')"
+   ],
+   "$/utils/state": [
+    "('ReflexEvent', None, False, True, True, '/')",
+    "('applyEventActions', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')",
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "react": [
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Box_memo_ddc4286adadbe284",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { ReflexEvent, applyEventActions, refs } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Box_memo_ddc4286adadbe284 = memo(({ children }) => {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n\nconst on_click_50e8570bf676824a = useCallback(((_e) => (addEvents([(ReflexEvent(\"reflex___state____state._corpus_fixture_12_event_handler___s.increment\", ({  }), ({  })))], [_e], ({  })))), [addEvents, ReflexEvent])\n\n  return jsx(RadixThemesBox, {onClick: on_click_50e8570bf676824a}, jsx(RadixThemesText, {as: \"p\"}, \"counter\"));\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { ReflexEvent, applyEventActions, refs } from \"$/utils/state\";\nimport { Box_memo_ddc4286adadbe284 } from \"$/utils/components/Box_memo_ddc4286adadbe284\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(Box_memo_ddc4286adadbe284, {key: \"15979941817220850308\"}, jsx(RadixThemesText, {as: \"p\"}, \"counter\"));\n}\n\nexport const __reflex_route = \"/events\";\nexport const __reflex_route_ident = \"Events\";\n",
+  "stats": {
+   "node_count": 3,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:13_custom_attrs": {
+  "imports": {
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox } from \"@radix-ui/themes\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesBox, {\"aria-label\": \"main\", \"data-testid\": \"my-box\"}, \"content\");\n}\n\nexport const __reflex_route = \"/custom_attrs\";\nexport const __reflex_route_ident = \"CustomAttrs\";\n",
+  "stats": {
+   "node_count": 2,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:14_style_dict": {
+  "imports": {
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox } from \"@radix-ui/themes\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesBox, {css: ({ [\"color\"] : \"red\", [\"padding\"] : \"4px\" })}, \"styled\");\n}\n\nexport const __reflex_route = \"/style_dict\";\nexport const __reflex_route_ident = \"StyleDict\";\n",
+  "stats": {
+   "node_count": 2,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:15_cond_in_foreach": {
+  "imports": {
+   "$/utils/context": [
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "$/utils/state": [
+    "('isTrue', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "react": [
+    "('Fragment', None, False, True, True, '/')",
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Cond_memo_e0b1429405e7f00b",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { isTrue, refs, ReflexEvent } from \"$/utils/state\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Cond_memo_e0b1429405e7f00b = memo(({ children }) => {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return ((reflex___state____state___corpus_fixture_15_cond_in_foreach___s.show_all_rx_state_) ? jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, item_rx_state_)) : jsx(Fragment, {}));\n});\n"
+   ],
+   [
+    "Foreach_memo_9fa5fe61e033a58d",
+    "import { memo, useCallback, useContext, useRef, Fragment } from \"react\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { isTrue, refs, ReflexEvent } from \"$/utils/state\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { Cond_memo_e0b1429405e7f00b } from \"$/utils/components/Cond_memo_e0b1429405e7f00b\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Foreach_memo_9fa5fe61e033a58d = memo(({ children }) => {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return (reflex___state____state___corpus_fixture_15_cond_in_foreach___s.items_rx_state_).map((item_rx_state_, index_319aa0e47c4fc7a3f2dbfd4ced4d826d) => jsx(Fragment, {}, jsx(Cond_memo_e0b1429405e7f00b, {key: \"16190795338895323147\"}, jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, item_rx_state_)), jsx(Fragment, {}))));\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { isTrue, refs, ReflexEvent } from \"$/utils/state\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { Foreach_memo_9fa5fe61e033a58d } from \"$/utils/components/Foreach_memo_9fa5fe61e033a58d\";\nimport { Cond_memo_e0b1429405e7f00b } from \"$/utils/components/Cond_memo_e0b1429405e7f00b\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(Foreach_memo_9fa5fe61e033a58d, {key: \"11503880519514563981\"}, jsx(Fragment, {}, jsx(Cond_memo_e0b1429405e7f00b, {key: \"16190795338895323147\"}, jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, item_rx_state_)), jsx(Fragment, {}))));\n}\n\nexport const __reflex_route = \"/cond_in_foreach\";\nexport const __reflex_route_ident = \"CondInForeach\";\n",
+  "stats": {
+   "node_count": 7,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:16_foreach_with_index": {
+  "imports": {
+   "$/utils/context": [
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "react": [
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Foreach_memo_4a1672aa86593023",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Foreach_memo_4a1672aa86593023 = memo(({ children }) => {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return (reflex___state____state___corpus_fixture_16_foreach_with_index___s.items_rx_state_).map((item_rx_state_, index_rx_state_) => jsx(RadixThemesText, {as: \"p\", key: index_rx_state_}, item_rx_state_));\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { Foreach_memo_4a1672aa86593023 } from \"$/utils/components/Foreach_memo_4a1672aa86593023\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(Foreach_memo_4a1672aa86593023, {key: \"5338580485018300451\"}, jsx(RadixThemesText, {as: \"p\", key: index_rx_state_}, item_rx_state_));\n}\n\nexport const __reflex_route = \"/foreach_index\";\nexport const __reflex_route_ident = \"ForeachIndex\";\n",
+  "stats": {
+   "node_count": 3,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:17_multiple_states": {
+  "imports": {
+   "$/utils/context": [
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')",
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "react": [
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Bare_memo_64940318bfeda0da",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Bare_memo_64940318bfeda0da = memo(({ children }) => {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return reflex___state____state___corpus_fixture_17_multiple_states___a.title_rx_state_;\n});\n"
+   ],
+   [
+    "Bare_memo_a2b48d9b7b8a4253",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Bare_memo_a2b48d9b7b8a4253 = memo(({ children }) => {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return reflex___state____state___corpus_fixture_17_multiple_states___b.body_rx_state_;\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Bare_memo_a2b48d9b7b8a4253 } from \"$/utils/components/Bare_memo_a2b48d9b7b8a4253\";\nimport { Bare_memo_64940318bfeda0da } from \"$/utils/components/Bare_memo_64940318bfeda0da\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesBox, {}, jsx(RadixThemesText, {as: \"p\"}, jsx(Bare_memo_64940318bfeda0da, {key: \"7247421105180090586\"})), jsx(RadixThemesText, {as: \"p\"}, jsx(Bare_memo_a2b48d9b7b8a4253, {key: \"11724151428884349523\"})));\n}\n\nexport const __reflex_route = \"/multi_state\";\nexport const __reflex_route_ident = \"MultiState\";\n",
+  "stats": {
+   "node_count": 5,
+   "unique_var_ids": 2,
+   "var_data_len": 2,
+   "vars_used_total": 2
+  }
+ },
+ "corpus:18_key_prop": {
+  "imports": {
+   "$/utils/context": [
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')"
+   ],
+   "react": [
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Foreach_memo_1db164ccfe55bf04",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Box as RadixThemesBox } from \"@radix-ui/themes\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Foreach_memo_1db164ccfe55bf04 = memo(({ children }) => {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return (reflex___state____state___corpus_fixture_18_key_prop___s.items_rx_state_).map((item_rx_state_, index_ce828a715cc58d8173a5cd61a1a2e1a6) => jsx(RadixThemesBox, {key: item_rx_state_}, item_rx_state_));\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Box as RadixThemesBox } from \"@radix-ui/themes\";\nimport { Foreach_memo_1db164ccfe55bf04 } from \"$/utils/components/Foreach_memo_1db164ccfe55bf04\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(Foreach_memo_1db164ccfe55bf04, {key: \"2139602129580834564\"}, jsx(RadixThemesBox, {key: item_rx_state_}, item_rx_state_));\n}\n\nexport const __reflex_route = \"/key_prop\";\nexport const __reflex_route_ident = \"KeyProp\";\n",
+  "stats": {
+   "node_count": 3,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:19_style_breakpoints": {
+  "imports": {
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')",
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox, Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesBox, {css: ({ [\"@media screen and (min-width: 0)\"] : ({ [\"width\"] : \"100%\", [\"padding\"] : \"4px\" }), [\"@media screen and (min-width: 30em)\"] : ({ [\"width\"] : \"50%\", [\"padding\"] : \"8px\" }), [\"@media screen and (min-width: 48em)\"] : ({ [\"width\"] : \"25%\" }) })}, jsx(RadixThemesText, {as: \"p\", css: ({ [\"@media screen and (min-width: 0)\"] : ({ [\"fontSize\"] : \"1em\" }), [\"@media screen and (min-width: 30em)\"] : ({ [\"fontSize\"] : \"2em\" }), [\"@media screen and (min-width: 48em)\"] : ({ [\"fontSize\"] : \"3em\" }) })}, \"responsive\"));\n}\n\nexport const __reflex_route = \"/style_breakpoints\";\nexport const __reflex_route_ident = \"StyleBreakpoints\";\n",
+  "stats": {
+   "node_count": 3,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:20_style_pseudo": {
+  "imports": {
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox } from \"@radix-ui/themes\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesBox, {css: ({ [\"&:focus\"] : ({ [\"outline\"] : \"none\" }), [\"&:hover\"] : ({ [\"color\"] : \"red\", [\"&:before\"] : ({ [\"content\"] : \"\\\"*\\\"\" }) }) })}, \"hover me\");\n}\n\nexport const __reflex_route = \"/style_pseudo\";\nexport const __reflex_route_ident = \"StylePseudo\";\n",
+  "stats": {
+   "node_count": 2,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "corpus:21_style_var_and_bp_pseudo": {
+  "imports": {
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Box as RadixThemesBox } from \"@radix-ui/themes\";\nimport { EventLoopContext, StateContexts } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return jsx(RadixThemesBox, {css: ({ [\"backgroundColor\"] : \"var(--accent-9)\", [\"&:hover\"] : ({ [\"@media screen and (min-width: 0)\"] : ({ [\"color\"] : \"red\" }), [\"@media screen and (min-width: 30em)\"] : ({ [\"color\"] : \"blue\" }) }) })}, \"combo\");\n}\n\nexport const __reflex_route = \"/style_var_and_bp_pseudo\";\nexport const __reflex_route_ident = \"StyleVarAndBpPseudo\";\n",
+  "stats": {
+   "node_count": 2,
+   "unique_var_ids": 0,
+   "var_data_len": 0,
+   "vars_used_total": 0
+  }
+ },
+ "page:kwargs": {
+  "imports": {
+   "$/utils/context": [
+    "('StateContexts', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "react": [
+    "('useContext', None, False, True, True, '/')"
+   ]
+  },
+  "memo_bodies": [
+   [
+    "Bare_memo_4aec6f9da58967f0",
+    "import { memo, useCallback, useContext, useRef } from \"react\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\nexport const Bare_memo_4aec6f9da58967f0 = memo(({ children }) => {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  return reflex___state____state___corpus_fixture_09_state_var___s.name_rx_state_;\n});\n"
+   ]
+  ],
+  "page_js": "import { Fragment, useCallback, useContext, useRef } from \"react\";\nimport { Text as RadixThemesText } from \"@radix-ui/themes\";\nimport { StateContexts, EventLoopContext } from \"$/utils/context\";\nimport { Bare_memo_4aec6f9da58967f0 } from \"$/utils/components/Bare_memo_4aec6f9da58967f0\";\nimport { refs, ReflexEvent } from \"$/utils/state\";\nimport { jsx } from \"@emotion/react\";\n\n// parity custom code\n\nexport default function Component() {\n  const [addEvents, connectErrors] = useContext(EventLoopContext);\n  const parityHook = 1;\n  return jsx(Fragment, {}, jsx(RadixThemesText, {as: \"p\"}, jsx(Bare_memo_4aec6f9da58967f0, {key: \"5398812776188176368\"})), jsx(\"title\", {}, \"Parity Title\"), jsx(\"meta\", {name: \"description\", content: \"parity oracle\"}), jsx(\"meta\", {property: \"og:type\", content: \"website\"}));\n}\n\nexport const __reflex_route = \"/state_var_kwargs\";\nexport const __reflex_route_ident = \"StateVarKwargs\";\nexport const __reflex_title = \"Parity Title\";\n"
+ },
+ "root:app": {
+  "file_js": "\nimport {Box as RadixThemesBox,Text as RadixThemesText} from \"@radix-ui/themes\"\nimport {Fragment,useEffect} from \"react\"\nimport {jsx} from \"@emotion/react\"\n\nimport { EventLoopProvider, StateProvider, defaultColorMode } from \"$/utils/context\";\nimport { ThemeProvider } from '$/utils/react-theme';\nimport { Layout as AppLayout } from './_document';\nimport { Outlet } from 'react-router';\nimport * as __reflex_lib0 from \"$/public/lib0.js\";\n\n\n\nfunction ReflexProviders({children}) {\n  useEffect(() => {\n    // Make contexts and state objects available globally for dynamic eval'd components\n    let windowImports = {\n          \"$/public/lib0.js\": __reflex_lib0,\n    };\n    window[\"__reflex\"] = windowImports;\n  }, []);\n\n  return jsx(ThemeProvider, {defaultTheme: defaultColorMode, attribute: \"class\"},\n    jsx(StateProvider, {},\n      jsx(EventLoopProvider, {},\n        jsx(AppWrap, {}, children)\n      )\n    )\n  );\n}\n\n\nfunction AppWrap({children}) {\n\n\n\n\nreturn (jsx(Fragment,{},jsx(RadixThemesBox,{},jsx(RadixThemesText,{as:\"p\"},\"parity root\"))))\n}\n\nexport function Layout({children}) {\n  return jsx(AppLayout, {}, jsx(ReflexProviders, {}, children));\n}\n\n// Used by entry.client.js when mount_target is configured: skips the document\n// shell (which renders react-router's <Meta>/<Scripts>/<Links> and requires a\n// framework router context) but keeps the runtime providers.\nexport function EmbedLayout({children}) {\n  return jsx(ReflexProviders, {}, children);\n}\n\nexport default function App() {\n  return jsx(Outlet, {});\n}\n\n",
+  "imports": {
+   "@emotion/react": [
+    "('jsx', None, False, True, True, '/')"
+   ],
+   "@radix-ui/themes@3.3.0": [
+    "('Box', 'RadixThemesBox', False, True, True, '/')",
+    "('Text', 'RadixThemesText', False, True, True, '/')"
+   ],
+   "react": [
+    "('Fragment', None, False, True, True, '/')",
+    "('useEffect', None, False, True, True, '/')"
+   ]
+  }
+ },
+ "root:document": {
+  "file_js": "import {Links,Meta,Scripts,ScrollRestoration} from \"react-router\"\nimport reflexGlobalStyles from \"$/styles/__reflex_global_styles.css?url\"\nimport {jsx} from \"@emotion/react\"\nimport {Fragment,useEffect} from \"react\"\n\nexport function Layout({children}) {\n  return (\n    jsx(\"html\",{lang:\"en\",suppressHydrationWarning:true},jsx(\"head\",{},jsx(\"script\",{},\"\\n// Only run in browser environment, not during SSR\\nif (typeof document !== 'undefined') {\\n    try {\\n        const theme = localStorage.getItem(\\\"theme\\\") || \\\"system\\\";\\n        const systemPreference = window.matchMedia(\\\"(prefers-color-scheme: dark)\\\").matches ? \\\"dark\\\" : \\\"light\\\";\\n        const resolvedTheme = theme === \\\"system\\\" ? systemPreference : theme;\\n\\n        // Apply theme immediately - blocks until complete\\n        // Use classList to avoid overwriting other classes\\n        document.documentElement.classList.remove(\\\"light\\\", \\\"dark\\\");\\n        document.documentElement.classList.add(resolvedTheme);\\n        document.documentElement.style.colorScheme = resolvedTheme;\\n\\n    } catch (e) {\\n        // Fallback to system preference on any error (resolve \\\"system\\\" to actual theme)\\n        const fallbackTheme = window.matchMedia(\\\"(prefers-color-scheme: dark)\\\").matches ? \\\"dark\\\" : \\\"light\\\";\\n        document.documentElement.classList.remove(\\\"light\\\", \\\"dark\\\");\\n        document.documentElement.classList.add(fallbackTheme);\\n        document.documentElement.style.colorScheme = fallbackTheme;\\n    }\\n}\\n\"),jsx(\"meta\",{charSet:\"utf-8\"},),jsx(\"meta\",{content:\"width=device-width, initial-scale=1\",name:\"viewport\"},),jsx(Meta,{},),jsx(\"link\",{href:reflexGlobalStyles,rel:\"stylesheet\",type:\"text/css\"},),jsx(Links,{},)),jsx(\"body\",{},children,jsx(ScrollRestoration,{},),jsx(Scripts,{},)))\n  )\n}"
+ },
+ "root:theme": {
+  "file_js": "export default ({ [\"styles\"] : ({ [\"global\"] : ({ [\":root\"] : ({ [\"*::selection\"] : ({ [\"backgroundColor\"] : \"lightgray\" }) }), [\"body\"] : ({ [\"fontFamily\"] : \"Inter\", [\"--default-font-family\"] : \"Inter\", [\"a\"] : ({ [\"color\"] : \"blue\", [\"_hover\"] : ({ [\"color\"] : \"red\" }) }) }) }) }) })"
+ }
+}

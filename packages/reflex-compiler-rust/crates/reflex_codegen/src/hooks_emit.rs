@@ -77,21 +77,26 @@ fn bucket_subtree_hooks_dfs(
             continue;
         }
         let node = snapshot.node(idx);
-        for h in node.hooks_internal.iter().chain(node.hooks_user.iter()) {
-            push_bucket(
-                &mut seen,
-                &mut internal,
-                &mut pre,
-                &mut post,
-                *h,
-                strip_shell,
-            );
+        // Same redirect rule as `bucket_subtree_hooks`: a memoized
+        // descendant's own hooks live in its body, not this scope.
+        if idx == root || !snapshot.wrap_redirects.contains_key(&idx) {
+            for h in node.hooks_internal.iter().chain(node.hooks_user.iter()) {
+                push_bucket(
+                    &mut seen,
+                    &mut internal,
+                    &mut pre,
+                    &mut post,
+                    *h,
+                    strip_shell,
+                );
+            }
         }
         // Push children in REVERSE so LIFO pops them in declared order.
         let children: Vec<NodeIdx> = node.children.clone().collect();
         for child in children.into_iter().rev() {
             stack.push(child);
         }
+        push_control_flow_roots(snapshot, idx, &mut stack);
     }
     (internal, pre, post)
 }
@@ -117,11 +122,15 @@ fn render_hooks_with_filter(snapshot: &Snapshot, memo_lines: &[&str], strip_shel
 }
 
 fn bucket_hooks(snapshot: &Snapshot, strip_shell: bool) -> (Vec<Symbol>, Vec<Symbol>, Vec<Symbol>) {
+    let mask = page_scope_mask(snapshot);
     let mut seen: HashSet<Symbol> = HashSet::new();
     let mut internal: Vec<Symbol> = Vec::new();
     let mut pre: Vec<Symbol> = Vec::new();
     let mut post: Vec<Symbol> = Vec::new();
-    for node in &snapshot.nodes {
+    for (idx, node) in snapshot.nodes.iter().enumerate() {
+        if !mask[idx] {
+            continue;
+        }
         for h in node.hooks_internal.iter().chain(node.hooks_user.iter()) {
             push_bucket(
                 &mut seen,
@@ -134,6 +143,49 @@ fn bucket_hooks(snapshot: &Snapshot, strip_shell: bool) -> (Vec<Symbol>, Vec<Sym
         }
     }
     (internal, pre, post)
+}
+
+/// Nodes whose hooks belong in the PAGE function: everything the page JSX
+/// renders. A wrap-redirected node renders as `jsx(<Memo>, …, children)` at
+/// the call site — its OWN hooks live in its memo body, but its children
+/// are rendered inline at the page as the wrapper's JSX children, so the
+/// walk still descends. Control-flow bodies (cond/match/foreach) render at
+/// the page too, via the control-flow side tables rather than `children`
+/// ranges, so they're included through `control_flow_roots`. Nodes outside
+/// the page tree (app-wrap nodes appended past the root subtree) render in
+/// `root.jsx`, not the page.
+fn page_scope_mask(snapshot: &Snapshot) -> Vec<bool> {
+    let mut mask = vec![false; snapshot.nodes.len()];
+    let mut stack: Vec<NodeIdx> = vec![snapshot.root];
+    while let Some(idx) = stack.pop() {
+        if (idx as usize) >= snapshot.nodes.len() || mask[idx as usize] {
+            continue;
+        }
+        let redirected = snapshot.wrap_redirects.contains_key(&idx);
+        if !redirected {
+            mask[idx as usize] = true;
+        }
+        let node = snapshot.node(idx);
+        for child in node.children.clone() {
+            stack.push(child);
+        }
+        push_control_flow_roots(snapshot, idx, &mut stack);
+    }
+    mask
+}
+
+/// Push the control-flow body roots of `idx` (match arms + default) onto
+/// `stack`. Cond branches and foreach bodies live in normal `children`
+/// ranges; match bodies live only in the side tables.
+pub(crate) fn push_control_flow_roots(snapshot: &Snapshot, idx: NodeIdx, stack: &mut Vec<NodeIdx>) {
+    if let Some(arms) = snapshot.control_flow.match_arms.get(&idx) {
+        for (_case, body) in arms {
+            stack.push(*body);
+        }
+    }
+    if let Some(default) = snapshot.control_flow.match_default.get(&idx) {
+        stack.push(*default);
+    }
 }
 
 /// PR4: hooks emit restricted to the subtree rooted at `root`. Used
@@ -181,19 +233,25 @@ fn bucket_subtree_hooks(
             continue;
         }
         let node = snapshot.node(idx);
-        for h in node.hooks_internal.iter().chain(node.hooks_user.iter()) {
-            push_bucket(
-                &mut seen,
-                &mut internal,
-                &mut pre,
-                &mut post,
-                *h,
-                strip_shell,
-            );
+        // A wrap-redirected descendant renders as a memo-wrapper reference
+        // in THIS scope; its own hooks live in its body. Its children still
+        // render here as the wrapper's JSX children, so descend regardless.
+        if idx == root || !snapshot.wrap_redirects.contains_key(&idx) {
+            for h in node.hooks_internal.iter().chain(node.hooks_user.iter()) {
+                push_bucket(
+                    &mut seen,
+                    &mut internal,
+                    &mut pre,
+                    &mut post,
+                    *h,
+                    strip_shell,
+                );
+            }
         }
         for child in node.children.clone() {
             stack.push(child);
         }
+        push_control_flow_roots(snapshot, idx, &mut stack);
     }
     (internal, pre, post)
 }
@@ -239,6 +297,52 @@ fn push_bucket(
         2 => post.push(h.code),
         _ => pre.push(h.code),
     }
+}
+
+/// Hook block for an ``@rx.memo`` module — legacy ``_get_all_hooks()`` +
+/// ``_render_hooks`` semantics. In that chain the internal-chain hooks
+/// (ref / state contexts / EventLoopContext / lifecycle) surface with no
+/// position, and legacy ``_sort_hooks`` buckets position-``None`` as
+/// PRE_TRIGGER — so INTERNAL-tagged entries join the PRE bucket here.
+/// Shell hooks are NOT stripped (the memo template has no shell), and the
+/// output shape is ``{internal}\n{pre}\n{memo}\n{post}`` with internal and
+/// memo always empty.
+pub fn render_hooks_rx_memo(snapshot: &Snapshot) -> String {
+    if snapshot.is_empty() {
+        return "\n\n\n".to_owned();
+    }
+    let mut seen: HashSet<Symbol> = HashSet::new();
+    let mut pre: Vec<Symbol> = Vec::new();
+    let mut post: Vec<Symbol> = Vec::new();
+    let mut stack: Vec<NodeIdx> = vec![snapshot.root];
+    while let Some(idx) = stack.pop() {
+        if (idx as usize) >= snapshot.nodes.len() {
+            continue;
+        }
+        let node = snapshot.node(idx);
+        for h in node.hooks_internal.iter().chain(node.hooks_user.iter()) {
+            if h.code == Symbol::EMPTY || !seen.insert(h.code) {
+                continue;
+            }
+            if h.position == 2 {
+                post.push(h.code);
+            } else {
+                pre.push(h.code);
+            }
+        }
+        let children: Vec<NodeIdx> = node.children.clone().collect();
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+        push_control_flow_roots(snapshot, idx, &mut stack);
+    }
+    let mut out = String::with_capacity(estimate_size(&[], &pre, &post));
+    out.push('\n');
+    write_bucket(&mut out, &pre);
+    out.push('\n');
+    out.push('\n');
+    write_bucket(&mut out, &post);
+    out
 }
 
 fn write_bucket(out: &mut String, bucket: &[Symbol]) {

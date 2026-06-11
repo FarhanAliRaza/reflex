@@ -599,26 +599,22 @@ def run_rust(
             )
             raise SystemExit(1)
 
-        # Static artifacts the legacy compile produces — `app/root.jsx`
-        # (React Router root) and `utils/components.jsx` (memo index +
-        # toast/admin provider re-exports). When `_init` wiped `.web/`
-        # or on a fresh project they're missing, so we run the legacy
-        # compile *once* to lay them down. Subsequent runs skip this
-        # branch entirely and only the Rust pipeline executes. Pages
-        # the legacy compile emits get overwritten by the Rust pipeline
-        # below.
+        # Fallback for a fresh `.web/` (post-`reflex init` or after `_init`
+        # wiped it): run the legacy compile *once* to lay down any static
+        # artifact the Rust pipeline doesn't produce yet. The Rust pipeline
+        # itself writes `app/root.jsx`, the pages, and the `@rx.memo`
+        # component modules, so this fires at most once per scaffold. (It
+        # previously also gated on `utils/components.jsx` — a memo barrel
+        # index the MEMOS redesign removed entirely — which made the
+        # "one-shot" ~40s legacy compile run on EVERY `run-rust`.)
         web_dir = prerequisites.get_web_dir()
         # ``REFLEX_RUST_NO_LEGACY_REBUILD`` is set by
         # ``scripts/diff_legacy_vs_rust.py`` so the rust snapshot reflects
         # exactly what the Rust pipeline produces, without the static-
         # artifact fallback masking the gaps.
-        needs_static_artifacts = (
-            not os.environ.get("REFLEX_RUST_NO_LEGACY_REBUILD")
-            and (
-                not (web_dir / "app" / "root.jsx").exists()
-                or not (web_dir / "utils" / "components.jsx").exists()
-            )
-        )
+        needs_static_artifacts = not os.environ.get(
+            "REFLEX_RUST_NO_LEGACY_REBUILD"
+        ) and not (web_dir / "app" / "root.jsx").exists()
         if needs_static_artifacts:
             console.rule("[bold]Rebuilding static artifacts (one-shot legacy compile)")
             legacy_start = time.monotonic()

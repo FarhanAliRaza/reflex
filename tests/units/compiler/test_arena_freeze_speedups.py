@@ -117,7 +117,7 @@ def test_A_batched_helper_call_count_equals_component_count() -> None:
     sess = CompilerSession()
     comp = _many_same_class_page()
     with patch.object(_native, "_arena_freeze_extract", wrapper):
-        page, _, _ = sess.compile_page_from_component_arena(comp, "Index", "/")
+        page, _, _, *_ = sess.compile_page_from_component_arena(comp, "Index", "/")
 
     # Every call must hit a distinct Component (no double-invocation
     # per id) — confirms the helper is the single batched entry point.
@@ -490,7 +490,7 @@ def test_C_periodic_revalidation() -> None:
     RotatingBare._phase[0] = "real"
     saw_non_trivial = False
     for _ in range(120):
-        page, _, _ = sess.compile_page_from_component_arena(
+        page, _, _, *_ = sess.compile_page_from_component_arena(
             rx.vstack(RotatingBare.create(contents="x")), "Index", "/"
         )
         if "// real code" in page:
@@ -555,7 +555,7 @@ def test_ABC_output_unchanged() -> None:
     """
     sess = CompilerSession()
     comp = _many_same_class_page()
-    page, bodies, imports = sess.compile_page_from_component_arena(
+    page, bodies, imports, *_ = sess.compile_page_from_component_arena(
         comp, "Index", "/"
     )
     # Structural assertions that survive whitespace-level changes but
@@ -568,7 +568,7 @@ def test_ABC_output_unchanged() -> None:
 
     # Determinism across a second call in the same session.
     comp2 = _many_same_class_page()
-    page2, bodies2, imports2 = sess.compile_page_from_component_arena(
+    page2, bodies2, imports2, *_ = sess.compile_page_from_component_arena(
         comp2, "Index", "/"
     )
     assert page == page2

@@ -9,7 +9,6 @@
 //! - [`collect_custom_code`] — distinct custom-code blocks in DFS order.
 //! - [`collect_dynamic_imports`] — distinct dynamic-import statements.
 //! - [`collect_refs`] — interned ref identifiers in observation order.
-//! - [`page_needs_ref`] — derived flag set whenever any node has a ref.
 //!
 //! All walks are linear scans over `Snapshot.nodes`; the snapshot's
 //! parent-before-children invariant means observation order matches DFS.
@@ -17,7 +16,7 @@
 use std::collections::HashSet;
 
 use reflex_intern::Symbol;
-use reflex_ir::{ImportEntry, Snapshot};
+use reflex_ir::{ImportEntry, NodeIdx, Snapshot};
 
 /// Deduplicated `(module, name)` pairs across every node in `snapshot`.
 /// Observation order matches the freeze walk (parent-before-children DFS),
@@ -36,17 +35,27 @@ pub fn collect_imports(snapshot: &Snapshot) -> Vec<ImportEntry> {
 }
 
 /// Distinct custom-code blocks, observation order. Skips
-/// `Symbol::EMPTY` slots.
+/// `Symbol::EMPTY` slots. Per node: the node's own `_get_custom_code`
+/// block first, then its `add_custom_code` MRO contributions — the same
+/// order as legacy `_get_all_custom_code`.
 pub fn collect_custom_code(snapshot: &Snapshot) -> Vec<Symbol> {
     let mut seen: HashSet<Symbol> = HashSet::new();
     let mut out: Vec<Symbol> = Vec::new();
-    for node in &snapshot.nodes {
-        let code = node.custom_code;
-        if code == Symbol::EMPTY {
-            continue;
-        }
-        if seen.insert(code) {
+    let mut push = |code: Symbol, seen: &mut HashSet<Symbol>, out: &mut Vec<Symbol>| {
+        if code != Symbol::EMPTY && seen.insert(code) {
             out.push(code);
+        }
+    };
+    for (idx, node) in snapshot.nodes.iter().enumerate() {
+        push(node.custom_code, &mut seen, &mut out);
+        if let Some(extra) = snapshot
+            .control_flow
+            .custom_code_extra
+            .get(&(idx as NodeIdx))
+        {
+            for code in extra {
+                push(*code, &mut seen, &mut out);
+            }
         }
     }
     out
@@ -85,12 +94,6 @@ pub fn collect_refs(snapshot: &Snapshot) -> Vec<Symbol> {
         }
     }
     out
-}
-
-/// Whether any node has a non-empty ref. Drives the page-level
-/// `const ref_root = useRef(null)` emission.
-pub fn page_needs_ref(snapshot: &Snapshot) -> bool {
-    snapshot.nodes.iter().any(|n| n.ref_name != Symbol::EMPTY)
 }
 
 #[cfg(test)]
@@ -159,7 +162,6 @@ mod tests {
         });
         let snap = b.finish();
         assert_eq!(collect_refs(&snap), vec![id_a, id_b]);
-        assert!(page_needs_ref(&snap));
     }
 
     #[test]
@@ -188,6 +190,5 @@ mod tests {
         assert!(collect_custom_code(&snap).is_empty());
         assert!(collect_dynamic_imports(&snap).is_empty());
         assert!(collect_refs(&snap).is_empty());
-        assert!(!page_needs_ref(&snap));
     }
 }

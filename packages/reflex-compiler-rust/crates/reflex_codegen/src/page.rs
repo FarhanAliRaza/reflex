@@ -11,7 +11,6 @@
 //! import { jsx } from "@emotion/react";
 //!
 //! export default function Component() {
-//!   const ref_root = useRef(null); refs["ref_root"] = ref_root;   // when page.needs_ref
 //!   const <state_path> = useContext(StateContexts.<state_path>);  // per state_bindings entry
 //!   const [addEvents, connectErrors] = useContext(EventLoopContext);
 //!   return ( jsx(...) );
@@ -123,12 +122,8 @@ fn emit_page_inner(
     buf.write_str(fn_name);
     buf.write_str("() {\n");
 
-    if page.needs_ref {
-        // Single shared ref for now; once the bridge tracks per-`id` refs
-        // we'll emit one line per id. The legacy renderer uses
-        // `ref_<id_or_synthetic>`.
-        buf.write_str("  const ref_root = useRef(null); refs[\"ref_root\"] = ref_root;\n");
-    }
+    // Per-node ref hooks come through the harvested hooks; see
+    // `page_from_snapshot.rs` for why no page-level ref line is emitted.
     for binding in page.state_bindings {
         let s = resolve_unchecked(*binding);
         buf.write_str("  const ");
@@ -335,7 +330,7 @@ mod tests {
             source_files: &[],
             component_imports: arena.bump().alloc_slice_copy(&imports),
             state_bindings: arena.bump().alloc_slice_copy(&bindings),
-            needs_ref: true,
+            needs_ref: false,
         };
         let mut buf = CodeBuffer::new();
         emit_page(&mut buf, &page, "X");
@@ -347,7 +342,6 @@ mod tests {
         assert!(s.contains(
             "const reflex___state____state__demo____my_state = useContext(StateContexts.reflex___state____state__demo____my_state);"
         ));
-        assert!(s.contains("const ref_root = useRef(null); refs[\"ref_root\"] = ref_root;"));
     }
 
     #[test]

@@ -193,7 +193,12 @@ def get_app(reload: bool = False) -> ModuleType:
             _check_app_name(config)
 
         module = config.module
-        sys.path.insert(0, getcwd())  # noqa: PTH109
+        # Repeated callers (e.g. the memo compiler via get_and_validate_app)
+        # must not grow sys.path — thousands of duplicate entries overflow the
+        # multiprocessing forkserver's command line (E2BIG) and kill `run`.
+        cwd = getcwd()  # noqa: PTH109
+        if cwd not in sys.path:
+            sys.path.insert(0, cwd)
         app = (
             __import__(module, fromlist=(constants.CompileVars.APP,))
             if not config.app_module

@@ -1,12 +1,15 @@
 {
   "contains": [
-    "match_template(",
+    "switch (JSON.stringify(",
+    "case JSON.stringify(\"a\"):",
+    "case JSON.stringify(\"b\"):",
     "alpha",
     "beta",
-    "default",
+    "default:",
     "mode"
   ],
   "not_contains": [
-    "undefined"
+    "undefined",
+    "match_template("
   ]
 }

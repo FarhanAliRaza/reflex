@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import operator
+from typing import TypedDict
 
 import pytest
 from reflex_base.utils.exceptions import PrimitiveUnserializableToJSONError
@@ -187,3 +188,194 @@ def test_container_element_type_inferred() -> None:
 
     assert LiteralVar.create([1, 2, 3])._var_type == Sequence[int]
     assert LiteralVar.create({"a": 1})._var_type == Mapping[str, int]
+
+
+class _Post(TypedDict):
+    url: str
+    views: int
+
+
+def test_typeddict_item_access_narrows_to_field_type() -> None:
+    """String-key and attribute access on a TypedDict-typed var yield the
+    field's annotated type.
+
+    Regression: TypedDict classes subclass ``dict`` (a registered ``Mapping``),
+    so object item access took the mapping value-type path, found no
+    ``__args__``, and fell back to the TypedDict type itself — making
+    ``post["url"]`` fail ``str`` prop validation downstream.
+    """
+    import reflex as rx
+
+    class _S(rx.State):
+        posts: list[_Post] = []
+        scores: dict[str, int] = {}
+
+    item = _S.posts[0]
+    assert item._var_type is _Post
+    assert item["url"]._var_type is str
+    assert item["views"]._var_type is int
+    assert item.url._var_type is str
+    # Plain mapping types still narrow to the mapping value type.
+    assert _S.scores["k"]._var_type is int
+
+
+def test_to_objectvar_cast_supports_attr_and_item_access() -> None:
+    """A Python var cast via ``.to(ObjectVar)`` supports attribute/item access.
+
+    Regression: the cutover deleted ``ObjectVar.__getattr__``, so ``ToOperation``
+    casts (e.g. ``rx.scroll_to``'s ``document.getElementById(...).to(ObjectVar)``)
+    raised ``VarAttributeError`` on any attribute access.
+    """
+    from reflex_base.vars.base import FunctionStringVar, ObjectVar
+
+    import reflex as rx
+
+    spec = rx.scroll_to("download-button")
+    assert "scrollIntoView" in str(spec.args[0][1])
+
+    obj = FunctionStringVar.create("document.getElementById").call("x").to(ObjectVar)
+    assert str(obj.focus) == '(document.getElementById("x"))?.["focus"]'
+    assert str(obj["focus"]) == '(document.getElementById("x"))?.["focus"]'
+
+
+def test_function_cast_native_var_is_callable() -> None:
+    """Direct-call syntax on a ``.to(FunctionVar)`` native var works like ``.call``.
+
+    Regression: ``reflex_enterprise``'s PassthroughAPI does
+    ``getattr(api, name)(*args)``; the native var exposed ``call`` but not
+    ``__call__``, so the call raised ``TypeError: not callable``.
+    """
+    from reflex_base.vars.base import FunctionStringVar, FunctionVar, ObjectVar
+
+    api = FunctionStringVar.create("document.getElementById").call("x").to(ObjectVar)
+    fn = api.selectAll.to(FunctionVar)
+    assert str(fn(True)) == str(fn.call(True))
+    assert str(fn()) == str(fn.call())
+
+
+def test_objectvar_get_method() -> None:
+    """``.get(key, default)`` on an object var renders ``cond(value, value, default)``.
+
+    Regression: the cutover dropped ``ObjectVar.get``, so ``.get`` resolved as
+    a field access whose result wasn't callable.
+    """
+    import reflex as rx
+
+    class _S(rx.State):
+        d: dict[str, str] = {}
+
+    item = str(_S.d["name"])
+    with_default = str(_S.d.get("name", "Unknown"))
+    assert item in with_default
+    assert '"Unknown"' in with_default
+    no_default = str(_S.d.get("name"))
+    assert item in no_default
+    assert "null" in no_default
+
+
+def test_objectvar_underscore_string_key_item_access() -> None:
+    """A leading-underscore string key resolves as item access.
+
+    Only dunder names are refused, matching pre-cutover ``ObjectVar.__getattr__``
+    (regression: ``reflex_enterprise`` map events read ``...to(dict)["_zoom"]``).
+    """
+    import reflex as rx
+
+    class _S(rx.State):
+        d: dict[str, int] = {}
+
+    v = _S.d["_zoom"]
+    assert v._var_type is int
+    assert str(v).endswith('?.["_zoom"]')
+    cast = _S.d.to(dict)["_zoom"]
+    assert str(cast).endswith('?.["_zoom"]')
+
+
+def test_bare_dict_item_access_narrows_to_any() -> None:
+    """Item access on a bare ``dict``-typed var yields ``Any``, not ``dict``.
+
+    Regression: the mapping value-type lookup fell back to the receiver's own
+    type when ``__args__`` was missing, so ``data["color"]`` stayed
+    dict-typed and failed prop validation (reflex_enterprise react-flow memo).
+    """
+    from typing import Any
+
+    import reflex as rx
+
+    class _S(rx.State):
+        d: dict = {}
+
+    assert _S.d["color"]._var_type is Any
+    assert _S.d.to(dict)["color"]._var_type is Any
+
+
+def test_event_chain_with_cond_var_event() -> None:
+    """A chain event that is a Var (``rx.cond`` of two EventSpecs) renders
+    wrapped in the invocation, like the pre-cutover
+    ``invocation.call(LiteralVar.create([event]), ...)`` form.
+
+    Regression: the Rust assembler discriminated events via
+    ``hasattr(event, "handler")``, which is true for a spec-*typed* Var, so it
+    read ``event.args`` (an item-access var) and raised on iterating it.
+    """
+    import reflex as rx
+
+    class _S(rx.State):
+        flag: bool = False
+
+        def a(self):
+            pass
+
+        def b(self):
+            pass
+
+    btn = rx.el.button(on_click=rx.cond(_S.flag, _S.a(), _S.b()))
+    chain_var = LiteralVar.create(btn.event_triggers["on_click"])
+    rendered = str(chain_var)
+    assert "addEvents([(" in rendered
+    assert '.a"' in rendered
+    assert '.b"' in rendered
+    var_data = chain_var._get_all_var_data()
+    assert var_data is not None
+    # The cond var's own var_data (its state ref) must flow into the chain's.
+    assert var_data.state
+    assert any("StateContexts" in hook for hook in var_data.hooks)
+
+
+def test_function_module_constants_reexported() -> None:
+    """``reflex.vars.function`` still exposes the public function constants.
+
+    Regression: the cutover shim dropped ``ARRAY_ISARRAY`` /
+    ``JSON_STRINGIFY`` / ``PROTOTYPE_TO_STRING`` (used by downstream code,
+    e.g. reflex-site-shared headings).
+    """
+    from reflex.vars import function, sequence
+
+    rendered = str(function.ARRAY_ISARRAY(LiteralVar.create([])))
+    assert rendered == "(Array.isArray([]))"
+    assert str(function.JSON_STRINGIFY) == "JSON.stringify"
+    assert "toString" in str(function.PROTOTYPE_TO_STRING)
+    mapped = str(
+        sequence.map_array_operation(
+            LiteralVar.create([1, 2]), function.PROTOTYPE_TO_STRING
+        )
+    )
+    assert ".map(" in mapped
+
+
+def test_custom_registered_subclass_uses_base_category_for_ops() -> None:
+    """A var typed as a custom registered subclass (e.g. ``ReflexURL`` →
+    ``ReflexURLVar``) dispatches operators via its standard base category.
+
+    Regression: ``rx.State.router.url + "#frag"`` raised ``VarTypeError:
+    Unsupported Operand type(s) for +: NumberVar, str`` because
+    ``var_category`` returned the custom subclass name verbatim and the
+    operator dispatch only knows the standard categories.
+    """
+    import reflex as rx
+
+    url = rx.State.router.url
+    joined = url + "#frag"
+    assert joined._js_expr.endswith('+"#frag")')
+    prefixed = "go: " + url
+    assert prefixed._js_expr.startswith('("go: "+')

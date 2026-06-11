@@ -13,7 +13,7 @@ use reflex_intern::{intern, resolve_unchecked, Symbol};
 use reflex_ir::{NodeIdx, NodeKind, NodeSnapshot, Snapshot};
 
 use crate::buffer::CodeBuffer;
-use crate::harvest::{collect_custom_code, collect_imports, page_needs_ref};
+use crate::harvest::{collect_custom_code, collect_imports};
 use crate::hooks_emit::{render_hooks, render_hooks_for_subtree};
 
 /// Baseline runtime aliases that every page module needs. Mirrors
@@ -108,9 +108,10 @@ pub fn emit_page_module_from_snapshot(
     }
 
     buf.write_str("\nexport default function Component() {\n");
-    if page_needs_ref(snapshot) {
-        buf.write_str("  const ref_root = useRef(null); refs[\"ref_root\"] = ref_root;\n");
-    }
+    // Refs are per-node hooks (`const ref_<id> = useRef(null); …`) harvested
+    // from Python `_get_ref_hook` and emitted by `render_hooks` below — no
+    // page-level ref line (a page-level `const ref_root` duplicated the node
+    // hook whenever a node had `id="root"`, an invalid-JS double declaration).
     for binding in collect_state_bindings(snapshot) {
         buf.write_str("  const ");
         buf.write_str(&binding);
@@ -196,15 +197,13 @@ pub fn emit_memo_module_from_snapshot(
     signature: &str,
     pre_hooks_extra: &str,
 ) {
-    emit_memo_module_imports(buf, snapshot);
+    emit_memo_module_imports(buf, snapshot, body_root);
     buf.write_str("\nexport const ");
     buf.write_str(name);
     buf.write_str(" = memo(");
     buf.write_str(signature);
     buf.write_str(" => {\n");
-    if page_needs_ref(snapshot) {
-        buf.write_str("  const ref_root = useRef(null); refs[\"ref_root\"] = ref_root;\n");
-    }
+    // Per-node ref hooks come through `render_hooks`; see the page emitter.
     for binding in collect_state_bindings(snapshot) {
         buf.write_str("  const ");
         buf.write_str(&binding);
@@ -249,16 +248,71 @@ const MEMO_RUNTIME_IMPORTS: &[(&str, &str)] = &[
 ];
 
 fn emit_page_imports(buf: &mut CodeBuffer, snapshot: &Snapshot) {
-    emit_combined_imports(buf, snapshot, PAGE_RUNTIME_IMPORTS);
+    let wrappers = wrapper_imports(snapshot, snapshot.root, true);
+    emit_combined_imports(buf, snapshot, PAGE_RUNTIME_IMPORTS, &wrappers);
 }
 
-fn emit_memo_module_imports(buf: &mut CodeBuffer, snapshot: &Snapshot) {
-    emit_combined_imports(buf, snapshot, MEMO_RUNTIME_IMPORTS);
+/// Memo-wrapper imports referenced by the JSX rendered from `root`: every
+/// wrap-redirected node in the rendered scope draws
+/// `import { <Body> } from "$/utils/components/<Body>"`. The walk descends
+/// THROUGH redirected nodes (their children render at this scope as the
+/// wrapper's JSX children — same rule as the hooks scope walk).
+/// `include_root` is false for memo bodies: the body renders the candidate
+/// element itself, not its own wrapper, and a self-import would collide
+/// with the module's own `export const <Body>`.
+fn wrapper_imports(
+    snapshot: &Snapshot,
+    root: NodeIdx,
+    include_root: bool,
+) -> Vec<(String, String)> {
+    if snapshot.wrap_redirects.is_empty() || snapshot.is_empty() {
+        return Vec::new();
+    }
+    let mut names: Vec<reflex_intern::Symbol> = Vec::new();
+    let mut visited = vec![false; snapshot.nodes.len()];
+    let mut stack: Vec<NodeIdx> = vec![root];
+    while let Some(idx) = stack.pop() {
+        if (idx as usize) >= snapshot.nodes.len() || visited[idx as usize] {
+            continue;
+        }
+        visited[idx as usize] = true;
+        if idx != root || include_root {
+            if let Some(wrapper_idx) = snapshot.wrap_redirects.get(&idx) {
+                let body_name = snapshot.node(*wrapper_idx).tag;
+                if body_name != reflex_intern::Symbol::EMPTY && !names.contains(&body_name) {
+                    names.push(body_name);
+                }
+            }
+        }
+        let node = snapshot.node(idx);
+        for child in node.children.clone() {
+            stack.push(child);
+        }
+        crate::hooks_emit::push_control_flow_roots(snapshot, idx, &mut stack);
+    }
+    names
+        .into_iter()
+        .map(|s| {
+            let n = resolve_unchecked(s).to_owned();
+            (format!("$/utils/components/{n}"), n)
+        })
+        .collect()
 }
 
-fn emit_combined_imports(buf: &mut CodeBuffer, snapshot: &Snapshot, runtime: &[(&str, &str)]) {
-    // Combine runtime + harvested per-node imports, then group by
-    // module preserving first-seen order — same shape as
+fn emit_memo_module_imports(buf: &mut CodeBuffer, snapshot: &Snapshot, body_root: NodeIdx) {
+    let wrappers = wrapper_imports(snapshot, body_root, false);
+    emit_combined_imports(buf, snapshot, MEMO_RUNTIME_IMPORTS, &wrappers);
+}
+
+fn emit_combined_imports(
+    buf: &mut CodeBuffer,
+    snapshot: &Snapshot,
+    runtime: &[(&str, &str)],
+    wrappers: &[(String, String)],
+) {
+    // Combine runtime + harvested per-node imports + the memo-wrapper
+    // imports this module's JSX references, then group by module
+    // preserving first-seen order — same shape as
     // `page::emit_imports_grouped_by_module`.
     let mut all: Vec<(String, String)> = Vec::with_capacity(runtime.len() + 16);
     let mut runtime_react: Vec<(String, String)> = runtime
@@ -281,6 +335,7 @@ fn emit_combined_imports(buf: &mut CodeBuffer, snapshot: &Snapshot, runtime: &[(
         let aliased = apply_alias_prefix(module);
         all.push((aliased, name.to_owned()));
     }
+    all.extend(wrappers.iter().cloned());
     all.extend(runtime_rest);
 
     let mut modules: Vec<String> = Vec::new();
@@ -448,9 +503,14 @@ fn emit_foreach(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, node: &
         .get(&idx)
         .map(|s| resolve_unchecked(*s))
         .unwrap_or("[]");
+    let (arg, index) = crate::jsx_compact_from_snapshot::foreach_arg_names(snapshot, idx);
     buf.write_str("(");
     buf.write_str(iter_expr);
-    buf.write_str(").map((item, index) => ");
+    buf.write_str(").map((");
+    buf.write_str(arg);
+    buf.write_str(", ");
+    buf.write_str(index);
+    buf.write_str(") => ");
     if let Some(body) = node.children.clone().next() {
         emit_node(buf, snapshot, body);
     } else {
@@ -484,6 +544,12 @@ fn emit_cond(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, node: &Nod
     buf.write_str(")");
 }
 
+/// Render a Match node as the legacy switch-IIFE
+/// (`templates._RenderUtils.render_match_tag`): one `case
+/// JSON.stringify(...)` label per condition, consecutive arms sharing a
+/// body collapse into one `return`, and the `default` arm closes the
+/// switch. (The previous `match_template(...)` form referenced a runtime
+/// helper that doesn't exist.)
 fn emit_match(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, _node: &NodeSnapshot) {
     let value = snapshot
         .control_flow
@@ -491,28 +557,31 @@ fn emit_match(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, _node: &N
         .get(&idx)
         .map(|s| resolve_unchecked(*s))
         .unwrap_or("null");
-    buf.write_str("match_template((");
+    buf.write_str("(() => {\n  switch (JSON.stringify(");
     buf.write_str(value);
-    buf.write_str("), [");
+    buf.write_str(")) {\n");
     if let Some(arms) = snapshot.control_flow.match_arms.get(&idx) {
-        for (i, (case, body_idx)) in arms.iter().enumerate() {
-            if i > 0 {
-                buf.write_str(", ");
+        let mut i = 0;
+        while i < arms.len() {
+            let body = arms[i].1;
+            while i < arms.len() && arms[i].1 == body {
+                buf.write_str("    case JSON.stringify(");
+                buf.write_str(resolve_unchecked(arms[i].0));
+                buf.write_str("):\n");
+                i += 1;
             }
-            buf.write_str("[");
-            buf.write_str(resolve_unchecked(*case));
-            buf.write_str(", ");
-            emit_node(buf, snapshot, *body_idx);
-            buf.write_str("]");
+            buf.write_str("      return ");
+            emit_node(buf, snapshot, body);
+            buf.write_str(";\n      break;\n");
         }
     }
-    buf.write_str("], ");
+    buf.write_str("    default:\n      return ");
     if let Some(default_idx) = snapshot.control_flow.match_default.get(&idx) {
         emit_node(buf, snapshot, *default_idx);
     } else {
         buf.write_str("null");
     }
-    buf.write_str(")");
+    buf.write_str(";\n      break;\n  }\n})()");
 }
 
 fn emit_memoize(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, node: &NodeSnapshot) {
@@ -635,6 +704,18 @@ fn write_props_and_events(
         write_prop_key(buf, &renamed);
         buf.write_str(": ");
         buf.write_str(resolve_unchecked(*value));
+    }
+    // Spread props render after the keyed props (legacy `format_props`
+    // appends `...{expr}` entries last).
+    if let Some(spreads) = snapshot.control_flow.special_props.get(&idx) {
+        for spread in spreads {
+            if !first {
+                buf.write_str(", ");
+            }
+            first = false;
+            buf.write_str("...");
+            buf.write_str(resolve_unchecked(*spread));
+        }
     }
 }
 
@@ -984,7 +1065,7 @@ mod tests {
         emit_jsx_from_snapshot(&mut b, &snap);
         assert_eq!(
             to_string(b),
-            "match_template((state.value), [[\"a\", jsx(p, {})], [\"b\", jsx(span, {})]], jsx(div, {}))"
+            "(() => {\n  switch (JSON.stringify(state.value)) {\n    case JSON.stringify(\"a\"):\n      return jsx(p, {});\n      break;\n    case JSON.stringify(\"b\"):\n      return jsx(span, {});\n      break;\n    default:\n      return jsx(div, {});\n      break;\n  }\n})()"
         );
     }
 

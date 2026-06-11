@@ -412,7 +412,7 @@ def compile_experimental_component_memo(
         render.children = [hole_child]
         rendered = render.render()
     else:
-        render = _apply_component_style_for_compile(copy.deepcopy(definition.component))
+        render = prepare_memo_component_for_compile(definition)
         hooks = render._get_all_hooks()
         rendered = render.render()
         custom_code = render._get_all_custom_code()
@@ -429,6 +429,44 @@ def compile_experimental_component_memo(
 
     imports.setdefault("@emotion/react", []).append(ImportVar("jsx"))
 
+    return (
+        {
+            "kind": "component",
+            "name": definition.export_name,
+            "signature": memo_component_signature(definition),
+            "render": rendered,
+            "hooks": hooks,
+            "custom_code": custom_code,
+            "dynamic_imports": dynamic_imports,
+        },
+        imports,
+    )
+
+
+def prepare_memo_component_for_compile(
+    definition: MemoComponentDefinition,
+) -> Component:
+    """Deep-copy and app-style a memo's body Component for compilation.
+
+    Args:
+        definition: The component memo definition.
+
+    Returns:
+        The styled copy, safe to render/freeze without mutating the
+        registered definition.
+    """
+    return _apply_component_style_for_compile(copy.deepcopy(definition.component))
+
+
+def memo_component_signature(definition: MemoComponentDefinition) -> str:
+    """Build the destructured-props signature for a memo component module.
+
+    Args:
+        definition: The component memo definition.
+
+    Returns:
+        The JavaScript destructuring signature, e.g. ``{ text, children }``.
+    """
     signature_fields = [
         field
         for param in definition.params
@@ -442,21 +480,10 @@ def compile_experimental_component_memo(
         (p for p in definition.params if p.kind is MemoParamKind.REST), None
     )
 
-    return (
-        {
-            "kind": "component",
-            "name": definition.export_name,
-            "signature": DestructuredArg(
-                fields=tuple(signature_fields),
-                rest=rest_param.placeholder_name if rest_param is not None else None,
-            ).to_javascript(),
-            "render": rendered,
-            "hooks": hooks,
-            "custom_code": custom_code,
-            "dynamic_imports": dynamic_imports,
-        },
-        imports,
-    )
+    return DestructuredArg(
+        fields=tuple(signature_fields),
+        rest=rest_param.placeholder_name if rest_param is not None else None,
+    ).to_javascript()
 
 
 def _root_only_hooks(component: Component) -> dict[str, VarData | None]:

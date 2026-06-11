@@ -125,12 +125,12 @@ def test_arena_output_unchanged_by_optimizations() -> None:
     PyO3-trick change must produce identical bytes."""
     sess = CompilerSession()
     comp = _medium_page()
-    page_a, bodies_a, imports_a = sess.compile_page_from_component_arena(
+    page_a, bodies_a, imports_a, *_ = sess.compile_page_from_component_arena(
         comp, "Index", "/"
     )
 
     comp2 = _medium_page()
-    page_b, bodies_b, imports_b = sess.compile_page_from_component_arena(
+    page_b, bodies_b, imports_b, *_ = sess.compile_page_from_component_arena(
         comp2, "Index", "/"
     )
 

@@ -6,6 +6,9 @@ machinery now lives in ``reflex_base.vars.base``.
 """
 
 from reflex_base.vars.base import (
+    ARRAY_ISARRAY,
+    JSON_STRINGIFY,
+    PROTOTYPE_TO_STRING,
     ArgsFunctionOperation,
     ArgsFunctionOperationBuilder,
     DestructuredArg,
@@ -15,6 +18,9 @@ from reflex_base.vars.base import (
 )
 
 __all__ = [
+    "ARRAY_ISARRAY",
+    "JSON_STRINGIFY",
+    "PROTOTYPE_TO_STRING",
     "ArgsFunctionOperation",
     "ArgsFunctionOperationBuilder",
     "DestructuredArg",

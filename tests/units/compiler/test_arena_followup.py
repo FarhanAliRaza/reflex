@@ -539,11 +539,15 @@ def test_arena_end_to_end_no_legacy_calls(tmp_path: Path) -> None:
             _explode,
         ),
         # The legacy plugin-chain callees that the ports replace.
-        # ``_compile_memo_components`` stays guarded: the pipeline no
-        # longer emits memos at all (the ``CUSTOM_COMPONENTS`` port was
-        # dropped), so the legacy memo compiler must never fire here.
+        # ``@rx.memo`` emission deliberately reuses the legacy
+        # ``compile_memo_components`` (memo modules need the legacy
+        # harvest until that emitter is ported) — stub it out so this
+        # test keeps isolating the page/app-root critical path.
         patch("reflex.compiler.utils.create_document_root", _explode),
-        patch("reflex.compiler.compiler._compile_memo_components", _explode),
+        patch(
+            "reflex.compiler.rust_pipeline.compile_memo_components",
+            lambda _memos: ([], {}),
+        ),
     ]
     with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
         # If any patched function fires, rust_pipeline.compile_pages

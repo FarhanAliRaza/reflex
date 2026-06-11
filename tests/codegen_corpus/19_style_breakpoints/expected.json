@@ -1,0 +1,12 @@
+{
+  "contains": [
+    "@media screen and (min-width: 0)",
+    "@media screen and (min-width: 30em)",
+    "@media screen and (min-width: 48em)",
+    "[\"width\"] : \"25%\"",
+    "[\"fontSize\"] : \"3em\""
+  ],
+  "not_contains": [
+    "undefined"
+  ]
+}

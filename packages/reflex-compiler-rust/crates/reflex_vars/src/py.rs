@@ -22,7 +22,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use pyo3::basic::CompareOp;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyType};
+use pyo3::types::{
+    PyBool, PyDict, PyFloat, PyFrozenSet, PyInt, PyList, PySet, PyString, PyTuple, PyType,
+};
 use pyo3::PyTypeInfo;
 
 use crate::var::Var;
@@ -31,7 +33,7 @@ use crate::var_data::{normalize_import_lib, ImportVar, VarData};
 /// f-string marker tags — must match `REFLEX_VAR_OPENING_TAG` /
 /// `REFLEX_VAR_CLOSING_TAG` (constants/base.py) so a RustVar can be formatted
 /// into a Python f-string and decoded by either side during the transition.
-const VAR_OPENING_TAG: &str = "<reflex.Var>";
+pub const VAR_OPENING_TAG: &str = "<reflex.Var>";
 const VAR_CLOSING_TAG: &str = "</reflex.Var>";
 
 /// A registered var's recoverable state: its js_expr and aggregate var_data.
@@ -402,6 +404,31 @@ impl RustVar {
             var_type: func_return_type(py, &self.var_type),
             var_data: var_op_plain(&refs),
         })
+    }
+
+    /// `obj.get(key, default)` on an object var (matches `ObjectVar.get`):
+    /// `cond(value, value, default)` over the item access, with a `None`
+    /// default literalized to `null`.
+    #[pyo3(signature = (key, default=None))]
+    fn get(
+        &self,
+        py: Python<'_>,
+        key: Bound<'_, PyAny>,
+        default: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let value = self.__getitem__(py, key)?;
+        let default = match default {
+            Some(d) if !d.is_none() => d.unbind(),
+            _ => py
+                .import_bound("reflex_base.vars.base")?
+                .getattr("Var")?
+                .call_method1("create", (py.None(),))?
+                .unbind(),
+        };
+        py.import_bound("reflex_components_core.core.cond")?
+            .getattr("cond")?
+            .call1((&value, &value, default))
+            .map(|v| v.unbind())
     }
 
     /// A `refs[...]` reference to this var (matches `Var._as_ref`).
@@ -953,41 +980,64 @@ impl RustVar {
     ///   -> adopt `var_type or output` as the new var_type.
     #[pyo3(signature = (output, var_type=None))]
     fn to(
-        &self,
-        py: Python<'_>,
+        slf: &Bound<'_, Self>,
         output: Bound<'_, PyAny>,
         var_type: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<RustVar> {
-        let cast = |t: Py<PyAny>| RustVar {
-            js_expr: self.js_expr.clone(),
-            var_type: t,
-            var_data: var_op_plain(&[&self.var_data]),
+    ) -> PyResult<Py<PyAny>> {
+        let py = slf.py();
+        let this = slf.borrow();
+        let cast = |t: Py<PyAny>| -> PyResult<Py<PyAny>> {
+            Ok(Bound::new(
+                py,
+                RustVar {
+                    js_expr: this.js_expr.clone(),
+                    var_type: t,
+                    var_data: var_op_plain(&[&this.var_data]),
+                },
+            )?
+            .into_any()
+            .unbind())
         };
         let typing = py.import_bound("typing")?;
         // `output is None` -> NoneVar cast (var_type NoneType).
         if output.is_none() {
             let none_type = py.None().bind(py).get_type().into_any().unbind();
-            return Ok(cast(none_type));
+            return cast(none_type);
         }
         // An output that is a Var class (a typed Var subclass like ObjectVar /
         // StringVar, or RustVar itself) keeps the current var_type unless an
         // explicit var_type overrides it (matches the `var_subclass` branch).
         if let Ok(ty) = output.downcast::<PyType>() {
+            let base_mod = py.import_bound("reflex_base.vars.base")?;
             let is_var_class = ty.is_subclass_of::<RustVar>().unwrap_or(false)
-                || py
-                    .import_bound("reflex_base.vars.base")
-                    .and_then(|m| m.getattr("Var"))
+                || base_mod
+                    .getattr("Var")
                     .and_then(|var_cls| ty.is_subclass(&var_cls))
                     .unwrap_or(false);
             if is_var_class {
-                let current = self.var_type.bind(py);
+                // Function-class casts go through the Python `Var.to`, which
+                // produces the callable `ToOperation` subclass — callability
+                // lives on the Python class (`FunctionVar.__call__`), which
+                // the unified RustVar doesn't carry.
+                let is_function_class = base_mod
+                    .getattr("FunctionVar")
+                    .and_then(|fv| ty.is_subclass(&fv))
+                    .unwrap_or(false);
+                if is_function_class {
+                    return Ok(base_mod
+                        .getattr("Var")?
+                        .getattr("to")?
+                        .call1((slf, &output, var_type))?
+                        .unbind());
+                }
+                let current = this.var_type.bind(py);
                 let is_any = current.eq(typing.getattr("Any")?).unwrap_or(false);
                 let new_type = match (var_type, is_any) {
                     (Some(vt), _) => vt.unbind(),
                     (None, true) => typing.getattr("Any")?.unbind(),
-                    (None, false) => self.var_type.clone_ref(py),
+                    (None, false) => this.var_type.clone_ref(py),
                 };
-                return Ok(cast(new_type));
+                return cast(new_type);
             }
         }
         // A Union/Optional output without an explicit var_type leaves the var
@@ -1007,16 +1057,21 @@ impl RustVar {
                 .is_truthy()
                 .unwrap_or(false);
             if !object_able {
-                return Ok(RustVar {
-                    js_expr: self.js_expr.clone(),
-                    var_type: self.var_type.clone_ref(py),
-                    var_data: self.var_data.clone(),
-                });
+                return Ok(Bound::new(
+                    py,
+                    RustVar {
+                        js_expr: this.js_expr.clone(),
+                        var_type: this.var_type.clone_ref(py),
+                        var_data: this.var_data.clone(),
+                    },
+                )?
+                .into_any()
+                .unbind());
             }
         }
         // Otherwise adopt `var_type or output` as the new type.
         let new_type = var_type.map_or_else(|| output.clone().unbind(), |vt| vt.unbind());
-        Ok(cast(new_type))
+        cast(new_type)
     }
 
     // --- string methods (mirror StringVar in vars/sequence.py) ---
@@ -1476,11 +1531,28 @@ impl RustVar {
 }
 
 impl RustVar {
+    /// Direct Rust-side read of the JS expression for in-process consumers
+    /// (the freeze pass) — skips the Python attribute protocol and the
+    /// PyString round-trip of the `_js_expr` getter.
+    pub fn js_expr_str(&self) -> &str {
+        &self.js_expr
+    }
+
+    /// Direct Rust-side read of the stored `VarData` (what
+    /// `_get_all_var_data` clones and wraps for Python).
+    pub fn var_data_ref(&self) -> Option<&VarData> {
+        self.var_data.as_ref()
+    }
+}
+
+impl RustVar {
     /// The raw object attribute access `{self}?.["name"]` (the pre-`guess_type`
     /// half of `ObjectVar.__getattr__`). Private/internal names and non-object
     /// receivers raise `AttributeError`.
     fn attr_access(&self, py: Python<'_>, name: &str) -> PyResult<RustVar> {
-        if name.starts_with('_') {
+        // Only dunder names are refused (matches ObjectVar.__getattr__) —
+        // single-underscore keys like `["_zoom"]` are valid item accesses.
+        if name.starts_with("__") && name.ends_with("__") {
             return Err(pyo3::exceptions::PyAttributeError::new_err(name.to_owned()));
         }
         if var_category(py, &self.var_type)? != "ObjectVar" {
@@ -2190,6 +2262,13 @@ fn array_element_type(
 /// instance otherwise. Used where Python calls `.guess_type()` on an operation
 /// result (attribute/item access).
 fn guess_typed(py: Python<'_>, var: RustVar) -> PyResult<Py<PyAny>> {
+    // `guess_type` is identity for every standard type, so when Rust can
+    // classify the result there is nothing to do — return it directly and skip
+    // the Python `_rust_guess_type` round-trip. Only custom/unknown types
+    // (where a casted subclass may be produced) fall back to Python.
+    if rust_classify_standard(py, &var.var_type)?.is_some() {
+        return Ok(Bound::new(py, var)?.into_any().unbind());
+    }
     let obj = Bound::new(py, var)?;
     py.import_bound("reflex_base.vars.base")?
         .getattr("_rust_guess_type")?
@@ -2220,18 +2299,19 @@ fn object_attr_type(
         origin.clone()
     };
     let mapping = py.import_bound("collections.abc")?.getattr("Mapping")?;
+    // TypedDict classes subclass dict (a registered Mapping) but have no
+    // __args__; their fields resolve by annotation below, not by value type.
     let is_mapping = fixed
         .downcast::<PyType>()
         .map(|t| t.is_subclass(&mapping).unwrap_or(false))
-        .unwrap_or(false);
+        .unwrap_or(false)
+        && !typing
+            .call_method1("is_typeddict", (&fixed,))?
+            .is_truthy()?;
     if is_mapping {
-        // Mapping value type = var_type.__args__[1] (fall back to the var_type).
-        return Ok(resolved
-            .getattr("__args__")
-            .ok()
-            .and_then(|args| args.get_item(1).ok())
-            .map(|t| t.unbind())
-            .unwrap_or_else(|| var_type.clone_ref(py)));
+        // Mapping value type via `_determine_value_type` (`Any` when bare),
+        // matching `ObjectItemOperation` without an explicit attribute type.
+        return Ok(determine_value_type(py, var_type));
     }
     let attribute_type =
         types_mod.call_method1("get_attribute_access_type", (var_type.bind(py), name))?;
@@ -2323,15 +2403,83 @@ fn var_attribute_error(py: Python<'_>, msg: &str) -> PyErr {
     }
 }
 
+/// Classify a `var_type` into its typed-`Var` category **in Rust**, for the
+/// standard concrete types, without crossing into Python. Returns `None` for
+/// anything it can't classify with certainty (objects/dataclasses/`Base`,
+/// generics over ABCs, unions, custom registered types), so the caller falls
+/// back to the full Python classifier. This is the common-case fast path that
+/// keeps ordinary number/string/array/dict operations entirely in Rust.
+fn rust_classify_standard(py: Python<'_>, var_type: &Py<PyAny>) -> PyResult<Option<&'static str>> {
+    let bound = var_type.bind(py);
+    // Resolve a typing generic to its origin (e.g. `list[int]` -> `list`).
+    let origin;
+    let fixed = if bound.hasattr("__origin__")? {
+        origin = bound.getattr("__origin__")?;
+        &origin
+    } else {
+        bound
+    };
+    // `bool` must be checked before `int` (bool is an int subclass).
+    if fixed.is(&PyBool::type_object_bound(py)) {
+        return Ok(Some("BooleanVar"));
+    }
+    if fixed.is(&PyInt::type_object_bound(py)) || fixed.is(&PyFloat::type_object_bound(py)) {
+        return Ok(Some("NumberVar"));
+    }
+    if fixed.is(&PyString::type_object_bound(py)) {
+        return Ok(Some("StringVar"));
+    }
+    if fixed.is(&PyList::type_object_bound(py))
+        || fixed.is(&PyTuple::type_object_bound(py))
+        || fixed.is(&PySet::type_object_bound(py))
+        || fixed.is(&PyFrozenSet::type_object_bound(py))
+    {
+        return Ok(Some("ArrayVar"));
+    }
+    if fixed.is(&PyDict::type_object_bound(py)) {
+        return Ok(Some("ObjectVar"));
+    }
+    Ok(None)
+}
+
 /// The typed-`Var` category name for a `var_type` (e.g. `"NumberVar"`,
-/// `"StringVar"`, `"ArrayVar"`), via the same classifier the isinstance bridge
-/// uses. Used to dispatch operator validation by the receiver's type.
+/// `"StringVar"`, `"ArrayVar"`). Resolved in Rust for standard types; only
+/// custom/unknown types fall back to the Python `_rust_var_classify` bridge.
+///
+/// A custom registered subclass (e.g. `ReflexURLVar` for `ReflexURL`) is
+/// canonicalized to its nearest STANDARD ancestor (`StringVar`, …) by
+/// walking the matched class's MRO — the operator dispatch only knows the
+/// standard categories, so returning the subclass name verbatim made e.g.
+/// `router.url + "#"` fall through to the unsupported-operand error.
 fn var_category(py: Python<'_>, var_type: &Py<PyAny>) -> PyResult<String> {
-    py.import_bound("reflex_base.vars.base")?
+    if let Some(cat) = rust_classify_standard(py, var_type)? {
+        return Ok(cat.to_owned());
+    }
+    let base_mod = py.import_bound("reflex_base.vars.base")?;
+    let matched = base_mod
         .getattr("_rust_var_classify")?
-        .call1((var_type.bind(py),))?
-        .getattr("__name__")?
-        .extract()
+        .call1((var_type.bind(py),))?;
+    let standard = base_mod.getattr("_STANDARD_VAR_CLASS_NAMES")?;
+    let name: String = matched.getattr("__name__")?.extract()?;
+    if standard.contains(&name)? {
+        return Ok(name);
+    }
+    if let Ok(mro) = matched.getattr("__mro__") {
+        if let Ok(iter) = mro.iter() {
+            for cls in iter.flatten() {
+                let Ok(n) = cls.getattr("__name__") else {
+                    continue;
+                };
+                let Ok(n) = n.extract::<String>() else {
+                    continue;
+                };
+                if standard.contains(&n).unwrap_or(false) {
+                    return Ok(n);
+                }
+            }
+        }
+    }
+    Ok(name)
 }
 
 /// The `type(value).__name__` of an operand (for operand-error messages).
@@ -2713,6 +2861,16 @@ fn collect_container_var_data(
 /// `LiteralVar._get_all_var_data_without_creating_var_dispatch`): a Var's own
 /// var_data, a nested container's aggregate, else `None`.
 fn element_dispatch_var_data(py: Python<'_>, elem: &Bound<'_, PyAny>) -> PyResult<Option<VarData>> {
+    // Plain numeric/None primitives are never vars and carry no var_data. Skip
+    // the Python dispatch entirely — the common case for literal list/dict
+    // elements, avoiding a per-element crossing
+    // (`_get_all_var_data_without_creating_var_dispatch` + its isinstance walk).
+    // `PyInt` also matches `bool` (a subclass). `str` is intentionally NOT
+    // fast-pathed: an f-string-derived `str` carries encoded var references whose
+    // var_data must be recovered by the Python dispatch below.
+    if elem.is_none() || elem.is_instance_of::<PyInt>() || elem.is_instance_of::<PyFloat>() {
+        return Ok(None);
+    }
     if elem.hasattr("_js_expr")? && elem.hasattr("_var_type")? {
         return convert_var_data(&elem.call_method0("_get_all_var_data")?);
     }
@@ -3168,6 +3326,23 @@ impl PyVarData {
     }
 }
 
+impl PyVarData {
+    /// Direct Rust-side read of the wrapped `VarData` for in-process
+    /// consumers (the freeze pass) — skips the per-bucket getter
+    /// materialization (`hooks` tuple, `imports` tuple-of-`PyImportVar`s).
+    pub fn inner_ref(&self) -> &VarData {
+        &self.inner
+    }
+}
+
+impl PyImportVar {
+    /// Wrap a Rust `ImportVar` for handing to Python (the freeze pass's
+    /// bun-install accumulator materializes native import entries this way).
+    pub fn from_struct(inner: ImportVar) -> Self {
+        Self { inner }
+    }
+}
+
 /// A Rust-backed `ImportVar` exposed to Python. The framework reads `tag`
 /// (plus the rendering attributes), so they are surfaced as getters.
 #[pyclass(
@@ -3561,12 +3736,21 @@ fn gather_event_chain_var_data(
             parts.push(vd.clone());
         }
     }
+    let event_spec_cls = py.import_bound("reflex_base.event")?.getattr("EventSpec")?;
     for es in &events {
-        // A FunctionVar event (no `handler`) renders as `event.call(...)` and
-        // contributes only its own var_data — no invocation. An EventSpec is
-        // wrapped in the invocation, so it carries the invocation's var_data
-        // plus its args' and actions' var_data.
-        if !es.hasattr("handler")? {
+        // Only a real EventSpec takes the spec form; a spec-TYPED Var also has
+        // a `handler` attribute (field access), so hasattr can't discriminate.
+        // A FunctionVar event renders as `event.call(...)` and contributes
+        // only its own var_data; any other Var event renders wrapped in the
+        // invocation (like a spec), so it carries the invocation's var_data
+        // plus its own. An EventSpec carries the invocation's var_data plus
+        // its args' and actions' var_data.
+        if !es.is_instance(&event_spec_cls)? {
+            if !is_function_var_event(py, es)? {
+                if let Some(vd) = &invocation_vd {
+                    parts.push(vd.clone());
+                }
+            }
             collect(es, &mut parts)?;
             continue;
         }
@@ -3600,6 +3784,18 @@ fn gather_event_chain_var_data(
         }
     }
     Ok(VarData::merge(parts.iter().map(Some)).ok().flatten())
+}
+
+/// Whether a non-EventSpec chain event renders call-style (matches the
+/// pre-cutover `isinstance(event, FunctionVar)` — via `var_isinstance`, which
+/// classifies RustVars by their var_type category).
+fn is_function_var_event(py: Python<'_>, event: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let base_mod = py.import_bound("reflex_base.vars.base")?;
+    let function_var = base_mod.getattr("FunctionVar")?;
+    base_mod
+        .getattr("var_isinstance")?
+        .call1((event, function_var))?
+        .is_truthy()
 }
 
 /// One segment of a decoded marker string: a literal chunk or a referenced var.
@@ -3939,13 +4135,24 @@ pub fn rust_assemble_event_chain(py: Python<'_>, chain: Bound<'_, PyAny>) -> PyR
     if events.is_empty() {
         statements.push(format!("({invocation_js}([], {arg_def_expr}, ({{  }})))"));
     }
+    let event_spec_cls = py.import_bound("reflex_base.event")?.getattr("EventSpec")?;
     for es in &events {
-        // A FunctionVar event (no `handler`) renders as a direct call
-        // `(fn(call_args))`; an EventSpec renders the addEvents(ReflexEvent) form
-        // with an ALWAYS-empty 3rd arg (chain actions go in the wrapper).
-        if !es.hasattr("handler")? {
-            let func = es.getattr("_js_expr")?.str()?.to_string();
-            statements.push(render_function_event(&func, &call_args));
+        // Only a real EventSpec takes the ReflexEvent form (a spec-TYPED Var
+        // also has a `handler` attribute, so hasattr can't discriminate).
+        // A FunctionVar event renders as a direct call `(fn(call_args))`; any
+        // other Var event renders wrapped in the invocation, matching the
+        // pre-cutover `invocation.call(LiteralVar.create([event]), ...)`.
+        // EventSpecs render addEvents(ReflexEvent) with an ALWAYS-empty 3rd
+        // arg (chain actions go in the wrapper).
+        if !es.is_instance(&event_spec_cls)? {
+            let js = es.getattr("_js_expr")?.str()?.to_string();
+            if is_function_var_event(py, es)? {
+                statements.push(render_function_event(&js, &call_args));
+            } else {
+                statements.push(format!(
+                    "({invocation_js}([{js}], {arg_def_expr}, ({{  }})))"
+                ));
+            }
             continue;
         }
         let name = event_handler_name(&es.getattr("handler")?)?;

@@ -122,7 +122,7 @@ def test_arena_imports_dict_matches_legacy_shape() -> None:
     install step) keep working."""
     comp = _build_page()
     sess = CompilerSession()
-    _, _, imports = sess.compile_page_from_component_arena(comp, "Index", "/")
+    _, _, imports, *_ = sess.compile_page_from_component_arena(comp, "Index", "/")
     legacy_shape = comp._get_all_imports()
     # Every library in the legacy dict must be in the arena's. Values
     # are lists of ImportVars; we compare by tag/install/package_path
@@ -142,8 +142,12 @@ def test_arena_output_is_byte_deterministic() -> None:
     comp_a = _build_page()
     comp_b = _build_page()
     sess = CompilerSession()
-    page_a, bodies_a, _ = sess.compile_page_from_component_arena(comp_a, "Index", "/")
-    page_b, bodies_b, _ = sess.compile_page_from_component_arena(comp_b, "Index", "/")
+    page_a, bodies_a, _, *_ = sess.compile_page_from_component_arena(
+        comp_a, "Index", "/"
+    )
+    page_b, bodies_b, _, *_ = sess.compile_page_from_component_arena(
+        comp_b, "Index", "/"
+    )
     assert page_a == page_b, "page JSX differs between identical trees"
     names_a = sorted(n for n, _ in bodies_a)
     names_b = sorted(n for n, _ in bodies_b)
@@ -154,3 +158,43 @@ def test_arena_output_is_byte_deterministic() -> None:
         assert by_name_a[name] == by_name_b[name], (
             f"memo body {name!r} bytes differ between identical trees"
         )
+
+
+def test_arena_app_wraps_match_legacy_walk() -> None:
+    """The freeze walk harvests app-wrap components inline, replacing
+    the separate ``_get_all_app_wrap_components`` Python tree walk in
+    ``rust_pipeline.compile_pages``. Keys and value classes must match
+    the legacy walk on a tree mixing override classes (Upload, radix
+    themes components) with base ones, including under Foreach bodies,
+    and stay correct on a warm session (per-class dict cache).
+    """
+    comp = rx.fragment(
+        rx.vstack(
+            rx.heading("hi"),
+            rx.upload(rx.text("drop here")),
+            rx.foreach(rx.Var.create(["a", "b"]), lambda x: rx.badge(x)),
+        )
+    )
+    legacy = comp._get_all_app_wrap_components()
+    sess = CompilerSession()
+    _, _, _, wraps = sess.compile_page_from_component_arena(comp, "Index", "/")
+    assert sorted(wraps) == sorted(legacy)
+    for key, component in legacy.items():
+        assert type(wraps[key]) is type(component)
+
+    # Warm session: the per-class cached dict must still produce the
+    # full wrap set for a different page.
+    comp2 = rx.box(rx.upload(rx.text("x")), rx.badge("y"))
+    legacy2 = comp2._get_all_app_wrap_components()
+    _, _, _, wraps2 = sess.compile_page_from_component_arena(comp2, "Index2", "/two")
+    assert sorted(wraps2) == sorted(legacy2)
+
+
+def test_arena_app_wraps_empty_for_plain_tree() -> None:
+    """Pages with only base-behavior components return an empty wrap
+    dict — no override class ever pays a Python call.
+    """
+    comp = rx.fragment(rx.el.div(rx.el.span("plain")))
+    sess = CompilerSession()
+    _, _, _, wraps = sess.compile_page_from_component_arena(comp, "Index", "/")
+    assert wraps == {}

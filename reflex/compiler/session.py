@@ -146,6 +146,30 @@ class CompilerSession:
             out_path,
         )
 
+    def compile_rx_memo_arena(
+        self, component: Any, export_name: str, signature: str, out_path: str
+    ) -> dict[str, list]:
+        """Compile one ``@rx.memo`` component module and write it to disk.
+
+        Component in, file out, imports back: one arena freeze replaces the
+        legacy per-tree Python harvest (``render()`` + the four
+        ``_get_all_*`` aggregators) and the module assembles in Rust,
+        byte-identical to the legacy ``memo_single_component_template``.
+
+        Args:
+            component: the styled memo body Component.
+            export_name: the memo's export name.
+            signature: the destructured-props signature, e.g. ``{ text }``.
+            out_path: absolute path of the memo's ``.jsx`` module.
+
+        Returns:
+            The memo module's merged import dict, for the bun-install
+            aggregate.
+        """
+        return self._inner.compile_rx_memo_arena(
+            component, export_name, signature, out_path
+        )
+
     def compile_document_root_arena(
         self,
         head_components: list,
@@ -308,23 +332,6 @@ class CompilerSession:
         """
         return dict(self._inner.snapshot_stats(component))
 
-    def dump_snapshot(self, component: object) -> dict:
-        """Freeze ``component`` and return its IR as primitive Python data.
-
-        Every field downstream code (memoize pass, JSX emitter) reads
-        during compile is present in the returned dict. Tests rely on
-        this to verify the snapshot carries enough information that
-        Rust would not need any further PyO3 callback into Python
-        during emit.
-
-        Returns:
-            A nested dict of primitives (str, int, list, tuple, dict).
-            ``None`` is used in place of ``Symbol::EMPTY`` so callers
-            can tell "field not set" apart from "field is empty
-            string".
-        """
-        return self._inner.dump_snapshot(component)
-
     def should_memoize(self, component: object) -> bool:
         """Run the Rust memoize-decision walk on a Reflex ``Component``.
 
@@ -420,7 +427,7 @@ class CompilerSession:
         meta_tags: list[tuple[str, str]] | None = None,
         custom_code: list[str] | None = None,
         hooks_body: str | None = None,
-    ) -> tuple[str, list[tuple[str, str]], dict[str, list]]:
+    ) -> tuple[str, list[tuple[str, str]], dict[str, list], dict[tuple[int, str], Any]]:
         """PR4: arena-path page compile (planx.md cutover).
 
         Drives the full Component → JSX pipeline in one PyO3 call:
@@ -456,25 +463,35 @@ class CompilerSession:
                 the snapshot automatically.
 
         Returns:
-            ``(page_js, memo_bodies, imports)``:
+            ``(page_js, memo_bodies, imports, app_wraps)``:
 
             * ``page_js`` — full page module source.
             * ``memo_bodies`` — list of ``(name, jsx_source)`` for each
               unique memo body (already deduped by subtree_hash).
             * ``imports`` — page-level harvested import dict matching
               ``Component._get_all_imports()`` shape.
+            * ``app_wraps`` — ``{(priority, name): Component}`` app-wrap
+              dict matching ``_get_all_app_wrap_components()``, harvested
+              during the same freeze walk.
         """
         meta = list(meta_tags) if meta_tags else None
-        page_js, bodies, imports_dict = self._inner.compile_page_from_component_arena(
-            component,
-            route_ident,
-            route,
-            title,
-            meta,
-            list(custom_code) if custom_code else None,
-            hooks_body,
+        page_js, bodies, imports_dict, app_wraps = (
+            self._inner.compile_page_from_component_arena(
+                component,
+                route_ident,
+                route,
+                title,
+                meta,
+                list(custom_code) if custom_code else None,
+                hooks_body,
+            )
         )
-        return str(page_js), [(str(n), str(j)) for n, j in bodies], imports_dict
+        return (
+            str(page_js),
+            [(str(n), str(j)) for n, j in bodies],
+            imports_dict,
+            app_wraps,
+        )
 
     def write_if_changed(self, out_path: str, content: str) -> bool:
         """PR0 skip-if-unchanged write.

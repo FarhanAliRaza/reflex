@@ -191,7 +191,12 @@ fn rewrite_one_node_event_triggers(snapshot: &mut Snapshot, idx: NodeIdx) -> usi
     let mut rewritten = 0usize;
     for (trigger_sym, expr_sym) in node.event_callbacks.iter() {
         let trigger = resolve_unchecked(*trigger_sym);
-        if matches!(trigger, "on_mount" | "on_unmount" | "on_submit") {
+        // Triggers arrive snake-cased from the raw-field freeze path and
+        // camelCased from the rendered-Tag path — skip both spellings.
+        if matches!(
+            trigger,
+            "on_mount" | "on_unmount" | "on_submit" | "onMount" | "onUnmount" | "onSubmit"
+        ) {
             new_callbacks.push((*trigger_sym, *expr_sym));
             continue;
         }

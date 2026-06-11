@@ -30,7 +30,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from reflex_base.components.memo import MEMOS, MemoComponentDefinition
+
 from reflex.compiler import utils as compiler_utils
+from reflex.compiler.cache import CompileCache
+from reflex.compiler.compiler import compile_memo_components
 from reflex.compiler.session import CompilerSession
 
 
@@ -93,6 +97,7 @@ def compile_pages(
     *,
     session: CompilerSession | None = None,
     routes: list[str] | None = None,
+    cache: CompileCache | None = None,
 ) -> tuple[dict[str, Path], Mapping[str, list]]:
     """Compile every registered page through the Rust pipeline.
 
@@ -123,6 +128,10 @@ def compile_pages(
             if omitted.
         routes: restrict the compile to these routes. ``None`` (default)
             compiles every registered page.
+        cache: persistent page cache. ``None`` (default) builds the
+            standard one for the project (see :meth:`CompileCache.default`
+            — resolves to no caching for in-memory apps or when
+            ``REFLEX_COMPILE_CACHE=0``).
 
     Returns:
         ``(written, imports)`` — ``written`` maps each compiled route to
@@ -166,6 +175,12 @@ def compile_pages(
     if base_constants.Page404.SLUG not in app._unevaluated_pages:
         app.add_page(route=base_constants.Page404.SLUG)
 
+    from reflex.state import all_base_state_classes
+    from reflex.utils.exec import is_prod_mode
+
+    if cache is None:
+        cache = CompileCache.default("prod" if is_prod_mode() else "dev")
+
     written: dict[str, Path] = {}
     all_imports: dict[str, list] = {}
     memo_bodies: dict[str, Any] = {}
@@ -175,17 +190,39 @@ def compile_pages(
         if routes is not None and route not in routes:
             continue
 
+        out_path = Path(compiler_utils.get_page_path(route))
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cache_key = cache.key_for(route, unev) if cache is not None else None
+        if (
+            cache is not None
+            and cache_key is not None
+            and (entry := cache.lookup(route, cache_key))
+        ):
+            # Input hit: every source file this page depends on is
+            # unchanged, so skip evaluation + freeze + emit and replay
+            # the stored artifacts.
+            sess.write_if_changed(str(out_path), entry["page_js"])
+            for name, jsx in entry["memo_bodies"]:
+                memo_bodies.setdefault(name, jsx)
+            sess.merge_imports_into(all_imports, entry["imports"])
+            collected_app_wraps.update(entry["app_wraps"])
+            if entry["stateful"]:
+                stateful_routes.append(route)
+            written[route] = out_path
+            continue
+
         # ``compile_unevaluated_page`` evaluates the page callable, applies
         # recursive theme styles, and wraps the root in ``Fragment`` with
         # ``<title>``/``<meta>`` already attached. The arena entry point
         # sees the wrapped tree and emits the metadata via the IR's
         # component nodes, so we pass ``title=None``/``meta_tags=None``
         # below to avoid double-emitting.
-        from reflex.state import all_base_state_classes
-
         n_states_before = len(all_base_state_classes)
+        n_bundled_before = len(bundled_libraries)
         component = compile_unevaluated_page(route, unev, app.style, app.theme)
-        if len(all_base_state_classes) > n_states_before:
+        page_is_stateful = len(all_base_state_classes) > n_states_before
+        if page_is_stateful:
             # Statefulness detection: matches the legacy plugin
             # (``compile.py:_PageCompiler.compile``) which marks any
             # page whose evaluation registered a new ``BaseState``
@@ -198,13 +235,9 @@ def compile_pages(
         # single PyO3 walk. The returned dict already has the
         # ``$/utils/...`` alias prefix applied, so ``merge_imports_into``
         # below appends into ``all_imports`` without re-walking the
-        # tree.
-        collected_app_wraps.update(component._get_all_app_wrap_components())
-
+        # tree. App-wrap components ride the same walk — no separate
+        # ``_get_all_app_wrap_components`` Python tree walk per page.
         ident = _route_to_ident(route)
-
-        out_path = Path(compiler_utils.get_page_path(route))
-        out_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Memoize + emit lives entirely in Rust. One PyO3 round-trip:
         #   freeze → memoize_arena_pass → emit_page module +
@@ -219,6 +252,7 @@ def compile_pages(
             rust_js,
             arena_memo_bodies,
             page_imports,
+            page_app_wraps,
         ) = sess.compile_page_from_component_arena(
             component,
             ident,
@@ -227,11 +261,34 @@ def compile_pages(
             meta_tags=None,
         )
         sess.merge_imports_into(all_imports, page_imports)
+        collected_app_wraps.update(page_app_wraps)
         for name, jsx in arena_memo_bodies:
             memo_bodies.setdefault(name, jsx)
 
         sess.write_if_changed(str(out_path), rust_js)
         written[route] = out_path
+
+        if cache is not None and cache_key is not None:
+            if page_is_stateful or len(bundled_libraries) > n_bundled_before:
+                # Evaluating this page mutated a global registry (state
+                # classes / dynamic-library bundling) that a cache hit
+                # could not replay — never cache it.
+                cache.pin_uncacheable(route)
+            else:
+                cache.put(
+                    route,
+                    cache_key,
+                    {
+                        "page_js": rust_js,
+                        "memo_bodies": list(arena_memo_bodies),
+                        "imports": page_imports,
+                        "app_wraps": page_app_wraps,
+                        "stateful": page_is_stateful,
+                    },
+                )
+
+    if cache is not None:
+        cache.save()
 
     # Flush each unique memo body to disk. Bodies hashed identically
     # across pages collide on the same name and dedupe here.
@@ -254,12 +311,33 @@ def compile_pages(
     app_wrappers = _resolve_app_wrap_components(app, collected_app_wraps)
     app_root = app._app_root(app_wrappers)
 
-    # NOTE: per-memo file emission was removed here. The legacy
-    # ``CUSTOM_COMPONENTS`` registry no longer exists on ``main`` (the
-    # ``@rx.memo`` system was unified into
-    # ``reflex_base.components.memo.MEMOS``). Memo emission needs to be
-    # reimplemented against that registry; see ``compile_memo_components``
-    # in ``reflex.compiler.compiler`` for the new shape.
+    # ``@rx.memo`` components: emit one module per memo (the same
+    # ``$/utils/components/<Name>.jsx`` files the legacy
+    # ``compile_memo_components`` step produces) so page imports resolve
+    # without the one-shot legacy compile, and fold the memo modules'
+    # dependencies into the bun-install set. Plain component memos go
+    # through the arena emitter — component in, file out, imports back;
+    # passthrough and function memos keep the legacy emitter (root-only /
+    # string renders, no tree harvest to replace).
+    legacy_memos = []
+    for memo in MEMOS.values():
+        if (
+            isinstance(memo, MemoComponentDefinition)
+            and memo.passthrough_hole_child is None
+        ):
+            memo_imports = sess.compile_rx_memo_arena(
+                compiler_utils.prepare_memo_component_for_compile(memo),
+                memo.export_name,
+                compiler_utils.memo_component_signature(memo),
+                str(components_dir / f"{memo.export_name}.jsx"),
+            )
+            sess.merge_imports_into(all_imports, memo_imports)
+        else:
+            legacy_memos.append(memo)
+    memo_files, rx_memo_imports = compile_memo_components(legacy_memos)
+    for memo_path, memo_code in memo_files:
+        sess.write_if_changed(memo_path, memo_code)
+    sess.merge_imports_into(all_imports, rx_memo_imports)
 
     window_libraries = list(
         dict.fromkeys(

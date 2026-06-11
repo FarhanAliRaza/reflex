@@ -49,7 +49,7 @@ def _count_base_get_imports(component: Component) -> tuple[int, dict[str, list]]
         return original(self)
 
     with patch.object(Component, "_get_imports", wrapped):
-        _, _, imports = CompilerSession().compile_page_from_component_arena(
+        _, _, imports, *_ = CompilerSession().compile_page_from_component_arena(
             component, "Index", "/"
         )
     return calls, imports
@@ -88,12 +88,27 @@ def test_component_with_custom_add_imports_falls_back_to_get_imports() -> None:
     assert "added-import-lib" in imports
 
 
-def test_arena_does_not_invoke_static_app_wrap_factories() -> None:
-    """Static app-wrap factories stay in the Python page-level walk."""
+def test_arena_invokes_static_app_wrap_factory_once_per_class() -> None:
+    """The freeze walk harvests app wraps inline — the factory runs once
+    per class per session, never once per node or per page.
+    """
     _StaticAppWrapComponent.wrap_factory_calls = 0
+    sess = CompilerSession()
 
-    CompilerSession().compile_page_from_component_arena(
-        _StaticAppWrapComponent.create(), "Index", "/"
+    page = Component.create(
+        _StaticAppWrapComponent.create(),
+        _StaticAppWrapComponent.create(),
+        _StaticAppWrapComponent.create(),
     )
+    _, _, _, wraps = sess.compile_page_from_component_arena(page, "Index", "/")
 
-    assert _StaticAppWrapComponent.wrap_factory_calls == 0
+    assert _StaticAppWrapComponent.wrap_factory_calls == 1
+    assert list(wraps) == [(25, "ProofWrap")]
+    assert type(wraps[25, "ProofWrap"]) is _DefaultImportComponent
+
+    # Second page on the same session hits the per-class dict cache.
+    _, _, _, wraps2 = sess.compile_page_from_component_arena(
+        Component.create(_StaticAppWrapComponent.create()), "Index2", "/two"
+    )
+    assert _StaticAppWrapComponent.wrap_factory_calls == 1
+    assert list(wraps2) == [(25, "ProofWrap")]

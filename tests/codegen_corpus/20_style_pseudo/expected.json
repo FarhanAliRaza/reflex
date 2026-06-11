@@ -1,0 +1,12 @@
+{
+  "contains": [
+    "[\"&:focus\"]",
+    "[\"&:hover\"]",
+    "[\"&:before\"]",
+    "[\"content\"] : \"\\\"*\\\"\""
+  ],
+  "not_contains": [
+    "undefined",
+    "_hover"
+  ]
+}

@@ -22,7 +22,10 @@ reflex_ir       = { workspace = true }
 reflex_arena    = { workspace = true }
 reflex_intern   = { workspace = true }
 smallvec        = { version = "1.13", features = ["union"] }
+# Direct struct reads of native Vars (RustVar/VarData) from the freeze
+# pass — only meaningful with pyo3 enabled.
+reflex_vars     = { workspace = true, optional = true }
 
 [features]
 default = ["pyo3"]
-pyo3 = ["dep:pyo3"]
+pyo3 = ["dep:pyo3", "dep:reflex_vars"]

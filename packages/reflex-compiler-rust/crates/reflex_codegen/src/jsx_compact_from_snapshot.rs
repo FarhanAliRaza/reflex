@@ -137,15 +137,32 @@ fn emit_foreach(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, node: &
         .get(&idx)
         .map(|s| resolve_unchecked(*s))
         .unwrap_or("[]");
+    let (arg, index) = foreach_arg_names(snapshot, idx);
     buf.write_str("Array.prototype.map.call(");
     buf.write_str(iter_expr);
-    buf.write_str(" ?? [],((item,index)=>(");
+    buf.write_str(" ?? [],((");
+    buf.write_str(arg);
+    buf.write_str(",");
+    buf.write_str(index);
+    buf.write_str(")=>(");
     if let Some(body) = node.children.clone().next() {
         emit_node(buf, snapshot, body);
     } else {
         buf.write_str("null");
     }
     buf.write_str(")))");
+}
+
+/// The foreach callback's `(arg, index)` parameter names recorded by the
+/// freeze (the frozen body references them); placeholders only for
+/// snapshots predating the table.
+pub(crate) fn foreach_arg_names(snapshot: &Snapshot, idx: NodeIdx) -> (&str, &str) {
+    snapshot
+        .control_flow
+        .foreach_args
+        .get(&idx)
+        .map(|(a, i)| (resolve_unchecked(*a), resolve_unchecked(*i)))
+        .unwrap_or(("item", "index"))
 }
 
 fn emit_cond(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, node: &NodeSnapshot) {
@@ -173,6 +190,12 @@ fn emit_cond(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, node: &Nod
     buf.write_str("))");
 }
 
+/// Render a Match node as the legacy switch-IIFE
+/// (`templates._RenderUtils.render_match_tag`): one `case
+/// JSON.stringify(...)` label per condition, consecutive arms sharing a
+/// body collapse into one `return`, and the `default` arm closes the
+/// switch. (The previous `match_template(...)` form referenced a runtime
+/// helper that doesn't exist.)
 fn emit_match(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, _node: &NodeSnapshot) {
     let value = snapshot
         .control_flow
@@ -180,28 +203,31 @@ fn emit_match(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, _node: &N
         .get(&idx)
         .map(|s| resolve_unchecked(*s))
         .unwrap_or("null");
-    buf.write_str("match_template((");
+    buf.write_str("(() => {\n  switch (JSON.stringify(");
     buf.write_str(value);
-    buf.write_str("),[");
+    buf.write_str(")) {\n");
     if let Some(arms) = snapshot.control_flow.match_arms.get(&idx) {
-        for (i, (case, body_idx)) in arms.iter().enumerate() {
-            if i > 0 {
-                buf.write_str(",");
+        let mut i = 0;
+        while i < arms.len() {
+            let body = arms[i].1;
+            while i < arms.len() && arms[i].1 == body {
+                buf.write_str("    case JSON.stringify(");
+                buf.write_str(resolve_unchecked(arms[i].0));
+                buf.write_str("):\n");
+                i += 1;
             }
-            buf.write_str("[");
-            buf.write_str(resolve_unchecked(*case));
-            buf.write_str(",");
-            emit_node(buf, snapshot, *body_idx);
-            buf.write_str("]");
+            buf.write_str("      return ");
+            emit_node(buf, snapshot, body);
+            buf.write_str(";\n      break;\n");
         }
     }
-    buf.write_str("],");
+    buf.write_str("    default:\n      return ");
     if let Some(default_idx) = snapshot.control_flow.match_default.get(&idx) {
         emit_node(buf, snapshot, *default_idx);
     } else {
         buf.write_str("null");
     }
-    buf.write_str(")");
+    buf.write_str(";\n      break;\n  }\n})()");
 }
 
 fn emit_memoize(buf: &mut CodeBuffer, snapshot: &Snapshot, idx: NodeIdx, node: &NodeSnapshot) {
@@ -280,6 +306,18 @@ fn write_props_and_events(
         write_prop_key(buf, &renamed);
         buf.write_str(":");
         buf.write_str(resolve_unchecked(*value));
+    }
+    // Spread props render after the keyed props (legacy `format_props`
+    // appends `...{expr}` entries last).
+    if let Some(spreads) = snapshot.control_flow.special_props.get(&idx) {
+        for spread in spreads {
+            if !first {
+                buf.write_str(",");
+            }
+            first = false;
+            buf.write_str("...");
+            buf.write_str(resolve_unchecked(*spread));
+        }
     }
 }
 

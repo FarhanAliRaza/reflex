@@ -1,0 +1,10 @@
+{
+  "contains": [
+    "var(--accent-9)",
+    "[\"&:hover\"] : ({ [\"@media screen and (min-width: 0)\"]",
+    "[\"color\"] : \"blue\""
+  ],
+  "not_contains": [
+    "undefined"
+  ]
+}

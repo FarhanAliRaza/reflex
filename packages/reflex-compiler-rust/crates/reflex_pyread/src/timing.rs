@@ -25,8 +25,6 @@ pub struct PhaseTimings {
     /// `import_alias_for` — reads library/tag/alias again (redundant
     /// with `resolve_tag_symbol`; isolating to confirm the cost).
     pub import_alias_ns: u64,
-    /// `getattr("id")` check + `mark_needs_ref`.
-    pub needs_ref_ns: u64,
     /// `read_var_data` — Var._get_all_var_data + imports/hooks/deps decode.
     pub read_var_data_ns: u64,
     /// `refs.harvest.borrow_mut()` registrations (RefCell overhead).
@@ -58,6 +56,40 @@ pub struct PhaseTimings {
     pub var_count: u64,
     pub prop_count: u64,
     pub event_handler_count: u64,
+
+    // ---- Arena freeze (freeze.rs::freeze_into_slot) leaf spans. These
+    // are the production path; the `read_*` fields above belong to the
+    // legacy `read_page` walk. Each is leaf (no child recursion), so the
+    // freeze sub-totals sum to roughly `freeze_total_ns` minus loop
+    // control + the child-recursion descent.
+    /// Whole `freeze_component` call (cumulative — includes children).
+    pub freeze_total_ns: u64,
+    /// class_name + classify + qualname + memo_mode + rename_props.
+    pub freeze_structural_ns: u64,
+    /// read_imports_summary + merge_prop_components_imports.
+    pub freeze_imports_ns: u64,
+    /// read_rendered_props (the per-declared-field getattr loop).
+    pub freeze_props_ns: u64,
+    /// read_style.
+    pub freeze_style_ns: u64,
+    /// read_event_callbacks.
+    pub freeze_events_ns: u64,
+    /// read_hooks_internal + read_hooks_user.
+    pub freeze_hooks_ns: u64,
+    /// read_custom_code + read_dynamic_imports + read_ref_name.
+    pub freeze_optional_ns: u64,
+    /// Slow import path only: build_imports_dict + merge + summary, for
+    /// nodes the trivial fast-path gate rejected. `freeze_imports_ns`
+    /// minus this is the fast-path (gate + library/tag) cost.
+    pub freeze_imports_slow_ns: u64,
+    /// Nodes that took the trivial-import fast path.
+    pub imports_fast_count: u64,
+    /// Nodes that fell through to the full build_imports_dict path.
+    pub imports_slow_count: u64,
+    /// Nodes whose `_get_hooks_internal` was assembled natively in Rust.
+    pub hooks_fast_count: u64,
+    /// Nodes that fell back to the Python `_get_hooks_internal()` call.
+    pub hooks_slow_count: u64,
 }
 
 thread_local! {
@@ -65,7 +97,6 @@ thread_local! {
         class_name_ns: 0,
         resolve_tag_ns: 0,
         import_alias_ns: 0,
-        needs_ref_ns: 0,
         read_var_data_ns: 0,
         harvest_register_ns: 0,
         emit_ns: 0,
@@ -82,6 +113,19 @@ thread_local! {
         var_count: 0,
         prop_count: 0,
         event_handler_count: 0,
+        freeze_total_ns: 0,
+        freeze_structural_ns: 0,
+        freeze_imports_ns: 0,
+        freeze_props_ns: 0,
+        freeze_style_ns: 0,
+        freeze_events_ns: 0,
+        freeze_hooks_ns: 0,
+        freeze_optional_ns: 0,
+        freeze_imports_slow_ns: 0,
+        imports_fast_count: 0,
+        imports_slow_count: 0,
+        hooks_fast_count: 0,
+        hooks_slow_count: 0,
     }) };
 }
 
@@ -105,7 +149,6 @@ pub fn add(field: Field, elapsed_ns: u64) {
             Field::ClassName => t.class_name_ns += elapsed_ns,
             Field::ResolveTag => t.resolve_tag_ns += elapsed_ns,
             Field::ImportAlias => t.import_alias_ns += elapsed_ns,
-            Field::NeedsRef => t.needs_ref_ns += elapsed_ns,
             Field::ReadVarData => t.read_var_data_ns += elapsed_ns,
             Field::HarvestRegister => t.harvest_register_ns += elapsed_ns,
             Field::Emit => t.emit_ns += elapsed_ns,
@@ -117,6 +160,15 @@ pub fn add(field: Field, elapsed_ns: u64) {
             Field::IsInstanceVar => t.isinstance_var_ns += elapsed_ns,
             Field::ValueLiteralDispatch => t.value_literal_dispatch_ns += elapsed_ns,
             Field::VarJsExprAttr => t.var_js_expr_attr_ns += elapsed_ns,
+            Field::FreezeTotal => t.freeze_total_ns += elapsed_ns,
+            Field::FreezeStructural => t.freeze_structural_ns += elapsed_ns,
+            Field::FreezeImports => t.freeze_imports_ns += elapsed_ns,
+            Field::FreezeProps => t.freeze_props_ns += elapsed_ns,
+            Field::FreezeStyle => t.freeze_style_ns += elapsed_ns,
+            Field::FreezeEvents => t.freeze_events_ns += elapsed_ns,
+            Field::FreezeHooks => t.freeze_hooks_ns += elapsed_ns,
+            Field::FreezeOptional => t.freeze_optional_ns += elapsed_ns,
+            Field::FreezeImportsSlow => t.freeze_imports_slow_ns += elapsed_ns,
         }
     });
 }
@@ -132,6 +184,8 @@ pub fn incr(counter: Counter) {
             Counter::Var => t.var_count += 1,
             Counter::Prop => t.prop_count += 1,
             Counter::EventHandler => t.event_handler_count += 1,
+            Counter::ImportsFast => t.imports_fast_count += 1,
+            Counter::ImportsSlow => t.imports_slow_count += 1,
         }
     });
 }
@@ -141,7 +195,6 @@ pub enum Field {
     ClassName,
     ResolveTag,
     ImportAlias,
-    NeedsRef,
     ReadVarData,
     HarvestRegister,
     Emit,
@@ -153,6 +206,15 @@ pub enum Field {
     IsInstanceVar,
     ValueLiteralDispatch,
     VarJsExprAttr,
+    FreezeTotal,
+    FreezeStructural,
+    FreezeImports,
+    FreezeProps,
+    FreezeStyle,
+    FreezeEvents,
+    FreezeHooks,
+    FreezeOptional,
+    FreezeImportsSlow,
 }
 
 #[derive(Clone, Copy)]
@@ -162,6 +224,8 @@ pub enum Counter {
     Var,
     Prop,
     EventHandler,
+    ImportsFast,
+    ImportsSlow,
 }
 
 /// RAII guard that adds the elapsed time to `field` when dropped.

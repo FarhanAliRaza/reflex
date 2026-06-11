@@ -214,6 +214,23 @@ fn hash_control_flow(snap: &Snapshot, idx: NodeIdx, hasher: &mut Xxh3) {
             hasher.update(&s.as_u32().to_le_bytes());
         }
     }
+    if let Some((arg, index)) = cf.foreach_args.get(&idx) {
+        hasher.update(b"g");
+        hasher.update(&arg.as_u32().to_le_bytes());
+        hasher.update(&index.as_u32().to_le_bytes());
+    }
+    if let Some(extra) = cf.custom_code_extra.get(&idx) {
+        hasher.update(b"x");
+        for code in extra {
+            hasher.update(&code.as_u32().to_le_bytes());
+        }
+    }
+    if let Some(spreads) = cf.special_props.get(&idx) {
+        hasher.update(b"s");
+        for s in spreads {
+            hasher.update(&s.as_u32().to_le_bytes());
+        }
+    }
     if let Some(arms) = cf.match_arms.get(&idx) {
         hasher.update(b"a");
         for (expr, body) in arms {

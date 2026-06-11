@@ -88,12 +88,16 @@ def render_fixture(fixture: Fixture, session) -> str:
     ``compile_page_from_component_arena`` freezes the Component into a
     ``Snapshot``, runs the in-Rust memoize pass, and emits the page
     module — no msgpack hop, no Python ``walk_and_memoize``.
+
+    Returns the page module concatenated with every memo body module:
+    the memoize pass promotes subtrees out of ``page_js`` into memo
+    bodies, so substring expectations must search the combined output.
     """
     component = fixture.build()
-    page_js, _bodies, _imports = session.compile_page_from_component_arena(
+    page_js, bodies, _imports, *_ = session.compile_page_from_component_arena(
         component, fixture.ident, fixture.route
     )
-    return page_js
+    return "\n".join([page_js, *(js for _name, js in bodies)])
 
 
 def assert_or_update(fixture: Fixture, js: str) -> None:

@@ -76,9 +76,71 @@ pub struct PyRefs<'py> {
     /// `reflex_base.utils.format.format_library_name` for normalizing
     /// `Component.library` and `VarData.imports` module specifiers.
     pub format_library_name: Bound<'py, PyAny>,
+    /// `reflex_base.style.format_as_emotion` — the CSS-in-JS transform the
+    /// base `Component._get_style` applies before wrapping in a `LiteralVar`.
+    /// `read_style` calls this directly and renders the resulting object
+    /// literal in Rust, skipping the per-property `LiteralVar.create` churn.
+    pub format_as_emotion: Bound<'py, PyAny>,
+    /// The base `Component._get_style` (unbound function). `read_style`
+    /// fast-paths only nodes whose class does NOT override it; overrides
+    /// (e.g. recharts' `{"wrapperStyle": ...}`) go through `_get_style`.
+    pub component_get_style_base: Bound<'py, PyAny>,
+    /// `Component._exclude_props` — identity baseline so the freeze only
+    /// calls the override on classes that actually exclude props.
+    pub component_exclude_props_base: Bound<'py, PyAny>,
+    /// `Component._render` — identity baseline; override classes take the
+    /// rendered-Tag prop path.
+    pub component_render_base: Bound<'py, PyAny>,
+    /// `reflex_base.constants.compiler.Imports.EVENTS` — the constant import
+    /// dict `_get_imports` adds when a component has event triggers.
+    pub events_imports: Bound<'py, PyAny>,
+    /// `component._REF_HOOK_IMPORTS` — the ref hook's constant import dict
+    /// (react.useRef + $/utils/state.refs).
+    pub ref_hook_imports: Bound<'py, PyAny>,
+    /// `component._LIFECYCLE_HOOK_IMPORTS` — the mount/unmount lifecycle
+    /// hook's constant import dict (react.useEffect).
+    pub lifecycle_hook_imports: Bound<'py, PyAny>,
+    /// `Component._get_app_wrap_components` — identity baseline so the
+    /// freeze only calls the override on classes that declare app wraps.
+    pub component_app_wrap_base: Bound<'py, PyAny>,
+    /// `reflex_base.utils.imports.parse_imports` — normalizes `add_imports()`
+    /// results into the `{lib: [ImportVar]}` shape before merging.
+    pub parse_imports: Bound<'py, PyAny>,
+    /// The `dict` builtin — replicates `_get_imports`' `dict(var_data.imports)`
+    /// (tuple-of-pairs → last-wins dict) byte-for-byte.
+    pub dict_builtin: Bound<'py, PyAny>,
+    /// The base `Component._get_imports` (unbound function). The Rust import
+    /// builder reproduces only the BASE formula; classes that override
+    /// `_get_imports` (e.g. `NoSSRComponent` rewrites the library import) must
+    /// call their override. Sub-method overrides (`add_imports`, …) are fine —
+    /// the builder invokes them.
+    pub component_get_imports_base: Bound<'py, PyAny>,
+    /// `reflex_base.components.component.ComponentField` — the non-data
+    /// descriptor class fields resolve through since the sparse-`__dict__`
+    /// cutover. `read_field` only trusts a cached class-level default when
+    /// the class attribute under that name IS a `ComponentField`; anything
+    /// else (`@property`, plain attribute) keeps real getattr semantics.
+    pub component_field_cls: Bound<'py, PyAny>,
+    /// `reflex_base.breakpoints.Breakpoints` — the responsive-style dict
+    /// subclass `format_as_emotion` special-cases. Used by the Rust
+    /// emotion transform's value dispatch.
+    pub breakpoints_cls: Bound<'py, PyAny>,
+    /// The native `RustVar` pyclass type object plus its `_js_expr` /
+    /// `_get_all_var_data` descriptors. The freeze pass reads native Vars'
+    /// Rust fields directly (no Python attribute protocol); a subclass is
+    /// only eligible when its descriptors are identical to the base ones
+    /// (cached per class) — an override keeps the generic Python path.
+    pub rustvar_type: Bound<'py, PyAny>,
+    pub rustvar_js_expr_desc: Bound<'py, PyAny>,
+    pub rustvar_gavd_desc: Bound<'py, PyAny>,
+    /// `reflex_base.breakpoints.breakpoints_values` — the MUTABLE global
+    /// list (`set_breakpoints` clears+extends it in place, so holding the
+    /// list object stays correct). Read on each responsive-list style so
+    /// user overrides apply.
+    pub breakpoints_values: Bound<'py, PyAny>,
     /// Page-level harvests accumulated inline during `read_page` so we
-    /// don't have to re-walk the Python tree three more times for
-    /// `component_imports` / `state_bindings` / `needs_ref`. Interior
+    /// don't have to re-walk the Python tree again for
+    /// `component_imports` / `state_bindings`. Interior
     /// mutability keeps the read helpers' `&PyRefs` signatures intact;
     /// every borrow is scoped to a single registration to avoid
     /// runtime aliasing panics.
@@ -139,6 +201,15 @@ pub struct PyRefs<'py> {
     /// the separate ``collect_all_imports`` tree walk.
     pub bun_imports: RefCell<Option<Py<PyDict>>>,
     pub imports_seen: RefCell<HashSet<usize>>,
+    /// App-wrap accumulator harvested inline during freeze: the
+    /// `{(priority, name): Component}` dict that
+    /// `_get_all_app_wrap_components` used to compute with a second
+    /// Python tree walk. Only classes overriding the base staticmethod
+    /// contribute (per-class expanded dict cached on `ClassMetadata`),
+    /// merged at most once per class per freeze via `app_wraps_seen`.
+    /// `None` for callers that don't need wraps (memo freezes).
+    pub app_wraps: RefCell<Option<Py<PyDict>>>,
+    pub app_wraps_seen: RefCell<HashSet<usize>>,
     /// Pre-interned attribute / method names. Each PyO3 ``getattr``
     /// or ``call_method0`` that took ``&str`` previously allocated a
     /// fresh ``PyString`` per call; passing the pre-interned
@@ -177,6 +248,7 @@ pub struct InternedAttrs {
     pub id: Py<PyString>,
     pub class_name: Py<PyString>,
     pub style: Py<PyString>,
+    pub dunder_dict: Py<PyString>,
     pub lib_dependencies: Py<PyString>,
     pub special_props: Py<PyString>,
     pub import_var: Py<PyString>,
@@ -216,6 +288,7 @@ pub struct InternedAttrs {
     pub m_get_hooks: Py<PyString>,
     pub m_get_added_hooks: Py<PyString>,
     pub m_iter_parent_classes_with_method: Py<PyString>,
+    pub m_default_value: Py<PyString>,
 }
 
 impl InternedAttrs {
@@ -235,6 +308,7 @@ impl InternedAttrs {
             id: s("id"),
             class_name: s("class_name"),
             style: s("style"),
+            dunder_dict: s("__dict__"),
             lib_dependencies: s("lib_dependencies"),
             special_props: s("special_props"),
             import_var: s("import_var"),
@@ -272,6 +346,7 @@ impl InternedAttrs {
             m_get_hooks: s("_get_hooks"),
             m_get_added_hooks: s("_get_added_hooks"),
             m_iter_parent_classes_with_method: s("_iter_parent_classes_with_method"),
+            m_default_value: s("default_value"),
         }
     }
 }
@@ -348,6 +423,10 @@ pub struct ClassMetadata {
     /// by the per-instance prop reader without re-walking
     /// `get_props`. ``None`` until first observation.
     pub prop_names: Option<Vec<(String, Py<PyString>)>>,
+    /// B: per-field class-level default, resolved lazily the first
+    /// time `read_field` misses the instance `__dict__` for that
+    /// `(class, field)`. Keyed by the raw (unstripped) field name.
+    pub field_defaults: HashMap<String, FieldDefault>,
     /// `_rename_props` resolved once per class.
     pub rename_props: smallvec::SmallVec<[(Symbol, Symbol); 1]>,
     /// `_rename_props` cache populated bit (covers the empty-result
@@ -362,6 +441,35 @@ pub struct ClassMetadata {
     /// Whether this class can use the generic static import path for
     /// trivial instances. ``None`` until first observation.
     pub default_imports_safe: Option<bool>,
+    /// Whether `_get_style` on this class is the base implementation
+    /// (drives the Rust emotion path). ``None`` until first observation.
+    pub style_is_base: Option<bool>,
+    /// Whether `_get_imports` on this class is the base implementation
+    /// (drives the Rust `build_imports_dict` path).
+    pub imports_is_base: Option<bool>,
+    /// Whether instances of this (Var) class can be read directly as
+    /// native `RustVar` structs: exact `RustVar`, or a subclass whose
+    /// `_js_expr` / `_get_all_var_data` descriptors are the base ones.
+    pub rustvar_direct: Option<bool>,
+    /// Whether this class's ``add_custom_code`` MRO chain is empty
+    /// (the common case — skips the per-node chain walk entirely).
+    pub add_custom_code_chain_empty: Option<bool>,
+    /// Whether `_exclude_props` on this class is the base implementation
+    /// (returns nothing — skips the per-node exclusion call).
+    pub exclude_props_is_base: Option<bool>,
+    /// Whether `_render` on this class is the base implementation. Classes
+    /// that override it mutate the prop set imperatively, so the freeze
+    /// sources props/events from the rendered Tag instead of raw fields.
+    pub render_is_base: Option<bool>,
+    /// Whether `_get_app_wrap_components` on this class is the base
+    /// staticmethod (returns `{}` — the common case, skipped entirely).
+    pub app_wrap_is_base: Option<bool>,
+    /// For override classes: the expanded `{(priority, name): Component}`
+    /// dict (own wraps plus wraps-of-wraps), computed once per class.
+    /// The staticmethod's output is instance-independent, and `_app_root`
+    /// deepcopies wrappers before mutating, so sharing one instance per
+    /// class across nodes and pages is safe.
+    pub app_wraps_dict: Option<Py<PyAny>>,
     /// Bitmask of methods that have been marked "always trivial" for
     /// this class. One bit per `SkippableMethod` variant.
     pub skip_flags: u8,
@@ -376,20 +484,164 @@ pub struct ClassMetadata {
     pub total_visits: u32,
 }
 
+/// B: how an unset field resolves at the class level. Mirrors what the
+/// `ComponentField` non-data descriptor would do on instance getattr,
+/// without the per-node Python `__get__` invocation (~1 µs each).
+pub enum FieldDefault {
+    /// Class attr is a `ComponentField` with a resolvable default —
+    /// `default_value()` result cached. For factory defaults this shares
+    /// one materialized value across instances; freeze only reads, and
+    /// the descriptor's shared-scalar path has the same semantics.
+    Value(Py<PyAny>),
+    /// Class attr absent, or `default_value()` raised (no default and no
+    /// factory) — instance getattr would raise `AttributeError`.
+    Missing,
+    /// Class attr is NOT a `ComponentField` (`@property`, method, plain
+    /// attribute): always do the real instance getattr.
+    Dynamic,
+}
+
 impl Default for ClassMetadata {
     fn default() -> Self {
         Self {
             prop_names: None,
+            field_defaults: HashMap::new(),
             rename_props: smallvec::SmallVec::new(),
             rename_props_resolved: false,
             memo_mode: None,
             method_handles: ClassMethodHandles::default(),
             default_imports_safe: None,
+            style_is_base: None,
+            imports_is_base: None,
+            rustvar_direct: None,
+            add_custom_code_chain_empty: None,
+            exclude_props_is_base: None,
+            render_is_base: None,
+            app_wrap_is_base: None,
+            app_wraps_dict: None,
             skip_flags: 0,
             trivial_counts: [0; SkippableMethod::COUNT],
             total_visits: 0,
         }
     }
+}
+
+// ---- B: sparse-`__dict__` field reads -------------------------------------
+
+/// B: the component's instance `__dict__`, fetched once per call site.
+/// Since the sparse-`__init__` cutover this holds ONLY explicitly-set
+/// fields (~6 keys vs ~24), so a `PyDict_GetItem` probe replaces the
+/// descriptor-protocol getattr for the common unset-field case.
+pub(crate) fn instance_dict<'py>(
+    component: &Bound<'py, PyAny>,
+    refs: &PyRefs<'py>,
+) -> Option<Bound<'py, PyDict>> {
+    let py = component.py();
+    component
+        .getattr(refs.attrs.dunder_dict.bind(py))
+        .ok()
+        .and_then(|d| d.downcast_into::<PyDict>().ok())
+}
+
+/// What an unset field resolves to for this read, borrowed out of the
+/// per-class cache (or freshly resolved on first miss).
+enum FieldDefaultLookup<'py> {
+    Value(Bound<'py, PyAny>),
+    Missing,
+    Dynamic,
+}
+
+/// B: resolve the class-level default for `raw` once per `(class, field)`
+/// and cache it. Only a class attribute that IS a `ComponentField` may be
+/// cached as a value/missing — anything else (a `@property` under a field
+/// name, a plain class attr) stays `Dynamic` and keeps real getattr
+/// semantics. The resolution mirrors `ComponentField.__get__`:
+/// `default_value()` when it has a default or factory, `AttributeError`
+/// (here: `Missing`) otherwise.
+fn class_field_default<'py>(
+    component: &Bound<'py, PyAny>,
+    raw: &str,
+    interned: &Py<PyString>,
+    refs: &PyRefs<'py>,
+) -> FieldDefaultLookup<'py> {
+    let py = component.py();
+    let Some(cache_rc) = &refs.class_cache else {
+        return FieldDefaultLookup::Dynamic;
+    };
+    let ty = component.get_type();
+    let key = ty.as_ptr() as usize;
+    {
+        let cache = cache_rc.borrow();
+        if let Some(meta) = cache.get(&key) {
+            if let Some(fd) = meta.field_defaults.get(raw) {
+                return match fd {
+                    FieldDefault::Value(v) => FieldDefaultLookup::Value(v.bind(py).clone()),
+                    FieldDefault::Missing => FieldDefaultLookup::Missing,
+                    FieldDefault::Dynamic => FieldDefaultLookup::Dynamic,
+                };
+            }
+        }
+    }
+    // Resolve outside the borrow — `default_value()` runs Python.
+    // Class access on a non-data descriptor returns the descriptor
+    // itself (`ComponentField.__get__(None, cls) -> self`). Since
+    // `_finalize_fields` installs scalar defaults as plain class attrs,
+    // a non-descriptor class attribute under a field name IS the
+    // default — cache it directly. Descriptors other than
+    // `ComponentField` (`@property`, functions) stay `Dynamic`.
+    let resolved = match ty.getattr(interned.bind(py)) {
+        Err(_) => FieldDefault::Missing,
+        Ok(attr) => {
+            if attr.is_instance(&refs.component_field_cls).unwrap_or(false) {
+                match attr.call_method0(refs.attrs.m_default_value.bind(py)) {
+                    Ok(v) => FieldDefault::Value(v.unbind()),
+                    Err(_) => FieldDefault::Missing,
+                }
+            } else if attr.get_type().hasattr("__get__").unwrap_or(true) {
+                FieldDefault::Dynamic
+            } else {
+                FieldDefault::Value(attr.unbind())
+            }
+        }
+    };
+    let out = match &resolved {
+        FieldDefault::Value(v) => FieldDefaultLookup::Value(v.bind(py).clone()),
+        FieldDefault::Missing => FieldDefaultLookup::Missing,
+        FieldDefault::Dynamic => FieldDefaultLookup::Dynamic,
+    };
+    cache_rc
+        .borrow_mut()
+        .entry(key)
+        .or_default()
+        .field_defaults
+        .insert(raw.to_owned(), resolved);
+    out
+}
+
+/// B: read a declared field without invoking the `ComponentField`
+/// descriptor for unset fields: probe the instance `__dict__`, then fall
+/// back to the cached per-class default. `None` means "attribute absent"
+/// (the call-site equivalent of a getattr `Err`); a present-but-`None`
+/// Python value comes back as `Some(none)` exactly like getattr would.
+pub(crate) fn read_field<'py>(
+    component: &Bound<'py, PyAny>,
+    inst_dict: Option<&Bound<'py, PyDict>>,
+    raw: &str,
+    interned: &Py<PyString>,
+    refs: &PyRefs<'py>,
+) -> Option<Bound<'py, PyAny>> {
+    let py = component.py();
+    if let Some(d) = inst_dict {
+        if let Ok(Some(v)) = d.get_item(interned.bind(py)) {
+            return Some(v);
+        }
+        match class_field_default(component, raw, interned, refs) {
+            FieldDefaultLookup::Value(v) => return Some(v),
+            FieldDefaultLookup::Missing => return None,
+            FieldDefaultLookup::Dynamic => {}
+        }
+    }
+    component.getattr(interned.bind(py)).ok()
 }
 
 /// Warmup threshold: after this many consecutive trivial returns for
@@ -422,17 +674,15 @@ pub struct MemoModeCached {
 }
 
 /// Page-level data the bridge collects during `read_page`. Equivalent to
-/// what `collect_component_imports` / `collect_state_bindings` /
-/// `scan_needs_ref` used to compute in three separate walks; now
-/// accumulated in one pass by the read helpers as they visit each
-/// node.
+/// what `collect_component_imports` / `collect_state_bindings` used to
+/// compute in separate walks; now accumulated in one pass by the read
+/// helpers as they visit each node.
 #[derive(Default)]
 pub struct HarvestState {
     component_imports: Vec<(Symbol, Symbol)>,
     component_imports_seen: HashSet<(Symbol, Symbol)>,
     state_bindings: Vec<Symbol>,
     state_bindings_seen: HashSet<String>,
-    needs_ref: bool,
 }
 
 impl HarvestState {
@@ -448,10 +698,6 @@ impl HarvestState {
                 self.state_bindings.push(intern(&ident));
             }
         }
-    }
-
-    pub fn mark_needs_ref(&mut self) {
-        self.needs_ref = true;
     }
 }
 
@@ -483,15 +729,158 @@ impl<'py> PyRefs<'py> {
                 attr: "reflex_base.utils.format.format_library_name",
                 source,
             })?;
+        let format_as_emotion = py
+            .import_bound("reflex_base.style")
+            .and_then(|m| m.getattr("format_as_emotion"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.style.format_as_emotion",
+                source,
+            })?;
+        let component_exclude_props_base = py
+            .import_bound("reflex_base.components.component")
+            .and_then(|m| m.getattr("Component"))
+            .and_then(|c| c.getattr("_exclude_props"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.components.component.Component._exclude_props",
+                source,
+            })?;
+        let component_render_base = py
+            .import_bound("reflex_base.components.component")
+            .and_then(|m| m.getattr("Component"))
+            .and_then(|c| c.getattr("_render"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.components.component.Component._render",
+                source,
+            })?;
+        let component_get_style_base = py
+            .import_bound("reflex_base.components.component")
+            .and_then(|m| m.getattr("Component"))
+            .and_then(|c| c.getattr("_get_style"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.components.component.Component._get_style",
+                source,
+            })?;
+        let events_imports = py
+            .import_bound("reflex_base.constants.compiler")
+            .and_then(|m| m.getattr("Imports"))
+            .and_then(|i| i.getattr("EVENTS"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.constants.compiler.Imports.EVENTS",
+                source,
+            })?;
+        let ref_hook_imports = py
+            .import_bound("reflex_base.components.component")
+            .and_then(|m| m.getattr("_REF_HOOK_IMPORTS"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.components.component._REF_HOOK_IMPORTS",
+                source,
+            })?;
+        let lifecycle_hook_imports = py
+            .import_bound("reflex_base.components.component")
+            .and_then(|m| m.getattr("_LIFECYCLE_HOOK_IMPORTS"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.components.component._LIFECYCLE_HOOK_IMPORTS",
+                source,
+            })?;
+        let component_app_wrap_base = py
+            .import_bound("reflex_base.components.component")
+            .and_then(|m| m.getattr("Component"))
+            .and_then(|c| c.getattr("_get_app_wrap_components"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.components.component.Component._get_app_wrap_components",
+                source,
+            })?;
+        let parse_imports = py
+            .import_bound("reflex_base.utils.imports")
+            .and_then(|m| m.getattr("parse_imports"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.utils.imports.parse_imports",
+                source,
+            })?;
+        let dict_builtin = py
+            .import_bound("builtins")
+            .and_then(|m| m.getattr("dict"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "builtins.dict",
+                source,
+            })?;
+        let component_get_imports_base = py
+            .import_bound("reflex_base.components.component")
+            .and_then(|m| m.getattr("Component"))
+            .and_then(|c| c.getattr("_get_imports"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.components.component.Component._get_imports",
+                source,
+            })?;
+        let component_field_cls = py
+            .import_bound("reflex_base.components.component")
+            .and_then(|m| m.getattr("ComponentField"))
+            .map_err(|source| PyReadError::Attr {
+                attr: "reflex_base.components.component.ComponentField",
+                source,
+            })?;
+        let breakpoints_mod = py
+            .import_bound("reflex_base.breakpoints")
+            .map_err(|source| PyReadError::Attr {
+                attr: "import reflex_base.breakpoints",
+                source,
+            })?;
+        let breakpoints_cls =
+            breakpoints_mod
+                .getattr("Breakpoints")
+                .map_err(|source| PyReadError::Attr {
+                    attr: "reflex_base.breakpoints.Breakpoints",
+                    source,
+                })?;
+        let breakpoints_values =
+            breakpoints_mod
+                .getattr("breakpoints_values")
+                .map_err(|source| PyReadError::Attr {
+                    attr: "reflex_base.breakpoints.breakpoints_values",
+                    source,
+                })?;
+        let rustvar_type = pyo3::types::PyType::new_bound::<reflex_vars::RustVar>(py).into_any();
+        let rustvar_js_expr_desc =
+            rustvar_type
+                .getattr("_js_expr")
+                .map_err(|source| PyReadError::Attr {
+                    attr: "RustVar._js_expr descriptor",
+                    source,
+                })?;
+        let rustvar_gavd_desc = rustvar_type
+            .getattr("_get_all_var_data")
+            .map_err(|source| PyReadError::Attr {
+                attr: "RustVar._get_all_var_data descriptor",
+                source,
+            })?;
         Ok(Self {
             var_cls,
             literal_var_cls,
             format_library_name,
+            format_as_emotion,
+            component_get_style_base,
+            component_exclude_props_base,
+            component_render_base,
+            events_imports,
+            ref_hook_imports,
+            lifecycle_hook_imports,
+            component_app_wrap_base,
+            parse_imports,
+            dict_builtin,
+            component_get_imports_base,
+            component_field_cls,
+            breakpoints_cls,
+            breakpoints_values,
+            rustvar_type,
+            rustvar_js_expr_desc,
+            rustvar_gavd_desc,
             harvest: RefCell::new(HarvestState::default()),
             memo_mode_cache: RefCell::new(HashMap::with_capacity(32)),
             var_data_dedup: RefCell::new(HashMap::with_capacity(32)),
             bun_imports: RefCell::new(None),
             imports_seen: RefCell::new(HashSet::with_capacity(64)),
+            app_wraps: RefCell::new(None),
+            app_wraps_seen: RefCell::new(HashSet::with_capacity(8)),
             attrs: InternedAttrs::new(py),
             method_cache: RefCell::new(HashMap::with_capacity(32)),
             class_cache: None,
@@ -664,7 +1053,6 @@ pub fn read_page<'arena, 'py>(
     let harvest = refs.harvest.borrow();
     let component_imports = arena.alloc_slice_fill_iter(harvest.component_imports.iter().copied());
     let state_bindings = arena.alloc_slice_fill_iter(harvest.state_bindings.iter().copied());
-    let needs_ref = harvest.needs_ref;
     drop(harvest);
 
     Ok(Page {
@@ -676,7 +1064,8 @@ pub fn read_page<'arena, 'py>(
         source_files: arena.alloc_slice_fill_iter(std::iter::empty::<PyFileId>()),
         component_imports,
         state_bindings,
-        needs_ref,
+        // Refs are carried by per-node hooks; no page-level ref flag.
+        needs_ref: false,
     })
 }
 
@@ -948,20 +1337,6 @@ fn read_element<'arena, 'py>(
         if let Some(pair) = import_alias_for(component, refs)? {
             let _h = TSpan::new(TF::HarvestRegister);
             refs.harvest.borrow_mut().add_component_import(pair);
-        }
-    }
-
-    // Harvest `needs_ref` while we're already at this node — anything
-    // with a non-None `id` triggers the `const ref_root = useRef(null)`
-    // line in the emitted page module.
-    {
-        let _s = TSpan::new(TF::NeedsRef);
-        if !refs.harvest.borrow().needs_ref {
-            if let Ok(v) = component.getattr("id") {
-                if !v.is_none() {
-                    refs.harvest.borrow_mut().mark_needs_ref();
-                }
-            }
         }
     }
 
@@ -1525,13 +1900,28 @@ fn import_alias_for(
     component: &Bound<'_, PyAny>,
     refs: &PyRefs<'_>,
 ) -> Result<Option<(Symbol, Symbol)>, PyReadError> {
-    let library = match component.getattr("library") {
-        Ok(v) if !v.is_none() => v,
+    let inst_dict = instance_dict(component, refs);
+    let library = match read_field(
+        component,
+        inst_dict.as_ref(),
+        "library",
+        &refs.attrs.library,
+        refs,
+    ) {
+        Some(v) if !v.is_none() => v,
         _ => return Ok(None),
     };
     let library_raw = py_str(&library)?;
-    let tag = component.getattr("tag").ok().filter(|v| !v.is_none());
-    let alias = component.getattr("alias").ok().filter(|v| !v.is_none());
+    let tag = read_field(component, inst_dict.as_ref(), "tag", &refs.attrs.tag, refs)
+        .filter(|v| !v.is_none());
+    let alias = read_field(
+        component,
+        inst_dict.as_ref(),
+        "alias",
+        &refs.attrs.alias,
+        refs,
+    )
+    .filter(|v| !v.is_none());
     if tag.is_none() && alias.is_none() {
         return Ok(None);
     }
@@ -1712,23 +2102,6 @@ fn find_state_idents(expr: &str) -> Vec<String> {
         }
     }
     out
-}
-
-#[allow(dead_code)]
-fn scan_needs_ref(_py: Python<'_>, root: &Bound<'_, PyAny>) -> Result<bool, PyReadError> {
-    let mut found = false;
-    walk_components(root, &mut |comp| {
-        if found {
-            return Ok(());
-        }
-        if let Ok(v) = comp.getattr("id") {
-            if !v.is_none() {
-                found = true;
-            }
-        }
-        Ok(())
-    })?;
-    Ok(found)
 }
 
 // ---- Tree iteration ---------------------------------------------------------

@@ -20,6 +20,6 @@ mod py;
 mod var;
 mod var_data;
 
-pub use py::{register, RustVar};
+pub use py::{register, rust_create_string, PyImportVar, PyVarData, RustVar, VAR_OPENING_TAG};
 pub use var::Var;
 pub use var_data::{HookPosition, ImportVar, VarData};

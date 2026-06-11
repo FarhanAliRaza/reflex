@@ -75,7 +75,7 @@ def bench_one(fixture, runs: int) -> FixtureResult:
     sess.clear_cache()
     gc.collect()
     t0 = time.perf_counter_ns()
-    js, _bodies, _imports = sess.compile_page_from_component_arena(
+    js, _bodies, _imports, *_ = sess.compile_page_from_component_arena(
         component, fixture.ident, fixture.route
     )
     cold_ns = time.perf_counter_ns() - t0

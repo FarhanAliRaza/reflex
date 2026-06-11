@@ -107,8 +107,9 @@ _var_literal_subclasses: list[tuple[type[LiteralVar], VarSubclassEntry]] = []
 
 
 # VarData is now the Rust-backed RustVarData (hard cutover, no Python impl).
-from reflex_compiler_rust._native import LiteralVar as RustLiteralVar, Var as RustVar  # noqa: E402
-from reflex_compiler_rust._native import RustVarData as VarData
+from reflex_compiler_rust._native import LiteralVar as RustLiteralVar  # noqa: E402
+from reflex_compiler_rust._native import RustVarData as VarData  # noqa: E402
+from reflex_compiler_rust._native import Var as RustVar  # noqa: E402
 
 
 def _rust_var_classify(var_type: GenericType) -> type:
@@ -1284,7 +1285,7 @@ class ToOperation:
             The attribute of the var.
         """
         if var_isinstance(self, ObjectVar) and name != "_js_expr":
-            return ObjectVar.__getattr__(self, name)
+            return ObjectVar.__getattr__(cast("ObjectVar", self), name)
         return getattr(self._original, name)
 
     def __post_init__(self):
@@ -1407,7 +1408,10 @@ class LiteralVar(Var[VAR_TYPE]):
         Raises:
             TypeError: If the value is not a supported type for LiteralVar.
         """
-        if isinstance(value, Var):
+        # Exact-type fast path for the dominant case (native vars) before the
+        # abc virtual-subclass `isinstance(value, Var)` check.
+        t = type(value)
+        if t is RustVar or t is RustLiteralVar or isinstance(value, Var):
             if _var_data is None:
                 return value
             return value._replace(merge_var_data=_var_data)
@@ -1416,10 +1420,10 @@ class LiteralVar(Var[VAR_TYPE]):
         # plain list/dict literals (with element-type inference, recursive json,
         # and embedded-var var_data aggregation) are produced by the Rust literal
         # var — byte-identical to the Python literal subclasses. Exotic types
-        # (datetime/Color/range/serializer-backed/dataclasses) and non-exact
-        # types (int/str subclasses, tuples, sets, custom Mappings) stay on the
-        # Python dispatch below.
-        if type(value) in (
+        # such as datetime, Color, range, serializer-backed values and
+        # dataclasses — plus non-exact types like int/str subclasses, tuples,
+        # sets and custom Mappings — stay on the Python dispatch below.
+        if t in (
             bool,
             int,
             float,
@@ -1435,7 +1439,7 @@ class LiteralVar(Var[VAR_TYPE]):
         ):
             return RustLiteralVar.create(value, _var_data=_var_data)
 
-        for literal_subclass, var_subclass in _var_literal_subclasses[::-1]:
+        for literal_subclass, var_subclass in reversed(_var_literal_subclasses):
             if isinstance(value, var_subclass.python_types):
                 return literal_subclass.create(value, _var_data=_var_data)
 
@@ -1507,10 +1511,27 @@ class LiteralVar(Var[VAR_TYPE]):
         Raises:
             TypeError: If the value is not a supported type for LiteralVar.
         """
+        # Exact-type fast paths for the overwhelmingly common cases —
+        # `isinstance(value, Var)` takes the abc virtual-subclass slow path
+        # (RustVar is registered, not inherited), and the subclass loop
+        # below runs several more abc checks per value. Numbers/bools/None
+        # can never carry var data; exact strings/containers route straight
+        # to the literal class the loop would pick anyway.
+        t = type(value)
+        if t is RustVar or t is RustLiteralVar:
+            return value._get_all_var_data()
+        if t is int or t is float or t is bool or value is None:
+            return None
+        if t is str:
+            return LiteralStringVar._get_all_var_data_without_creating_var(value)
+        if t is list or t is tuple or t is set:
+            return LiteralArrayVar._get_all_var_data_without_creating_var(value)
+        if t is dict:
+            return LiteralObjectVar._get_all_var_data_without_creating_var(value)
         if isinstance(value, Var):
             return value._get_all_var_data()
 
-        for literal_subclass, var_subclass in _var_literal_subclasses[::-1]:
+        for literal_subclass, var_subclass in reversed(_var_literal_subclasses):
             if isinstance(value, var_subclass.python_types):
                 return literal_subclass._get_all_var_data_without_creating_var(value)
 
@@ -3984,6 +4005,49 @@ if find_spec("pydantic"):
 class ObjectVar(Var[OBJECT_TYPE], python_types=_OBJECT_PYTHON_TYPES):
     """Type marker for immutable object vars (behavior is in ``RustVar``)."""
 
+    def _as_rust_var(self) -> Var:
+        """Rebuild this var as a ``RustVar`` carrying the same expression/type/data.
+
+        Python-side object vars (e.g. ``ToOperation`` casts) delegate item and
+        attribute access here so the typing rules live only in Rust.
+
+        Returns:
+            The equivalent ``RustVar``.
+        """
+        return Var(
+            _js_expr=str(self),
+            _var_type=self._var_type,
+            _var_data=self._get_all_var_data(),
+        )
+
+    def __getattr__(self, name: str) -> Var:
+        """Access an attribute (object field) of the var.
+
+        Args:
+            name: The field name.
+
+        Returns:
+            The field-access var, typed by the field's annotation.
+
+        Raises:
+            VarAttributeError: For dunder names.
+        """
+        if name.startswith("__") and name.endswith("__"):
+            msg = f"Attribute {name} not found."
+            raise VarAttributeError(msg)
+        return getattr(self._as_rust_var(), name)
+
+    def __getitem__(self, key: Any) -> Var:
+        """Index into the object var.
+
+        Args:
+            key: The key to access.
+
+        Returns:
+            The item-access var.
+        """
+        return self._as_rust_var()[key]
+
 
 class RestProp(ObjectVar[dict[str, Any]]):
     """A special object var representing forwarded rest props."""
@@ -4893,6 +4957,25 @@ class ArgsFunctionOperationBuilder(CachedVarOperation, BuilderFunctionVar):
             _return_expr=return_expr,
             _explicit_return=explicit_return,
         )
+
+
+@var_operation
+def map_array_operation(
+    array: ArrayVar[ARRAY_VAR_TYPE],
+    function: FunctionVar,
+) -> CustomVarOperationReturn[list[Any]]:
+    """Map a function over an array.
+
+    Args:
+        array: The array.
+        function: The function to map.
+
+    Returns:
+        The mapped array.
+    """
+    return var_operation_return(
+        js_expression=f"{array}.map({function})", var_type=list[Any]
+    )
 
 
 JSON_STRINGIFY = FunctionStringVar.create(

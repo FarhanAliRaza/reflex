@@ -108,7 +108,7 @@ def test_arena_smoke_produces_full_module() -> None:
 
     comp = rx.vstack(rx.text(f"v={S.c}"), rx.button("ok"))
     sess = CompilerSession()
-    page, bodies, imports = sess.compile_page_from_component_arena(
+    page, bodies, imports, *_ = sess.compile_page_from_component_arena(
         comp, "Index", "/"
     )
     assert "export default function Component()" in page

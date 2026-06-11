@@ -67,9 +67,8 @@ pub fn emit_memo_module(
     buf.write_str(signature);
     buf.write_str(" => {\n");
 
-    if page.needs_ref {
-        buf.write_str("  const ref_root = useRef(null); refs[\"ref_root\"] = ref_root;\n");
-    }
+    // Per-node ref hooks come through the harvested hooks; see
+    // `page_from_snapshot.rs` for why no page-level ref line is emitted.
     for binding in page.state_bindings {
         let s = resolve_unchecked(*binding);
         buf.write_str("  const ");

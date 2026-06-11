@@ -10,10 +10,10 @@
 //! `content_hash` ferried over the wire is recorded but unused.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyList, PyString, PyTuple};
 
 use reflex_codegen::harvest::{collect_custom_code, collect_dynamic_imports};
-use reflex_codegen::hooks_emit::render_hooks_unfiltered;
+use reflex_codegen::hooks_emit::{render_hooks_rx_memo, render_hooks_unfiltered};
 use reflex_codegen::{
     emit_app_root_module, emit_context_module, emit_document_root_module,
     emit_jsx_compact_from_snapshot, emit_memo_index, emit_memo_module_from_snapshot,
@@ -21,7 +21,8 @@ use reflex_codegen::{
     memoize_arena_pass, CodeBuffer,
 };
 use reflex_db::CompilerDb;
-use reflex_intern::resolve_unchecked;
+use reflex_intern::{intern, resolve_unchecked, Symbol};
+use reflex_vars::RustVar;
 use reflex_pyread::{
     collect_all_imports as pyread_collect_all_imports,
     collect_all_imports_into as pyread_collect_all_imports_into, freeze_component,
@@ -57,6 +58,98 @@ pub struct CompilerSession {
     /// suppress.
     direct_get_props_calls: std::rc::Rc<std::cell::Cell<u64>>,
     direct_rename_props_reads: std::rc::Rc<std::cell::Cell<u64>>,
+    /// Prototype scaffolding for the arena-construction benchmark
+    /// (`bench_push_node`) — NOT part of the compile pipeline. Holds
+    /// the nodes pushed by the benchmark and the per-class schemas
+    /// that simulate the construction-time classification table.
+    bench_arena: std::cell::RefCell<Vec<BenchNode>>,
+    bench_schemas: std::cell::RefCell<std::collections::HashMap<String, BenchSchema>>,
+}
+
+/// Benchmark-only per-class schema: which prop names are event
+/// triggers. The real design derives this once per class from
+/// `get_fields()` + `get_event_triggers()`; the benchmark seeds a
+/// representative trigger set on first touch of each class.
+struct BenchSchema {
+    events: std::collections::HashSet<String>,
+}
+
+/// Benchmark-only converted prop value — the owned Rust data a real
+/// `push_node` would store per prop.
+enum BenchValue {
+    Str(Symbol),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    /// JS literal rendered from a list/dict prop (the work
+    /// `LiteralVar.create` does today for plain containers).
+    Json(String),
+    /// Native Var prop — JS expression read directly off the struct.
+    Var(Symbol),
+    /// Event trigger value — kept as a Python handle for the probe
+    /// phase (chain assembly happens at emit, already in Rust).
+    Event(Py<PyAny>),
+    None_,
+}
+
+#[allow(dead_code)] // tag/children stored to size the node realistically; only props read back
+struct BenchNode {
+    tag: Symbol,
+    props: Vec<(Symbol, BenchValue)>,
+    children: Vec<u32>,
+}
+
+/// Render a plain Python container as a JS literal string —
+/// benchmark stand-in for the literal conversion `LiteralVar.create`
+/// performs on list/dict props today.
+fn bench_write_js_literal(v: &Bound<'_, PyAny>, out: &mut String) -> PyResult<()> {
+    use std::fmt::Write;
+    if v.is_none() {
+        out.push_str("null");
+    } else if let Ok(b) = v.downcast::<PyBool>() {
+        out.push_str(if b.is_true() { "true" } else { "false" });
+    } else if let Ok(s) = v.downcast::<PyString>() {
+        out.push('"');
+        for c in s.to_str()?.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                _ => out.push(c),
+            }
+        }
+        out.push('"');
+    } else if let Ok(rv) = v.downcast::<RustVar>() {
+        out.push_str(rv.get().js_expr_str());
+    } else if let Ok(list) = v.downcast::<PyList>() {
+        out.push('[');
+        for (i, item) in list.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            bench_write_js_literal(&item, out)?;
+        }
+        out.push(']');
+    } else if let Ok(d) = v.downcast::<PyDict>() {
+        out.push_str("({ ");
+        let mut first = true;
+        for (k, val) in d.iter() {
+            if !first {
+                out.push_str(", ");
+            }
+            first = false;
+            let _ = write!(out, "[{:?}] : ", k.str()?.to_string_lossy());
+            bench_write_js_literal(&val, out)?;
+        }
+        out.push_str(" })");
+    } else if let Ok(i) = v.extract::<i64>() {
+        let _ = write!(out, "{i}");
+    } else if let Ok(f) = v.extract::<f64>() {
+        let _ = write!(out, "{f}");
+    } else {
+        out.push_str(&v.str()?.to_string_lossy());
+    }
+    Ok(())
 }
 
 impl CompilerSession {
@@ -70,7 +163,12 @@ impl CompilerSession {
         meta_tags: Option<&Bound<'py, PyList>>,
         custom_code: Option<Vec<String>>,
         hooks_body: Option<&str>,
-    ) -> PyResult<(String, Vec<(String, String)>, Bound<'py, PyDict>)> {
+    ) -> PyResult<(
+        String,
+        Vec<(String, String)>,
+        Bound<'py, PyDict>,
+        Bound<'py, PyDict>,
+    )> {
         let meta_pairs: Vec<(String, String)> = match meta_tags {
             Some(list) => {
                 let mut out = Vec::with_capacity(list.len());
@@ -115,77 +213,168 @@ impl CompilerSession {
         );
         let imports_dict = PyDict::new_bound(py);
         *refs.bun_imports.borrow_mut() = Some(imports_dict.clone().unbind());
+        // App-wrap accumulator: the freeze walk harvests each visited
+        // class's `_get_app_wrap_components` output here, replacing the
+        // Python `_get_all_app_wrap_components` tree walk per page.
+        let app_wraps_dict = PyDict::new_bound(py);
+        *refs.app_wraps.borrow_mut() = Some(app_wraps_dict.clone().unbind());
         let snapshot = freeze_component_with_class_cache(py, component, &refs)?;
         *refs.bun_imports.borrow_mut() = None;
+        *refs.app_wraps.borrow_mut() = None;
 
-        // Release the GIL for the in-arena memoize + emit. None of the
-        // following calls touch Python state — they read Snapshot,
-        // write to `CodeBuffer`s, and return owned `String`s.
-        let route_ident_owned = route_ident.to_string();
-        let route_owned = route.to_string();
-        let title_owned = title.map(|s| s.to_owned());
-        let (page_js, memo_bodies) = py.allow_threads(move || {
-            let mut snap = snapshot;
-            memoize_arena_pass(&mut snap);
-
-            // Emit the page module.
-            let mut page_buf = CodeBuffer::with_capacity(4096);
-            let custom_code_refs: Vec<&str> =
-                custom_code_owned.iter().map(String::as_str).collect();
-            emit_page_module_from_snapshot(
-                &mut page_buf,
-                &snap,
-                &route_ident_owned,
-                &route_owned,
-                title_owned.as_deref(),
-                &meta_pairs,
-                &custom_code_refs,
-                &hooks_owned,
-            );
-            let page_js = String::from_utf8(page_buf.into_bytes()).unwrap_or_default();
-
-            // Emit each unique memo body.
-            let mut bodies: Vec<(String, String)> = Vec::with_capacity(snap.memo_bodies.len());
-            // Clone the (name, root) pairs out so we can release the
-            // borrow on `snap.memo_bodies` before re-borrowing for the
-            // emit walk (which reads `snap.wrap_redirects` etc.).
-            let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> =
-                snap.memo_bodies.iter().map(|b| (b.name, b.root)).collect();
-            for (name_sym, root_idx) in body_specs {
-                let mut body_buf = CodeBuffer::with_capacity(2048);
-                let name_str = reflex_intern::resolve_unchecked(name_sym).to_owned();
-                // Passthrough signature is the default. Snapshot
-                // bodies would use `"()"` — for now we always use
-                // `"{ children }"` since the freeze path always
-                // produces passthrough wrappers. The snapshot-body
-                // variant is a follow-on once the freeze pass
-                // captures `is_snapshot_boundary` per memo candidate.
-                // Passthrough signature is wrapped in `()` so the
-                // emitted shell is `memo(({ children }) => …)` —
-                // matches the Python `_signature_for(definition)`
-                // output for `passthrough_hole_child is not None`.
-                // Snapshot bodies (definition.passthrough_hole_child
-                // is None in Python) want `"()"`; the arena freeze
-                // currently produces passthrough wrappers only, so
-                // this default is correct. Snapshot-body detection is
-                // a follow-on PR (carry `is_snapshot_boundary` per
-                // memo candidate from freeze).
-                emit_memo_module_from_snapshot(
-                    &mut body_buf,
-                    &snap,
-                    root_idx,
-                    &name_str,
-                    "({ children })",
-                    "",
-                );
-                let body_js = String::from_utf8(body_buf.into_bytes()).unwrap_or_default();
-                bodies.push((name_str, body_js));
-            }
-            (page_js, bodies)
-        });
-
-        Ok((page_js, memo_bodies, imports_dict))
+        let (page_js, memo_bodies) = emit_snapshot_to_js(
+            py,
+            snapshot,
+            route_ident,
+            route,
+            title,
+            meta_pairs,
+            custom_code_owned,
+            hooks_owned,
+        );
+        Ok((page_js, memo_bodies, imports_dict, app_wraps_dict))
     }
+
+    /// PROTOTYPE — arena-construction benchmark, not a compiler entry
+    /// point. One PyO3 call per component: classify `props` against
+    /// the (cached) per-class schema, convert each value to owned Rust
+    /// data, push a node, return its index. Measures the per-node cost
+    /// the proposed construct-into-arena design would pay in place of
+    /// Python `Component.__init__`.
+    fn bench_push_node_impl(
+        &self,
+        tag: &str,
+        props: &Bound<'_, PyDict>,
+        children: Option<Vec<u32>>,
+    ) -> PyResult<u32> {
+        let mut schemas = self.bench_schemas.borrow_mut();
+        let schema = schemas.entry(tag.to_owned()).or_insert_with(|| BenchSchema {
+            events: [
+                "on_click", "on_change", "on_blur", "on_focus", "on_submit", "on_mount",
+                "on_unmount", "on_double_click", "on_key_down", "on_drop",
+            ]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
+        });
+        let mut out: Vec<(Symbol, BenchValue)> = Vec::with_capacity(props.len());
+        for (k, v) in props.iter() {
+            let key = k.downcast::<PyString>()?.to_str()?;
+            let key_sym = intern(key);
+            let value = if schema.events.contains(key) {
+                BenchValue::Event(v.clone().unbind())
+            } else if let Ok(rv) = v.downcast::<RustVar>() {
+                BenchValue::Var(intern(rv.get().js_expr_str()))
+            } else if let Ok(s) = v.downcast::<PyString>() {
+                BenchValue::Str(intern(s.to_str()?))
+            } else if v.is_none() {
+                BenchValue::None_
+            } else if let Ok(b) = v.downcast::<PyBool>() {
+                BenchValue::Bool(b.is_true())
+            } else if let Ok(f) = v.downcast::<PyFloat>() {
+                BenchValue::Float(f.value())
+            } else if let Ok(i) = v.extract::<i64>() {
+                BenchValue::Int(i)
+            } else {
+                let mut s = String::with_capacity(32);
+                bench_write_js_literal(&v, &mut s)?;
+                BenchValue::Json(s)
+            };
+            out.push((key_sym, value));
+        }
+        let mut arena = self.bench_arena.borrow_mut();
+        arena.push(BenchNode {
+            tag: intern(tag),
+            props: out,
+            children: children.unwrap_or_default(),
+        });
+        Ok((arena.len() - 1) as u32)
+    }
+
+    /// PROTOTYPE — materialize one prop of a benched node back to
+    /// Python (the proxy `__getattr__` read path the design needs for
+    /// override classes). Returns the stored value's Python form.
+    fn bench_read_prop_impl(&self, py: Python<'_>, idx: u32, name: &str) -> PyResult<PyObject> {
+        let arena = self.bench_arena.borrow();
+        let node = arena
+            .get(idx as usize)
+            .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("no such node"))?;
+        let name_sym = intern(name);
+        for (k, v) in &node.props {
+            if *k == name_sym {
+                return Ok(match v {
+                    BenchValue::Str(s) => resolve_unchecked(*s).into_py(py),
+                    BenchValue::Int(i) => i.into_py(py),
+                    BenchValue::Float(f) => f.into_py(py),
+                    BenchValue::Bool(b) => b.into_py(py),
+                    BenchValue::Json(s) => s.clone().into_py(py),
+                    BenchValue::Var(s) => resolve_unchecked(*s).into_py(py),
+                    BenchValue::Event(o) => o.clone_ref(py),
+                    BenchValue::None_ => py.None(),
+                });
+            }
+        }
+        Ok(py.None())
+    }
+}
+
+/// Memoize + emit a frozen `Snapshot` into `(page_js, memo_bodies)`. The
+/// GIL-released tail shared by the freeze entrypoint and the wire-bundle
+/// entrypoint, so the emitted JSX is byte-identical regardless of how the
+/// `Snapshot` was sourced (live freeze vs. record/wire rebuild).
+#[allow(clippy::too_many_arguments)]
+fn emit_snapshot_to_js(
+    py: Python<'_>,
+    snapshot: reflex_ir::Snapshot,
+    route_ident: &str,
+    route: &str,
+    title: Option<&str>,
+    meta_pairs: Vec<(String, String)>,
+    custom_code: Vec<String>,
+    hooks_body: String,
+) -> (String, Vec<(String, String)>) {
+    let route_ident_owned = route_ident.to_string();
+    let route_owned = route.to_string();
+    let title_owned = title.map(|s| s.to_owned());
+    py.allow_threads(move || {
+        let mut snap = snapshot;
+        memoize_arena_pass(&mut snap);
+
+        // Emit the page module.
+        let mut page_buf = CodeBuffer::with_capacity(4096);
+        let custom_code_refs: Vec<&str> = custom_code.iter().map(String::as_str).collect();
+        emit_page_module_from_snapshot(
+            &mut page_buf,
+            &snap,
+            &route_ident_owned,
+            &route_owned,
+            title_owned.as_deref(),
+            &meta_pairs,
+            &custom_code_refs,
+            &hooks_body,
+        );
+        let page_js = String::from_utf8(page_buf.into_bytes()).unwrap_or_default();
+
+        // Emit each unique memo body.
+        let mut bodies: Vec<(String, String)> = Vec::with_capacity(snap.memo_bodies.len());
+        let body_specs: Vec<(reflex_intern::Symbol, reflex_ir::NodeIdx)> =
+            snap.memo_bodies.iter().map(|b| (b.name, b.root)).collect();
+        for (name_sym, root_idx) in body_specs {
+            let mut body_buf = CodeBuffer::with_capacity(2048);
+            let name_str = reflex_intern::resolve_unchecked(name_sym).to_owned();
+            emit_memo_module_from_snapshot(
+                &mut body_buf,
+                &snap,
+                root_idx,
+                &name_str,
+                "({ children })",
+                "",
+            );
+            let body_js = String::from_utf8(body_buf.into_bytes()).unwrap_or_default();
+            bodies.push((name_str, body_js));
+        }
+        (page_js, bodies)
+    })
 }
 
 #[pymethods]
@@ -201,6 +390,8 @@ impl CompilerSession {
             freeze_trivial_skips: std::rc::Rc::new(std::cell::Cell::new(0)),
             direct_get_props_calls: std::rc::Rc::new(std::cell::Cell::new(0)),
             direct_rename_props_reads: std::rc::Rc::new(std::cell::Cell::new(0)),
+            bench_arena: std::cell::RefCell::new(Vec::new()),
+            bench_schemas: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -450,6 +641,93 @@ impl CompilerSession {
         Ok(imports_dict)
     }
 
+    /// Compile one ``@rx.memo`` component module and write it to
+    /// ``out_path`` — component in, file out, imports dict back.
+    ///
+    /// One arena freeze replaces the legacy per-tree Python harvest
+    /// (``render()`` + the four ``_get_all_*`` aggregators); the whole
+    /// module assembles in Rust mirroring the legacy
+    /// ``memo_single_component_template`` byte-for-byte. The only
+    /// Python callback is the one-shot import-header formatter
+    /// (``_format_memo_imports``) over the harvested dict — full
+    /// ``ImportVar`` fidelity (default imports, render flags) lives
+    /// there, same as the app-root/document/theme emitters. No memoize
+    /// pass and no trigger rewrite run here — an rx.memo module
+    /// renders its event chains inline, exactly like the legacy
+    /// emitter.
+    fn compile_rx_memo_arena<'py>(
+        &self,
+        py: Python<'py>,
+        component: &Bound<'py, PyAny>,
+        export_name: &str,
+        signature: &str,
+        out_path: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        self.freeze_crossings.set(0);
+        let refs = PyRefs::new(py)?.with_session_caches(
+            std::rc::Rc::clone(&self.class_metadata),
+            std::rc::Rc::clone(&self.freeze_crossings),
+            std::rc::Rc::clone(&self.freeze_trivial_skips),
+            std::rc::Rc::clone(&self.direct_get_props_calls),
+            std::rc::Rc::clone(&self.direct_rename_props_reads),
+        );
+        let imports_dict = PyDict::new_bound(py);
+        *refs.bun_imports.borrow_mut() = Some(imports_dict.clone().unbind());
+        let snapshot = freeze_component_with_class_cache(py, component, &refs)?;
+        *refs.bun_imports.borrow_mut() = None;
+
+        let (render_str, hooks_str, custom_code_str, dynamic_imports_str) =
+            py.allow_threads(|| {
+                let mut buf = CodeBuffer::with_capacity(4096);
+                emit_jsx_compact_from_snapshot(&mut buf, &snapshot);
+                let render = String::from_utf8(buf.into_bytes()).unwrap_or_default();
+
+                let custom = collect_custom_code(&snapshot)
+                    .into_iter()
+                    .map(|s| resolve_unchecked(s).to_owned())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let mut dyns = collect_dynamic_imports(&snapshot)
+                    .into_iter()
+                    .map(|s| resolve_unchecked(s).to_owned())
+                    .collect::<Vec<_>>();
+                dyns.sort();
+                let dyns = dyns.join("\n");
+
+                let hooks = render_hooks_rx_memo(&snapshot);
+                (render, hooks, custom, dyns)
+            });
+
+        let (imports_str, merged_imports) =
+            format_memo_imports_via_python(py, &imports_dict, export_name)?;
+
+        // Assemble the module exactly like the legacy template:
+        // \n{imports}\n\n{dyn}\n\n{custom}\n\n
+        // \nexport const {name} = memo(({sig}) => {\n    {hooks}\n
+        //     return(\n        {jsx}\n    )\n});\n
+        let mut module =
+            String::with_capacity(imports_str.len() + hooks_str.len() + render_str.len() + 256);
+        module.push('\n');
+        module.push_str(&imports_str);
+        module.push_str("\n\n");
+        module.push_str(&dynamic_imports_str);
+        module.push_str("\n\n");
+        module.push_str(&custom_code_str);
+        module.push_str("\n\n\nexport const ");
+        module.push_str(export_name);
+        module.push_str(" = memo((");
+        module.push_str(signature);
+        module.push_str(") => {\n    ");
+        module.push_str(&hooks_str);
+        module.push_str("\n    return(\n        ");
+        module.push_str(&render_str);
+        module.push_str("\n    )\n});\n");
+
+        self.write_if_changed(out_path, &module)?;
+        Ok(merged_imports)
+    }
+
     /// Emit `.web/app/_document.js` from a pre-built document-root
     /// Component tree.
     ///
@@ -574,33 +852,6 @@ impl CompilerSession {
         Ok(d)
     }
 
-    /// Dump the frozen `Snapshot` as a Python dict tree of primitives.
-    ///
-    /// Every field downstream code (memoize pass, JSX emitter) consults
-    /// during compile is materialized here. Tests use this to assert
-    /// the IR contains every value Rust would otherwise need to fetch
-    /// via PyO3 — if a field appears in the dump, no callback into
-    /// Python is required to produce it later.
-    ///
-    /// String values are resolved through the intern table. Empty
-    /// symbols (`Symbol::EMPTY`) are returned as `None`; consumers that
-    /// want the empty string can substitute it locally.
-    fn dump_snapshot<'py>(
-        &self,
-        py: Python<'py>,
-        component: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyDict>> {
-        let refs = PyRefs::new(py)?.with_session_caches(
-            std::rc::Rc::clone(&self.class_metadata),
-            std::rc::Rc::clone(&self.freeze_crossings),
-            std::rc::Rc::clone(&self.freeze_trivial_skips),
-            std::rc::Rc::clone(&self.direct_get_props_calls),
-            std::rc::Rc::clone(&self.direct_rename_props_reads),
-        );
-        let snapshot = freeze_component_with_class_cache(py, component, &refs)?;
-        snapshot_to_pydict(py, &snapshot)
-    }
-
     /// Run the memoize-decision walk on a Component PyObject.
     ///
     /// Ports `reflex.compiler.plugins.memoize._should_memoize` to Rust
@@ -684,7 +935,6 @@ impl CompilerSession {
     /// * `class_name_ns` — `type(c).__name__` dispatch
     /// * `resolve_tag_ns` — alias/tag/library reads in `resolve_tag_symbol`
     /// * `import_alias_ns` — same attrs re-read in `import_alias_for`
-    /// * `needs_ref_ns` — `getattr("id")` check
     /// * `read_props_ns`, `read_children_ns`, `read_event_handlers_ns`
     /// * `read_var_data_ns` — Var._get_all_var_data + decode
     /// * `harvest_register_ns` — RefCell mutations
@@ -698,7 +948,6 @@ impl CompilerSession {
         d.set_item("class_name_ns", t.class_name_ns)?;
         d.set_item("resolve_tag_ns", t.resolve_tag_ns)?;
         d.set_item("import_alias_ns", t.import_alias_ns)?;
-        d.set_item("needs_ref_ns", t.needs_ref_ns)?;
         d.set_item("read_var_data_ns", t.read_var_data_ns)?;
         d.set_item("harvest_register_ns", t.harvest_register_ns)?;
         d.set_item("get_props_call_ns", t.get_props_call_ns)?;
@@ -714,6 +963,18 @@ impl CompilerSession {
         d.set_item("var_count", t.var_count)?;
         d.set_item("prop_count", t.prop_count)?;
         d.set_item("event_handler_count", t.event_handler_count)?;
+        // Arena freeze (production path) leaf spans.
+        d.set_item("freeze_total_ns", t.freeze_total_ns)?;
+        d.set_item("freeze_structural_ns", t.freeze_structural_ns)?;
+        d.set_item("freeze_imports_ns", t.freeze_imports_ns)?;
+        d.set_item("freeze_props_ns", t.freeze_props_ns)?;
+        d.set_item("freeze_style_ns", t.freeze_style_ns)?;
+        d.set_item("freeze_events_ns", t.freeze_events_ns)?;
+        d.set_item("freeze_hooks_ns", t.freeze_hooks_ns)?;
+        d.set_item("freeze_optional_ns", t.freeze_optional_ns)?;
+        d.set_item("freeze_imports_slow_ns", t.freeze_imports_slow_ns)?;
+        d.set_item("imports_fast_count", t.imports_fast_count)?;
+        d.set_item("imports_slow_count", t.imports_slow_count)?;
         Ok(d)
     }
 
@@ -753,18 +1014,52 @@ impl CompilerSession {
         meta_tags: Option<&Bound<'py, PyList>>,
         custom_code: Option<Vec<String>>,
         hooks_body: Option<&str>,
-    ) -> PyResult<(String, Vec<(String, String)>, Bound<'py, PyDict>)> {
-        let (page_js, memo_bodies, imports_dict) = self.compile_page_from_component_arena_impl(
-            py,
-            component,
-            route_ident,
-            route,
-            title,
-            meta_tags,
-            custom_code,
-            hooks_body,
-        )?;
-        Ok((page_js, memo_bodies, imports_dict))
+    ) -> PyResult<(
+        String,
+        Vec<(String, String)>,
+        Bound<'py, PyDict>,
+        Bound<'py, PyDict>,
+    )> {
+        let (page_js, memo_bodies, imports_dict, app_wraps_dict) = self
+            .compile_page_from_component_arena_impl(
+                py,
+                component,
+                route_ident,
+                route,
+                title,
+                meta_tags,
+                custom_code,
+                hooks_body,
+            )?;
+        Ok((page_js, memo_bodies, imports_dict, app_wraps_dict))
+    }
+
+    /// PROTOTYPE — arena-construction benchmark entry. See
+    /// `bench_push_node_impl` for what it measures.
+    #[pyo3(signature = (tag, props, children=None))]
+    fn bench_push_node(
+        &self,
+        tag: &str,
+        props: &Bound<'_, PyDict>,
+        children: Option<Vec<u32>>,
+    ) -> PyResult<u32> {
+        self.bench_push_node_impl(tag, props, children)
+    }
+
+    /// PROTOTYPE — companion to `bench_push_node`: node count.
+    fn bench_arena_len(&self) -> usize {
+        self.bench_arena.borrow().len()
+    }
+
+    /// PROTOTYPE — companion to `bench_push_node`: reset between runs.
+    fn bench_arena_clear(&self) {
+        self.bench_arena.borrow_mut().clear();
+    }
+
+    /// PROTOTYPE — proxy-read path: materialize one stored prop back
+    /// to Python.
+    fn bench_read_prop(&self, py: Python<'_>, idx: u32, name: &str) -> PyResult<PyObject> {
+        self.bench_read_prop_impl(py, idx, name)
     }
 }
 
@@ -841,225 +1136,23 @@ fn format_imports_via_python<'py>(
     Ok(out_lines.join("\n"))
 }
 
-/// Serialize a `Snapshot` to a `dict` of primitives for test inspection.
-///
-/// Mirrors every field on `reflex_ir::Snapshot` and `NodeSnapshot`.
-/// `Symbol::EMPTY` becomes `None`; other symbols become `str` via the
-/// intern table.
-fn snapshot_to_pydict<'py>(
+/// Format one rx.memo module's import header via the legacy Python
+/// formatter (`reflex.compiler.compiler._format_memo_imports`): strips
+/// the memo's self-import, merges the memo runtime seeds + common
+/// imports, and renders the lines. Returns the header and the merged
+/// import dict (the bun-install contribution).
+fn format_memo_imports_via_python<'py>(
     py: Python<'py>,
-    snap: &reflex_ir::Snapshot,
-) -> PyResult<Bound<'py, PyDict>> {
-    use reflex_intern::Symbol;
-    let out = PyDict::new_bound(py);
-
-    let sym = |s: Symbol| -> Option<&'static str> {
-        if s == Symbol::EMPTY {
-            None
-        } else {
-            Some(resolve_unchecked(s))
-        }
-    };
-
-    let nodes = PyList::empty_bound(py);
-    for node in &snap.nodes {
-        let d = PyDict::new_bound(py);
-        d.set_item("kind", format!("{:?}", node.kind))?;
-        d.set_item("tag", sym(node.tag))?;
-        d.set_item("style_key", sym(node.style_key))?;
-        d.set_item("style", sym(node.style))?;
-        d.set_item("custom_code", sym(node.custom_code))?;
-        d.set_item("ref_name", sym(node.ref_name))?;
-        d.set_item("flags_bits", node.flags.bits())?;
-        d.set_item("subtree_hash", node.subtree_hash)?;
-        d.set_item(
-            "children",
-            (node.children.start, node.children.end),
-        )?;
-
-        let props = PyList::empty_bound(py);
-        for (k, v) in &node.rendered_props {
-            props.append((sym(*k), sym(*v)))?;
-        }
-        d.set_item("rendered_props", props)?;
-
-        let events = PyList::empty_bound(py);
-        for (trigger, body) in &node.event_callbacks {
-            events.append((sym(*trigger), sym(*body)))?;
-        }
-        d.set_item("event_callbacks", events)?;
-
-        let imports = PyList::empty_bound(py);
-        for entry in &node.imports {
-            imports.append((sym(entry.module), sym(entry.name)))?;
-        }
-        d.set_item("imports", imports)?;
-
-        let hi = PyList::empty_bound(py);
-        for h in &node.hooks_internal {
-            let h_d = PyDict::new_bound(py);
-            h_d.set_item("code", sym(h.code))?;
-            h_d.set_item("position", h.position)?;
-            hi.append(h_d)?;
-        }
-        d.set_item("hooks_internal", hi)?;
-
-        let hu = PyList::empty_bound(py);
-        for h in &node.hooks_user {
-            let h_d = PyDict::new_bound(py);
-            h_d.set_item("code", sym(h.code))?;
-            h_d.set_item("position", h.position)?;
-            hu.append(h_d)?;
-        }
-        d.set_item("hooks_user", hu)?;
-
-        let di = PyList::empty_bound(py);
-        for s in &node.dynamic_imports {
-            di.append(sym(*s))?;
-        }
-        d.set_item("dynamic_imports", di)?;
-
-        let vars_used = PyList::empty_bound(py);
-        for r in &node.vars_used {
-            vars_used.append(r.0)?;
-        }
-        d.set_item("vars_used", vars_used)?;
-
-        nodes.append(d)?;
-    }
-    out.set_item("nodes", nodes)?;
-    out.set_item("root", snap.root)?;
-
-    let var_data = PyList::empty_bound(py);
-    for entry in &snap.var_data {
-        let d = PyDict::new_bound(py);
-        d.set_item("state", sym(entry.state))?;
-        let position: Option<u8> = if entry.position == u8::MAX {
-            None
-        } else {
-            Some(entry.position)
-        };
-        d.set_item("position", position)?;
-        let hooks: Vec<Option<&'static str>> = snap.var_hooks
-            [entry.hooks.start as usize..entry.hooks.end as usize]
-            .iter()
-            .map(|s| sym(*s))
-            .collect();
-        d.set_item("hooks", hooks)?;
-        let imports: Vec<(Option<&'static str>, Option<&'static str>)> = snap.var_imports
-            [entry.imports.start as usize..entry.imports.end as usize]
-            .iter()
-            .map(|(m, n)| (sym(*m), sym(*n)))
-            .collect();
-        d.set_item("imports", imports)?;
-        let deps: Vec<Option<&'static str>> = snap.var_deps
-            [entry.deps.start as usize..entry.deps.end as usize]
-            .iter()
-            .map(|s| sym(*s))
-            .collect();
-        d.set_item("deps", deps)?;
-        let components: Vec<Option<&'static str>> = snap.var_components
-            [entry.components.start as usize..entry.components.end as usize]
-            .iter()
-            .map(|s| sym(*s))
-            .collect();
-        d.set_item("components", components)?;
-        var_data.append(d)?;
-    }
-    out.set_item("var_data", var_data)?;
-
-    let memo_bodies = PyList::empty_bound(py);
-    for body in &snap.memo_bodies {
-        let d = PyDict::new_bound(py);
-        d.set_item("name", sym(body.name))?;
-        d.set_item("root", body.root)?;
-        d.set_item("subtree_hash", body.subtree_hash)?;
-        d.set_item("signature", sym(body.signature))?;
-        memo_bodies.append(d)?;
-    }
-    out.set_item("memo_bodies", memo_bodies)?;
-
-    let app_wraps = PyList::empty_bound(py);
-    for wrap in &snap.app_wraps {
-        let d = PyDict::new_bound(py);
-        d.set_item("sort_key", wrap.sort_key)?;
-        d.set_item("name", sym(wrap.name))?;
-        d.set_item("root", wrap.root)?;
-        app_wraps.append(d)?;
-    }
-    out.set_item("app_wraps", app_wraps)?;
-
-    let cf = PyDict::new_bound(py);
-    let cf_map = |m: &std::collections::HashMap<u32, Symbol>| -> PyResult<Bound<'py, PyDict>> {
-        let d = PyDict::new_bound(py);
-        for (k, v) in m {
-            d.set_item(*k, sym(*v))?;
-        }
-        Ok(d)
-    };
-    cf.set_item("text_value", cf_map(&snap.control_flow.text_value)?)?;
-    cf.set_item("cond_test", cf_map(&snap.control_flow.cond_test)?)?;
-    cf.set_item("foreach_iter", cf_map(&snap.control_flow.foreach_iter)?)?;
-    cf.set_item("match_value", cf_map(&snap.control_flow.match_value)?)?;
-    cf.set_item("expr_value", cf_map(&snap.control_flow.expr_value)?)?;
-    cf.set_item("memo_key", cf_map(&snap.control_flow.memo_key)?)?;
-
-    let arms_d = PyDict::new_bound(py);
-    for (idx, arms) in &snap.control_flow.match_arms {
-        let pairs = PyList::empty_bound(py);
-        for (case, body) in arms {
-            pairs.append((sym(*case), *body))?;
-        }
-        arms_d.set_item(*idx, pairs)?;
-    }
-    cf.set_item("match_arms", arms_d)?;
-
-    let default_d = PyDict::new_bound(py);
-    for (idx, body) in &snap.control_flow.match_default {
-        default_d.set_item(*idx, *body)?;
-    }
-    cf.set_item("match_default", default_d)?;
-    out.set_item("control_flow", cf)?;
-
-    let page_meta = PyDict::new_bound(py);
-    page_meta.set_item("schema_version", snap.page_meta.schema_version)?;
-    page_meta.set_item("route", sym(snap.page_meta.route))?;
-    page_meta.set_item("title", sym(snap.page_meta.title))?;
-    let meta_list = PyList::empty_bound(py);
-    for (k, v) in &snap.page_meta.meta {
-        meta_list.append((sym(*k), sym(*v)))?;
-    }
-    page_meta.set_item("meta", meta_list)?;
-    out.set_item("page_meta", page_meta)?;
-
-    let wrap_redirects = PyDict::new_bound(py);
-    for (k, v) in &snap.wrap_redirects {
-        wrap_redirects.set_item(*k, *v)?;
-    }
-    out.set_item("wrap_redirects", wrap_redirects)?;
-
-    let special_props = PyDict::new_bound(py);
-    for (idx, syms) in &snap.special_props {
-        let lst: Vec<Option<&'static str>> = syms.iter().map(|s| sym(*s)).collect();
-        special_props.set_item(*idx, lst)?;
-    }
-    out.set_item("special_props", special_props)?;
-
-    let rename_props = PyDict::new_bound(py);
-    for (idx, pairs) in &snap.rename_props {
-        let lst: Vec<(Option<&'static str>, Option<&'static str>)> =
-            pairs.iter().map(|(a, b)| (sym(*a), sym(*b))).collect();
-        rename_props.set_item(*idx, lst)?;
-    }
-    out.set_item("rename_props", rename_props)?;
-
-    let app_style = PyDict::new_bound(py);
-    for (cls, css) in &snap.app_style_map {
-        app_style.set_item(sym(*cls), sym(*css))?;
-    }
-    out.set_item("app_style_map", app_style)?;
-
-    Ok(out)
+    bun_imports: &Bound<'py, PyDict>,
+    export_name: &str,
+) -> PyResult<(String, Bound<'py, PyDict>)> {
+    let compiler_mod = py.import_bound("reflex.compiler.compiler")?;
+    let result = compiler_mod
+        .getattr("_format_memo_imports")?
+        .call1((bun_imports.clone(), export_name))?;
+    let header: String = result.get_item(0)?.extract()?;
+    let merged = result.get_item(1)?.downcast::<PyDict>()?.clone();
+    Ok((header, merged))
 }
 
 fn file_matches(path: &str, content: &[u8]) -> bool {

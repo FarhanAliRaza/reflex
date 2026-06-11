@@ -11,6 +11,7 @@ from reflex_base.vars.base import (
     LiteralArrayVar,
     LiteralStringVar,
     StringVar,
+    map_array_operation,
     string_replace_operation,
 )
 
@@ -20,5 +21,6 @@ __all__ = [
     "LiteralArrayVar",
     "LiteralStringVar",
     "StringVar",
+    "map_array_operation",
     "string_replace_operation",
 ]
