@@ -450,6 +450,28 @@ divergence, NOT introduced here). `app.style` rides
     set-rebuild iteration order (original-vs-its-copy churns memo names
     with byte-identical normalized output).
 
+## DONE — arena M3 phase 2a: full-surface mirror (2026-06-11)
+
+`_arena_mirror_kwargs` now replicates `_post_init` end-to-end minus
+validation: the exact Style merge (list-of-dicts, Breakpoints/Var
+`{"&": ...}` wrap, css shorthand keys), special attrs kebab-cased into
+custom_attrs (in-place on caller dicts), `EventChain.create` per
+trigger, caller event_triggers dict copy, Var class_name passthrough.
+Fallbacks left: unknown `on_*` (so `_post_init` raises), Var-bearing
+class_name lists, malformed style shapes, memo classes (own
+`_post_init`).
+
+- Gates: 18-fixture parity suite (incl. error parity); fork-pair docs
+  diff 427/427 byte-identical; oracle 27/27; suites green (known 6).
+- Measured: in-scope fast rate 60.9% → **88.0%** (72.8k/82.7k).
+  Per-call (full create(), incl. children normalization): text 1.9×,
+  style-box 1.3×, input 1.3×, button-with-event 1.1×.
+- **Mis-attribution found:** rx.input's "112 µs construction" is ~78 µs
+  of its el-input `create()` override building a `ternary_operation`
+  Var per call (forms.py:457) — both paths pay it; not construction
+  machinery. Button events are dominated by `EventChain.create` — M4's
+  exact target.
+
 ## DONE — arena M3 phase 1: construction fast path + gate (2026-06-11)
 
 Default-off (`REFLEX_ARENA_CONSTRUCT=1` to enable). `arena_construction()`

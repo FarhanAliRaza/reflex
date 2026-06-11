@@ -102,10 +102,6 @@ _ARENA_CONSTRUCTION: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "reflex_arena_construction", default=False
 )
 
-# Fields whose kwargs `_post_init` transforms rather than stores raw —
-# a call passing any of these falls back to the full constructor.
-_MIRROR_BLOCKED_FIELDS = frozenset({"style", "event_triggers"})
-
 
 @contextlib.contextmanager
 def arena_construction(enabled: bool = True) -> Iterator[None]:
@@ -1512,25 +1508,50 @@ class Component(BaseComponent, ABC):
 
         Mirrors ``_post_init``'s storage semantics per kwarg: Var-typed
         props are ``LiteralVar``-wrapped (Var values pass through
-        unchanged, exactly like ``_post_init``), everything else that
-        ``_post_init`` stores raw is kept raw. Type validation
-        (``satisfies_type_hint``) is skipped — the documented behavior
-        difference behind the arena flag.
+        unchanged, exactly like ``_post_init``), event triggers are bound
+        through the same ``EventChain.create`` call, style inputs take the
+        same ``Style`` merge, data-/aria- attrs land kebab-cased in
+        ``custom_attrs``, and everything ``_post_init`` stores raw is kept
+        raw. Type validation (``satisfies_type_hint``, children checks) is
+        skipped — the documented behavior difference behind the arena flag.
 
         Args:
             props: The raw create kwargs (children excluded).
 
         Returns:
             The mirror dict, or ``None`` when any kwarg needs the full
-            constructor (event triggers, style inputs, non-str
-            ``class_name``, special attrs, unknown names).
+            constructor (unknown ``on_*`` names so ``_post_init`` raises,
+            Var-bearing ``class_name`` lists, malformed style shapes).
         """
         schema = cls._construction_schema()
         prop_map = schema.props
         base_fields = schema.base_fields
+        triggers = schema.triggers
         mirror: dict[str, Any] = {}
+        style_kwarg: Any = MISSING
+        extra_style: dict[str, Any] | None = None
+        special: dict[str, Any] | None = None
+        events: dict[str, Any] | None = None
+        events_base: dict[str, Any] | None = None
         for key, value in props.items():
-            if (is_var := prop_map.get(key)) is not None:
+            if key == "style":
+                style_kwarg = value
+            elif key == "event_triggers":
+                # _post_init copies a caller-supplied chain dict verbatim.
+                events_base = value
+            elif key == "class_name":
+                # _post_init joins all-str lists/tuples; plain strings and
+                # Vars stay raw (Var shape checks are validation-only).
+                # Var-bearing lists build a joined Var — keep _post_init.
+                if type(value) is str or _is_var(value):
+                    mirror[key] = value
+                elif type(value) in (list, tuple) and all(
+                    type(c) is str for c in value
+                ):
+                    mirror[key] = " ".join(value)
+                else:
+                    return None
+            elif (is_var := prop_map.get(key)) is not None:
                 if is_var and not _is_var(value):
                     # Hot path: bare try/except over contextlib.suppress —
                     # this runs once per literal-valued prop.
@@ -1541,20 +1562,55 @@ class Component(BaseComponent, ABC):
                         # (its validation may raise where we don't).
                         pass
                 mirror[key] = value
-            elif key in base_fields and key not in _MIRROR_BLOCKED_FIELDS:
-                if key == "class_name" and type(value) is not str:
-                    # _post_init joins all-str lists/tuples; anything with a
-                    # Var (or any other shape) keeps the full constructor.
-                    if type(value) in (list, tuple) and all(
-                        type(c) is str for c in value
-                    ):
-                        value = " ".join(value)
-                    else:
-                        return None
-                mirror[key] = value
-            else:
-                # Event trigger, style/special-attr key, or unknown name.
+            elif key in triggers:
+                if events is None:
+                    events = {}
+                events[key] = EventChain.create(
+                    value=value,
+                    args_spec=cls.get_event_triggers()[key],
+                    key=key,
+                )
+            elif key.startswith("on_"):
+                # Unknown on_* name — fall back so _post_init raises its
+                # ValueError with the valid-triggers message.
                 return None
+            elif key in base_fields:
+                mirror[key] = value
+            elif SpecialAttributes.is_special(key):
+                if special is None:
+                    special = {}
+                special[format.to_kebab_case(key)] = value
+            else:
+                if extra_style is None:
+                    extra_style = {}
+                extra_style[key] = value
+        if special is not None:
+            custom_attrs = mirror.get("custom_attrs")
+            if custom_attrs is None:
+                mirror["custom_attrs"] = special
+            else:
+                # _post_init updates the caller-supplied dict in place.
+                custom_attrs.update(special)
+        if style_kwarg is not MISSING or extra_style is not None:
+            style = style_kwarg if style_kwarg is not MISSING else {}
+            if isinstance(style, Sequence):
+                # Includes str — _post_init raises for non-Mapping entries;
+                # fall back so its TypeError fires.
+                if not all(isinstance(s, Mapping) for s in style):
+                    return None
+                style = {k: v for style_dict in style for k, v in style_dict.items()}
+            if isinstance(style, Breakpoints) or _is_var(style):
+                style = {"&": style}
+            elif not isinstance(style, Mapping):
+                return None
+            # The class-level style default is empty by eligibility
+            # (`_arena_create_eligible` requires the stock Style factory).
+            mirror["style"] = Style({**style, **(extra_style or {})})
+        if events is not None or events_base is not None:
+            merged = dict(events_base) if events_base is not None else {}
+            if events:
+                merged.update(events)
+            mirror["event_triggers"] = merged
         return mirror
 
     @classmethod

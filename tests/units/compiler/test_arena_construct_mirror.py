@@ -85,25 +85,63 @@ def test_state_var_props_mirror():
     assert "stateValue" in js
 
 
-def test_event_trigger_falls_back():
+def test_event_triggers_mirror():
     js = _assert_arena_parity(
-        lambda: rx.box(rx.button("click", on_click=rx.console_log("x")))
+        lambda: rx.box(
+            rx.button("click", on_click=rx.console_log("x")),
+            rx.input(value=_STATE_VAR, on_change=rx.console_log("c")),
+            rx.box(on_mount=rx.console_log("m"), on_unmount=rx.console_log("u")),
+        )
     )
     assert "console" in js
 
 
-def test_style_inputs_fall_back():
+def test_style_inputs_mirror():
+    from reflex_base.breakpoints import Breakpoints
+
     _assert_arena_parity(
         lambda: rx.box(
             rx.text("styled", style={"color": "red"}),
             rx.text("shorthand", background_color="blue"),
+            rx.text("both", style={"color": "red"}, margin="2px"),
+            rx.text("listy", style=[{"color": "red"}, {"padding": "1px"}]),
+            rx.text("bp", style=Breakpoints(initial={"color": "red"})),
+            rx.text("varstyle", style=Var("dynSty").to(dict)),
+            rx.text("pseudo", _hover={"color": "green"}),
         )
     )
 
 
-def test_special_attrs_fall_back():
-    js = _assert_arena_parity(lambda: rx.box(rx.text("t", data_testid="x")))
+def test_style_string_raises_on_both_paths():
+    def build():
+        return rx.box(rx.text("bad", style="nope"))  # pyright: ignore[reportArgumentType]
+
+    with pytest.raises(TypeError, match="Style must be"):
+        _compile(build, arena=False)
+    with pytest.raises(TypeError, match="Style must be"):
+        _compile(build, arena=True)
+
+
+def test_special_attrs_mirror():
+    js = _assert_arena_parity(
+        lambda: rx.box(
+            rx.text("t", data_testid="x", aria_label="lbl"),
+            rx.text("merge", data_foo="1", custom_attrs={"spellcheck": "false"}),
+        )
+    )
     assert "data-testid" in js
+    assert "aria-label" in js
+
+
+def test_event_triggers_kwarg_dict_mirrors():
+    from reflex_base.event import EventChain, no_args_event_spec
+
+    chain = EventChain.create(
+        value=rx.console_log("pre"), args_spec=no_args_event_spec, key="on_click"
+    )
+    _assert_arena_parity(
+        lambda: rx.box(rx.button("b", event_triggers={"on_click": chain}))
+    )
 
 
 def test_class_name_variants():
@@ -111,6 +149,7 @@ def test_class_name_variants():
         lambda: rx.box(
             rx.text("plain", class_name="a b"),
             rx.text("listy", class_name=["a", "b"]),
+            rx.text("varname", class_name=Var("dynCls").to(str)),
         )
     )
 
@@ -225,6 +264,9 @@ def test_fast_path_skips_post_init(monkeypatch):
     monkeypatch.setattr(Component, "_post_init", spy)
     with arena_construction():
         rx.text("fast", size="3")
+        rx.text("evt", on_click=rx.console_log("x"))
+        rx.text("sty", style={"color": "red"}, background_color="blue")
+        rx.text("attrs", data_testid="t")
     assert "Text" not in seen
     seen.clear()
     rx.text("slow", size="3")

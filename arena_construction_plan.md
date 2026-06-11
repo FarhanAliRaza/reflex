@@ -198,10 +198,33 @@ full validation. Documented behavior difference behind the flag.
     event-trigger calls — phase 2/M4 territory); only 2.1k compile-time constructions
     occur outside the scope (freeze-time foreach re-renders — candidates for scope
     widening in phase 2), the other ~233k are app-import-time docgen (correctly rich).
-  - **Phase 2 (next): `push_node` + staged nodes + the seal.** Mirror stays as the
+  - **Phase 2a DONE (2026-06-11): full-surface mirror (style + special attrs +
+    events).** `_arena_mirror_kwargs` now replicates `_post_init` end-to-end minus
+    validation: the exact `Style` merge (list-of-dicts, Breakpoints/Var `{"&": ...}`
+    wrap, css shorthand keys), data-/aria- kebab-casing into `custom_attrs` (in-place
+    update of a caller-supplied dict, like `_post_init`), `EventChain.create` per
+    trigger (same call), caller-supplied `event_triggers` dict copy, Var `class_name`
+    passthrough. Fallback remains only for unknown `on_*` names (so `_post_init`
+    raises), Var-bearing class_name lists, and malformed style shapes. Gate: parity
+    suite extended to 18 fixtures incl. error-parity (str style raises both paths);
+    fork-pair docs diff 427/427 byte-identical. Measured: **88.0%** of in-scope docs
+    constructions skip `_post_init` (72.8k/82.7k; the rest are memo classes with their
+    own `_post_init`, by design). Honest per-call factors (full `create()` incl.
+    children normalization, not the bare push the P0 bench measured): text 1.9×,
+    style-box 1.3×, input 1.3×, button-with-event 1.1×.
+  - **Re-derived facts from phase-2a profiling (adjusts M4/M5 priorities):**
+    `rx.input`'s 112 µs was MIS-ATTRIBUTED in §2a — ~78 µs is its el-input `create()`
+    override building a `ternary_operation` Var per call (forms.py:457 →
+    `var_operation` wrapper), shared by both paths and untouched by construction work.
+    `rx.button(on_click=…)`'s 157 µs is dominated by `EventChain.create` itself —
+    exactly M4's target (cache parsed arg-specs per (class, trigger)).
+  - **Phase 2b (next): `push_node` + staged nodes + the seal.** Mirror stays as the
     Python-side handle state; push converts kwargs to owned Rust data so the seal can
-    fill snapshot slots without per-node Python reads; `__setattr__` write-through
-    arrives here (staged data duplicates the mirror). Style keys + events move next.
+    fill snapshot slots without per-node Python reads. Note from phase-2a: since
+    mirrors are complete storage, staged data can be a pure optimization layer with
+    INVALIDATION (drop `_arena_idx` on doubt) instead of write-through sync — and
+    staging only js-prop values means the audited mutation surface (alias/style/
+    children/custom_attrs — never js props) cannot desync it.
 - **M4 — Event optimization.** Cache parsed arg-specs per (class, trigger); assemble
   chains via `assemble_chain_js` without per-trigger `LiteralVar.create`. Kills
   `rx.input`'s 112 µs/node pathology end-to-end. *Risk: medium.*
