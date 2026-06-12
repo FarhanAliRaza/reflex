@@ -347,6 +347,56 @@ and takes the Python mirror unchanged.
   A/B under `all`), plus a direct equivalence test native-lane vs Python mirror
   per fixture (dict equality by key + per-var `_js_expr`/var_data presence).
 
+## 4c-next. Program 2 — making framework overhead vanish (roadmap, 2026-06-12)
+
+Measured end state of program 1: docs compile 59.5 s (pure Python) → 29.3 s; the
+remaining ~23 s ≈ 12 s user docgen code + ~10 s framework. The ~10 s is no longer
+"unported functions" — it is the structural cost of components/vars being Python
+objects that per-node Python code (create() overrides, Var ops, mirror plumbing)
+touches. Three stages, ordered by leverage per risk:
+
+**Stage 1 — finish the current arc (incremental, every step fork-pair-gateable).**
+1. mirror v1: extend `mirror_props` to str class_name, raw base fields, and style
+   keys (port the `Style({**style, **shorthands})` merge + `convert()` into Rust)
+   → ~90%+ of construction calls become one PyO3 call. Events keep the Python
+   chain build initially.
+2. Flip `REFLEX_ARENA_CONSTRUCT=all` default (evidence already captured) + Phase
+   III hard immutability (deprecate post-create harvest-field writes).
+3. Literal/type completion in Rust: extend `RustLiteralVar` to Decimal/datetime/
+   str-subclasses; port `figure_out_type`'s container recursion with var_type
+   computed as Rust data (the `VarType` enum: Scalar/List/Dict/Union/Opaque).
+   Expected: framework slice ~10 s → ~5-6 s.
+
+**Stage 2 — handle-based components (the structural change; this is "push_node
+full").** `rx.text(...)` constructs DIRECTLY into the Rust arena and returns a
+handle holding only `_arena_idx` + children. No mirror dict; every compile-time
+read comes from staged Rust data (the seal). The two prerequisites program 1
+created: immutability (no write-through protocol needed) and the byte gates.
+The key move: **per-node `create()` overrides become per-class declarative
+transforms registered into Rust** (radix's alias patch = a registered rename;
+rx.input's null-guard ternary = a registered value transform) — today they run
+Python per node; registered transforms run in Rust per node. Var ops (.to,
+ternary, f-string interpolation) complete the native var layer (no Python frames
+around Rust data). Expected: framework slice → ~1-2 s, floor set by one PyO3
+crossing per node (~0.3 µs × 150k ≈ 50 ms) plus the user's own page-function
+Python.
+
+**Stage 3 — don't pay at all (bigger than Rust for real workflows).**
+1. Compile cache default-on + production-hardened (already measured: no-change
+   rebuild 59×, one-edit hot reload 33×) — for the dev loop, framework overhead
+   vanishes for every unchanged page regardless of language.
+2. Rust-side parallel freeze+emit: with immutable handle components the per-page
+   freeze/emit is embarrassingly parallel WITHOUT Python forks (evaluation stays
+   serial Python; everything after is Send). The owner's objection to
+   multiprocessing (complexity) doesn't apply to rayon inside the session.
+3. Schema/eligibility registration at class-creation time (kill first-encounter
+   probes).
+
+Floor analysis: after stage 2+3, a compile costs (user page-function execution)
++ (~50 ms crossings) + (Rust work ≈ today's <0.5 s memoize+emit). For apps
+without docgen-style evaluation, that is effectively "framework overhead
+vanished"; for the docs app, what remains IS the app's own Python.
+
 ## 4b. Critical files
 
 - `packages/reflex-base/src/reflex_base/components/component.py` — `_create`/`_post_init`
