@@ -8,11 +8,11 @@ import dataclasses
 import datetime
 import functools
 import inspect
+import itertools
 import json
 import math
 import re
 import string
-import uuid
 import warnings
 from abc import ABCMeta
 from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence
@@ -1829,6 +1829,11 @@ def figure_out_type(value: Any) -> types.GenericType:
 
 GLOBAL_CACHE = {}
 
+# Unique GLOBAL_CACHE keys, one per (instance, property) on first access.
+# A process-local counter — uniqueness is the only requirement, and the
+# previous `uuid.uuid4()` cost an os.urandom syscall per component prop.
+_CACHE_UNIQUE_IDS = itertools.count()
+
 
 class cached_property:  # noqa: N801
     """A cached property that caches the result of the function."""
@@ -1904,7 +1909,7 @@ class cached_property:  # noqa: N801
         try:
             unique_id = object.__getattribute__(instance, cached_field_name)
         except AttributeError:
-            unique_id = uuid.uuid4().int
+            unique_id = next(_CACHE_UNIQUE_IDS)
             object.__setattr__(instance, cached_field_name, unique_id)
         if unique_id not in GLOBAL_CACHE:
             GLOBAL_CACHE[unique_id] = self._func(instance)
