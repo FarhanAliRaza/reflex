@@ -2186,11 +2186,27 @@ class Component(BaseComponent, ABC):
         Yields:
             Each var referenced by the component (props, styles, event handlers).
         """
-        if not include_children and ignore_ids is None:
-            cached = self.__dict__.get("_vars_cache")
-            if cached is not None:
+        cached = self.__dict__.get("_vars_cache")
+        if cached is not None:
+            if not include_children and ignore_ids is None:
                 yield from cached
                 return
+            # Child-inclusive walks (Form's ref collection,
+            # stateful-trigger probes) reuse the staged/cached LOCAL
+            # portion instead of rebuilding it per node — the cache is
+            # exactly the include_children=False result, kept honest by
+            # `__setattr__` invalidation.
+            ignore_ids = ignore_ids or set()
+            yield from cached
+            if include_children:
+                for child in self.children:
+                    if not isinstance(child, Component) or id(child) in ignore_ids:
+                        continue
+                    ignore_ids.add(id(child))
+                    yield from child._get_vars(
+                        include_children=include_children, ignore_ids=ignore_ids
+                    )
+            return
 
         ignore_ids = ignore_ids or set()
         vars: list[Var] = []

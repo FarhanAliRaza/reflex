@@ -7,7 +7,7 @@ Rust/native reads → byte-gate (oracle + fork-pair 427) → commit →
 re-profile. Continue until only user overrides remain Python.
 
 Program counters so far (docs compile, profiled, identical conditions):
-total Python function calls **57.5M → 47.9M**; isinstance+abc
+total Python function calls **57.5M → 46.8M**; isinstance+abc
 **3.35M → 2.24M**; `_post_init` 84.9k → 12.1k calls; `_get_vars`
 frames 991k → 676k; LiteralVar creates 448k → 300k; `Style.__init__`
 177k → 67k; the `_add_style_recursive` walk and per-var
@@ -27,9 +27,12 @@ pattern in the session transcripts: cProfile around
    stages `(contents,)` under the arena scope. `_get_hooks_internal`
    Python executions: 276k → 87k. Residue: import-time rich nodes'
    first freeze + forms classes (target 2).
-2. **forms.py:266 `_get_vars` override** (61k+ frames): el-form classes
-   add extra vars; either port the override's contribution or stage it
-   at construction via a per-class hook.
+2. ~~forms.py `_get_vars` override~~ ADDRESSED at the base: Form's
+   walk is `include_children=True` over the subtree, and base
+   `_get_vars` now reuses each node's staged/cached LOCAL portion
+   inside child-inclusive walks instead of rebuilding it (−1.0M total
+   calls). The override itself stays Python (it collects child ref
+   vars — genuinely dynamic).
 3. ~~`import_var` property~~ DONE: per-(tag, alias, is_default) memo
    in PyRefs (143k → 54k calls; the residue is per-page misses — a
    session-level memo would cut further). The property's own result is
