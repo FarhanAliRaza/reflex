@@ -398,3 +398,48 @@ def test_scope_is_context_local():
             assert _ARENA_CONSTRUCTION.get() is False
         assert _ARENA_CONSTRUCTION.get() is True
     assert _ARENA_CONSTRUCTION.get() is False
+
+
+def test_native_mirror_lane_matches_python_mirror():
+    from reflex_base.components.component import (
+        _native_mirror_props,
+    )
+
+    text_cls = type(rx.text("x"))
+    with arena_construction():
+        rx.text("prime", size="3")  # ensure eligibility + registration ran
+    assert text_cls.__dict__.get("_arena_native_lane") is True
+    fixtures = [
+        {"size": "3", "trim": "both"},
+        {"size": "3", "as_": "span"},
+        {"color_scheme": "blue"},
+        {},
+    ]
+    for props in fixtures:
+        native = _native_mirror_props(text_cls, dict(props))
+        assert native is not None
+        py_mirror = text_cls._arena_mirror_kwargs(dict(props))
+        n_mirror, n_vars = native
+        assert set(n_mirror.keys()) == set(py_mirror.keys())
+        for key, py_value in py_mirror.items():
+            n_value = n_mirror[key]
+            if hasattr(py_value, "_js_expr"):
+                assert n_value._js_expr == py_value._js_expr
+            else:
+                assert n_value == py_value
+        py_vars = text_cls._arena_build_vars(
+            py_mirror, text_cls._arena_vars_class_info()
+        )
+        assert [v._js_expr for v in n_vars] == [v._js_expr for v in py_vars]
+
+
+def test_native_mirror_lane_falls_back_for_complex_shapes():
+    from reflex_base.components.component import _native_mirror_props
+
+    text_cls = type(rx.text("x"))
+    with arena_construction():
+        rx.text("prime")
+    # Style keys, events, base fields → None (Python mirror handles them).
+    assert _native_mirror_props(text_cls, {"background_color": "red"}) is None
+    assert _native_mirror_props(text_cls, {"on_click": rx.console_log("x")}) is None
+    assert _native_mirror_props(text_cls, {"key": "k"}) is None

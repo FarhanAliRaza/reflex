@@ -3569,7 +3569,7 @@ impl RustLiteralVar {
     ///     The value itself if already a Var, else a new `RustLiteralVar`.
     #[classmethod]
     #[pyo3(signature = (value, _var_type = None, _var_data = None))]
-    fn create(
+    pub fn create(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         value: Bound<'_, PyAny>,

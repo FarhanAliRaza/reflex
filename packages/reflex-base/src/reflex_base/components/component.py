@@ -19,6 +19,10 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
 from reflex_compiler_rust._native import RustImportVar
 from reflex_compiler_rust._native import Var as RustVar
+from reflex_compiler_rust._native import mirror_props as _native_mirror_props
+from reflex_compiler_rust._native import (
+    register_mirror_class as _native_register_mirror_class,
+)
 from rich.markup import escape
 from typing_extensions import dataclass_transform
 
@@ -1560,7 +1564,28 @@ class Component(BaseComponent, ABC):
                 and style_field.default_factory is Style
             )
             cls._arena_eligible_cache = cached
+            if cached:
+                cls._arena_native_lane = cls._arena_register_native()
         return cached
+
+    @classmethod
+    def _arena_register_native(cls) -> bool:
+        """Register this class with the Rust mirror fast lane.
+
+        The lane covers props-only calls; registration requires the
+        direct-build class info (no factory-produced Var defaults) and
+        all-None identity defaults, since the Rust-built ``_vars_cache``
+        carries prop vars only.
+
+        Returns:
+            Whether the native lane is available for this class.
+        """
+        info = cls._arena_vars_class_info()
+        if info is None or any(default is not None for default in info[1:]):
+            return False
+        schema = cls._construction_schema()
+        _native_register_mirror_class(cls, list(schema.props.items()), info[0])
+        return True
 
     @classmethod
     def _arena_mirror_kwargs(cls, props: dict[str, Any]) -> dict[str, Any] | None:
@@ -1791,6 +1816,16 @@ class Component(BaseComponent, ABC):
         comp = cls.__new__(cls)
         super(Component, comp).__init__(id=props.get("id"), children=list(children))
         if _ARENA_CONSTRUCTION.get() and cls._arena_create_eligible():
+            # push_node v0: the props-only Rust fast lane — one crossing
+            # classifies, wraps literals via the same RustLiteralVar entry,
+            # and returns the mirror dict + staged vars tuple. None means
+            # the call shape needs the Python mirror below.
+            if cls.__dict__.get("_arena_native_lane"):
+                native = _native_mirror_props(cls, props)
+                if native is not None:
+                    comp.__dict__.update(native[0])
+                    comp.__dict__["_vars_cache"] = native[1]
+                    return comp
             mirror = cls._arena_mirror_kwargs(props)
             if mirror is not None:
                 comp.__dict__.update(mirror)

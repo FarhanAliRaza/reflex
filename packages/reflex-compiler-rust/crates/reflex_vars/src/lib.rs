@@ -21,8 +21,8 @@ mod var;
 mod var_data;
 
 pub use py::{
-    imports_pairs_to_py, register, rust_create_string, PyImportVar, PyVarData, RustVar,
-    VAR_OPENING_TAG,
+    imports_pairs_to_py, register, rust_create_string, PyImportVar, PyVarData, RustLiteralVar,
+    RustVar, VAR_OPENING_TAG,
 };
 pub use var::Var;
 pub use var_data::{HookPosition, ImportVar, VarData};
