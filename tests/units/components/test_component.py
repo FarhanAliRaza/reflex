@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import pytest
-from reflex_base.components.component import Component, field
+from reflex_base.components.component import Component, arena_construction, field
 from reflex_base.constants import EventTriggers
 from reflex_base.constants.state import FIELD_MARKER
 from reflex_base.event import (
@@ -41,6 +41,21 @@ from reflex import (
 )
 from reflex.state import BaseState
 from reflex.utils import imports
+
+
+@pytest.fixture(autouse=True)
+def _rich_construction():
+    """Pin the legacy validating construction path for this module.
+
+    These tests assert `_post_init` semantics (type/children/event-signature
+    validation), which the arena fast path — the process default — skips by
+    design.
+
+    Yields:
+        None, with the arena scope forced off.
+    """
+    with arena_construction(False):
+        yield
 
 
 class TestState(BaseState):

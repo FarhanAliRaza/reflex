@@ -110,19 +110,16 @@ def _is_var(value: Any) -> bool:
 if TYPE_CHECKING:
     import reflex.state
 
-# M3 arena construction gate: set by the Rust pipeline around page
-# evaluation (via `arena_construction`) and by `get_app` around the app
-# import, and off everywhere else — runtime events, threads, tests — so
-# components built outside those scopes take the full `_post_init`
-# path. Mirrors are plain instances (pickle/deepcopy-safe) and
-# `__setattr__` invalidation guards the staged harvest, so the scope
-# restriction is a conservatism, not a correctness requirement.
-# REFLEX_ARENA_CONSTRUCT values: `0` kills all staging, `pages` keeps
-# the pipeline scope but leaves imports rich, `all` (opt-in) widens the
-# default to the whole process including runtime constructions.
+# M3 arena construction gate — DEFAULT ON process-wide: every eligible
+# Component.create mirrors + stages its var harvest (validation skipped).
+# Mirrors are plain instances (pickle/deepcopy-safe) and `__setattr__`
+# invalidation guards the staged harvest. REFLEX_ARENA_CONSTRUCT values:
+# `0` kills all staging, `pages` restricts the scope to the compile
+# pipeline (page evaluation + freeze) only, `all` is equivalent to the
+# default and kept for compatibility.
 _ARENA_CONSTRUCTION: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "reflex_arena_construction",
-    default=os.environ.get("REFLEX_ARENA_CONSTRUCT", "") == "all",
+    default=os.environ.get("REFLEX_ARENA_CONSTRUCT", "") not in ("0", "pages"),
 )
 
 
@@ -1686,6 +1683,11 @@ class Component(BaseComponent, ABC):
                 if extra_style is None:
                     extra_style = {}
                 extra_style[key] = value
+                # _post_init folds style keys into Style but does NOT pop
+                # them from kwargs — the final dict update also stores the
+                # raw value as an instance attr (DebounceInput's getattr
+                # carry-over scan reads these).
+                mirror[key] = value
         if special is not None:
             custom_attrs = mirror.get("custom_attrs")
             if custom_attrs is None:

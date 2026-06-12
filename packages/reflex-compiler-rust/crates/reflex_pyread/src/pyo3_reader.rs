@@ -100,6 +100,7 @@ pub struct PyRefs<'py> {
     pub component_get_events_hooks_base: Bound<'py, PyAny>,
     pub component_get_hooks_internal_base: Bound<'py, PyAny>,
     pub component_get_ref_hook_base: Bound<'py, PyAny>,
+    pub component_get_ref_base: Bound<'py, PyAny>,
     pub component_get_mount_lifecycle_hook_base: Bound<'py, PyAny>,
     /// `Bare._get_vars` — a second ALLOWED identity for the staged-vars
     /// gates: the override is `yield self.contents`, and a mirrored
@@ -968,6 +969,7 @@ impl<'py> PyRefs<'py> {
         let component_get_events_hooks_base = base_method("_get_events_hooks")?;
         let component_get_hooks_internal_base = base_method("_get_hooks_internal")?;
         let component_get_ref_hook_base = base_method("_get_ref_hook")?;
+        let component_get_ref_base = base_method("get_ref")?;
         let component_get_mount_lifecycle_hook_base = base_method("_get_mount_lifecycle_hook")?;
         let bare_get_vars = py
             .import_bound("reflex_components_core.base.bare")
@@ -1088,6 +1090,7 @@ impl<'py> PyRefs<'py> {
             component_get_events_hooks_base,
             component_get_hooks_internal_base,
             component_get_ref_hook_base,
+            component_get_ref_base,
             component_get_mount_lifecycle_hook_base,
             bare_get_vars,
             hooks_events_code,

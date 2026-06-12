@@ -164,7 +164,7 @@ def test_event_signature_validation_skipped_under_arena():
         return None
 
     handler = EventHandler(fn=needs_three)
-    with pytest.raises(EventFnArgMismatchError):
+    with arena_construction(False), pytest.raises(EventFnArgMismatchError):
         rx.button("b", on_click=handler)
     # Documented difference: the arena fast path skips
     # check_fn_match_arg_spec / arg-type subclass validation.
@@ -309,18 +309,18 @@ def test_fast_path_skips_post_init(monkeypatch):
         rx.text("attrs", data_testid="t")
     assert "Text" not in seen
     seen.clear()
-    rx.text("slow", size="3")
-    assert "Text" in seen
+    rx.text("default", size="3")  # default scope is ON process-wide
+    assert "Text" not in seen
     seen.clear()
     with arena_construction(False):
-        rx.text("slow2", size="3")
+        rx.text("slow", size="3")
     assert "Text" in seen
 
 
 def test_validation_skipped_under_arena():
     # Documented behavior difference behind the flag: satisfies_type_hint
     # does not run on the fast path.
-    with pytest.raises(TypeError):
+    with arena_construction(False), pytest.raises(TypeError):
         # trim expects a literal union, not int
         rx.text("x", trim=42)  # pyright: ignore[reportArgumentType]
     with arena_construction():
@@ -391,13 +391,14 @@ def test_direct_vars_build_matches_get_vars():
 def test_scope_is_context_local():
     from reflex_base.components.component import _ARENA_CONSTRUCTION
 
-    assert _ARENA_CONSTRUCTION.get() is False
-    with arena_construction():
-        assert _ARENA_CONSTRUCTION.get() is True
-        with arena_construction(False):
-            assert _ARENA_CONSTRUCTION.get() is False
-        assert _ARENA_CONSTRUCTION.get() is True
-    assert _ARENA_CONSTRUCTION.get() is False
+    # Default ON process-wide (REFLEX_ARENA_CONSTRUCT=0/pages narrows it).
+    assert _ARENA_CONSTRUCTION.get() is True
+    with arena_construction(False):
+        assert _ARENA_CONSTRUCTION.get() is False
+        with arena_construction():
+            assert _ARENA_CONSTRUCTION.get() is True
+        assert _ARENA_CONSTRUCTION.get() is False
+    assert _ARENA_CONSTRUCTION.get() is True
 
 
 def test_base_init_shortcut_gating():

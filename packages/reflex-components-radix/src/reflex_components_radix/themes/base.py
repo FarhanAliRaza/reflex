@@ -120,11 +120,18 @@ class RadixThemesComponent(Component):
             A new component instance.
         """
         component = super().create(*children, **props)
+        # The alias is a per-class constant — compute once per class and
+        # write the instance dict directly (alias is not a harvest field,
+        # so the staged var cache is unaffected, same as the old setattr).
+        overrides = cls.__dict__.get("_radix_create_overrides")
+        if overrides is None:
+            overrides = {"alias": "RadixThemes" + (cls.tag or cls.__name__)}
+            cls._radix_create_overrides = overrides
+        component.__dict__.update(overrides)
         if component.library is None:
-            component.library = RadixThemesComponent.get_fields()[
+            component.__dict__["library"] = RadixThemesComponent.get_fields()[
                 "library"
             ].default_value()
-        component.alias = "RadixThemes" + (component.tag or type(component).__name__)
         return component
 
     @staticmethod

@@ -203,6 +203,158 @@ fn merge_style_sequence<'py>(
     Ok(Some(merged))
 }
 
+/// `STYLE_PROP_SHORTHAND_MAPPING` (style.py) — camel key → css names.
+fn style_shorthand(camel: &str) -> Option<&'static [&'static str]> {
+    Some(match camel {
+        "paddingX" => &["paddingInlineStart", "paddingInlineEnd"],
+        "paddingY" => &["paddingTop", "paddingBottom"],
+        "marginX" => &["marginInlineStart", "marginInlineEnd"],
+        "marginY" => &["marginTop", "marginBottom"],
+        "bg" => &["background"],
+        "bgColor" => &["backgroundColor"],
+        "fontFamily" => &["fontFamily", "--default-font-family"],
+        _ => return None,
+    })
+}
+
+/// `format.to_camel_case` for ASCII keys (hyphens treated as underscores;
+/// `str.capitalize` per word: first char upper, rest lower).
+fn to_camel_case_ascii(text: &str) -> String {
+    let t = text.replace('-', "_");
+    let mut words = t.split('_');
+    let mut out = String::with_capacity(text.len());
+    out.push_str(words.next().unwrap_or(""));
+    for w in words {
+        let mut chars = w.chars();
+        if let Some(first) = chars.next() {
+            out.push(first.to_ascii_uppercase());
+            out.push_str(&chars.as_str().to_ascii_lowercase());
+        }
+    }
+    out
+}
+
+/// `format_style_key`: `--`-prefixed keys pass through; otherwise camel
+/// case + shorthand expansion. `None` for non-ASCII keys (Python lane).
+fn format_style_keys(key: &str) -> Option<Vec<String>> {
+    if !key.is_ascii() {
+        return None;
+    }
+    if key.starts_with("--") {
+        return Some(vec![key.to_owned()]);
+    }
+    let camel = to_camel_case_ascii(key);
+    Some(match style_shorthand(&camel) {
+        Some(names) => names.iter().map(|s| (*s).to_owned()).collect(),
+        None => vec![camel],
+    })
+}
+
+/// `convert_item` for an exact scalar: the same `RustLiteralVar.create`
+/// the Python dispatch routes exact str/bool/int/float to. `None` when
+/// the produced var carries var_data (marker strings — Python lane keeps
+/// the merge semantics) or creation fails.
+fn convert_scalar_native<'py>(
+    py: Python<'py>,
+    lit_cls: &OnceLock<Bound<'py, PyType>>,
+    value: &Bound<'py, PyAny>,
+) -> Option<Bound<'py, PyAny>> {
+    let cls_obj = lit_cls.get_or_init(|| RustLiteralVar::type_object_bound(py));
+    let var = RustLiteralVar::create(cls_obj, py, value.clone(), None, None).ok()?;
+    let var = var.into_bound(py);
+    {
+        let rv = var.downcast::<RustVar>().ok()?;
+        if rv.get().var_data_ref().is_some() {
+            return None;
+        }
+    }
+    Some(var)
+}
+
+/// Native port of `style.py::convert` for the dominant subset: ASCII str
+/// keys; exact str/bool/int/float values (wrapped via the same
+/// `RustLiteralVar.create` entry), nested exact dicts (recursed, keys
+/// unformatted — the pseudo-selector branch), and exact lists of exact
+/// scalars (responsive values, keys formatted). Anything else — Vars,
+/// Breakpoints, var-data-bearing strings, exotic types — returns `None`
+/// and the caller falls back to the Python `Style()` call.
+fn convert_dict_native<'py>(
+    py: Python<'py>,
+    lit_cls: &OnceLock<Bound<'py, PyType>>,
+    style_dict: &Bound<'py, PyDict>,
+) -> PyResult<Option<Bound<'py, PyDict>>> {
+    let out = PyDict::new_bound(py);
+    for (key, value) in style_dict.iter() {
+        let Ok(key_str) = key.downcast::<PyString>() else {
+            return Ok(None);
+        };
+        let key_str = key_str.to_str()?;
+        if let Ok(nested) = value.downcast_exact::<PyDict>() {
+            let Some(converted) = convert_dict_native(py, lit_cls, nested)? else {
+                return Ok(None);
+            };
+            out.set_item(key, converted)?;
+        } else if let Ok(items) = value.downcast_exact::<PyList>() {
+            let converted = PyList::empty_bound(py);
+            for item in items.iter() {
+                if !(item.downcast_exact::<PyString>().is_ok()
+                    || item.downcast_exact::<PyBool>().is_ok()
+                    || item.downcast_exact::<PyInt>().is_ok()
+                    || item.downcast_exact::<PyFloat>().is_ok())
+                {
+                    return Ok(None);
+                }
+                let Some(var) = convert_scalar_native(py, lit_cls, &item) else {
+                    return Ok(None);
+                };
+                converted.append(var)?;
+            }
+            let Some(keys) = format_style_keys(key_str) else {
+                return Ok(None);
+            };
+            for k in keys {
+                out.set_item(k, &converted)?;
+            }
+        } else if value.downcast_exact::<PyString>().is_ok()
+            || value.downcast_exact::<PyBool>().is_ok()
+            || value.downcast_exact::<PyInt>().is_ok()
+            || value.downcast_exact::<PyFloat>().is_ok()
+        {
+            let Some(var) = convert_scalar_native(py, lit_cls, &value) else {
+                return Ok(None);
+            };
+            let Some(keys) = format_style_keys(key_str) else {
+                return Ok(None);
+            };
+            for k in keys {
+                out.set_item(k, &var)?;
+            }
+        } else {
+            return Ok(None);
+        }
+    }
+    Ok(Some(out))
+}
+
+/// Build the `Style` instance for a converted dict without re-running
+/// `Style.__init__`/`convert`: `dict.__new__(Style)` + fill + the same
+/// `_var_data = None` the Python convert produces when no value carried
+/// var_data (the native subset guarantees none did).
+fn build_style_native<'py>(
+    py: Python<'py>,
+    g: &MirrorGlobals,
+    converted: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let style_type = g.style_cls.bind(py);
+    let inst = style_type.call_method1("__new__", (style_type,))?;
+    let inst_dict = inst.downcast::<PyDict>().map_err(PyErr::from)?;
+    for (k, v) in converted.iter() {
+        inst_dict.set_item(k, v)?;
+    }
+    inst.setattr("_var_data", py.None())?;
+    Ok(inst)
+}
+
 /// The fast lane: build the mirror dict and `_vars_cache` tuple for a
 /// create call. Returns `None` (the Python mirror handles the call
 /// unchanged) for event kwargs, unknown `on_*` names, and any value shape
@@ -336,7 +488,12 @@ pub fn mirror_props<'py>(
                 } else {
                     extra_style
                         .get_or_insert_with(|| PyDict::new_bound(py))
-                        .set_item(key, value)?;
+                        .set_item(&key, &value)?;
+                    // _post_init folds style keys into Style but does NOT
+                    // pop them from kwargs — the raw value also lands as an
+                    // instance attr (DebounceInput's getattr carry-over scan
+                    // reads these).
+                    mirror.set_item(key, value)?;
                 }
             }
         }
@@ -391,9 +548,23 @@ pub fn mirror_props<'py>(
                 base.set_item(k, v)?;
             }
         }
-        // The same `Style({**style, **shorthands})` call the Python mirror
-        // makes; conversion errors propagate identically.
-        let style_inst = g.style_cls.bind(py).call1((base,))?;
+        // Native convert for the dominant subset; otherwise the same
+        // `Style({**style, **shorthands})` call the Python mirror makes
+        // (conversion errors propagate identically). Empty inputs stay on
+        // the Python call — `Style({})` sets `_var_data = EMPTY_VAR_DATA`,
+        // not the `None` the convert path produces.
+        let style_inst = if base.is_empty() {
+            None
+        } else {
+            match convert_dict_native(py, &lit_cls, &base)? {
+                Some(converted) => Some(build_style_native(py, g, &converted)?),
+                None => None,
+            }
+        };
+        let style_inst = match style_inst {
+            Some(inst) => inst,
+            None => g.style_cls.bind(py).call1((base,))?,
+        };
         mirror.set_item(g.s_style.bind(py), &style_inst)?;
         style_obj = Some(style_inst);
     }

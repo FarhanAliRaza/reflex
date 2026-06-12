@@ -928,7 +928,7 @@ fn freeze_into_slot<'py>(
         (
             read_custom_code(component, refs)?,
             read_dynamic_imports(component, refs)?,
-            read_ref_name(component)?,
+            read_ref_name(component, refs)?,
         )
     };
     let (hooks_internal, hooks_user) = {
@@ -1337,7 +1337,7 @@ fn build_imports_dict<'py>(
     //    var_data imports and each `_get_added_hooks()` VarData's imports.
     //    The user-hook calls share the per-node method cache with
     //    `read_hooks_user`, so each still runs once per node.
-    if ref_is_present(component) {
+    if ref_is_present(component, refs) {
         if let Ok(d) = refs.ref_hook_imports.downcast::<PyDict>() {
             extend_imports_dict(&result, d)?;
         }
@@ -1736,7 +1736,7 @@ fn default_import_instance_is_trivial<'py>(
         }
     }
     // A ref emits a `useRef` hook -> `react` import via `_get_hooks_imports`.
-    if ref_is_present(component) {
+    if ref_is_present(component, refs) {
         return Ok(false);
     }
     // Unlike the old gate (which bailed on *any* prop or style), styled /
@@ -1762,10 +1762,32 @@ fn default_import_instance_is_trivial<'py>(
     Ok(true)
 }
 
+/// `True` when `get_ref()` trivially returns `None` without calling Python:
+/// the class keeps the base `get_ref` and the instance `id` is None/absent
+/// (the `id` field's class default is None) — the overwhelming case.
+fn ref_fast_none(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> bool {
+    let py = component.py();
+    let Ok(m) = component.get_type().getattr("get_ref") else {
+        return false;
+    };
+    if !m.is(&refs.component_get_ref_base) {
+        return false;
+    }
+    match instance_dict(component, refs)
+        .and_then(|d| d.get_item(refs.attrs.id.bind(py)).ok().flatten())
+    {
+        Some(v) => v.is_none(),
+        None => true,
+    }
+}
+
 /// `True` when `component.get_ref()` returns a truthy ref name (the node will
 /// emit a `useRef` hook, pulling a `react` import that the library-only fast
 /// path doesn't account for).
-fn ref_is_present(component: &Bound<'_, PyAny>) -> bool {
+fn ref_is_present(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> bool {
+    if ref_fast_none(component, refs) {
+        return false;
+    }
     match component.call_method0("get_ref") {
         Ok(v) => v.is_truthy().unwrap_or(false),
         Err(_) => false,
@@ -2041,7 +2063,10 @@ fn read_dynamic_imports<'py>(
 }
 
 /// Read `get_ref()` → JS ref identifier name, or `Symbol::EMPTY` for None.
-fn read_ref_name(component: &Bound<'_, PyAny>) -> Result<Symbol, PyReadError> {
+fn read_ref_name(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<Symbol, PyReadError> {
+    if ref_fast_none(component, refs) {
+        return Ok(Symbol::EMPTY);
+    }
     let v = match component.call_method0("get_ref") {
         Ok(v) => v,
         Err(_) => return Ok(Symbol::EMPTY),

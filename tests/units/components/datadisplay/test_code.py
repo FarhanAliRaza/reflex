@@ -15,7 +15,14 @@ def test_code_light_dark_theme(theme, expected):
 
 
 def test_code_block_rejects_string_theme():
-    with pytest.raises(TypeError, match=r"CodeBlock\.theme"):
+    from reflex_base.components.component import arena_construction
+
+    # Theme validation lives in `_post_init` — pin the rich path (the arena
+    # default skips validation by design).
+    with (
+        arena_construction(False),
+        pytest.raises(TypeError, match=r"CodeBlock\.theme"),
+    ):
         CodeBlock.create("print('Hello')", theme="one_dark")  # pyright: ignore[reportArgumentType]
 
 
