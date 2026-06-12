@@ -262,19 +262,24 @@ def compile_pages(
         # `_get_hooks_internal`, `_get_hooks_user` — the per-component
         # variants), so the page emit pulls them straight from the
         # snapshot. No `_get_all_*` aggregator runs in Python.
-        (
-            rust_js,
-            arena_memo_bodies,
-            page_imports,
-            page_app_wraps,
-        ) = sess.compile_page_from_component_arena(
-            component,
-            ident,
-            route,
-            title=None,
-            meta_tags=None,
-            app_style=(app.style or {}) if fold_in_freeze else None,
-        )
+        # The freeze itself also runs under the construction scope:
+        # freeze-time constructions (foreach bodies re-rendered by
+        # `render_component()`, memo prep) take the mirror fast path and
+        # stage their var harvests too.
+        with arena_construction(arena_construct):
+            (
+                rust_js,
+                arena_memo_bodies,
+                page_imports,
+                page_app_wraps,
+            ) = sess.compile_page_from_component_arena(
+                component,
+                ident,
+                route,
+                title=None,
+                meta_tags=None,
+                app_style=(app.style or {}) if fold_in_freeze else None,
+            )
         sess.merge_imports_into(all_imports, page_imports)
         collected_app_wraps.update(page_app_wraps)
         for name, jsx in arena_memo_bodies:
