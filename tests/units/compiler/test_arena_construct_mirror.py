@@ -400,6 +400,32 @@ def test_scope_is_context_local():
     assert _ARENA_CONSTRUCTION.get() is False
 
 
+def test_base_init_shortcut_gating():
+    from reflex_base.components.component import BaseComponent
+
+    # Stock classes take the two-dict-write shortcut.
+    box = rx.box("hi", id="x")
+    assert type(box)._base_init_shortcut() is True
+    assert box.id == "x"
+    assert len(box.children) == 1
+
+    # A mixin between Component and BaseComponent in the MRO must keep
+    # the full `super(Component, comp).__init__` call.
+    class InitMixin(BaseComponent):
+        def __init__(self, **kwargs):
+            self.__dict__["mixin_init_ran"] = True
+            super().__init__(**kwargs)
+
+    class ExoticInit(Component, InitMixin):
+        tag = "ExoticInit"
+        library = "shortcut-test"
+
+    assert ExoticInit._base_init_shortcut() is False
+    exotic = ExoticInit.create(id="y")
+    assert exotic.__dict__.get("mixin_init_ran") is True
+    assert exotic.id == "y"
+
+
 def _mirror_value_eq(a, b) -> bool:
     # Var-aware structural equality: `==` on Vars builds an equality Var.
     if hasattr(a, "_js_expr") or hasattr(b, "_js_expr"):

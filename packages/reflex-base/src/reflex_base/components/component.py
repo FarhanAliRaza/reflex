@@ -1820,6 +1820,39 @@ class Component(BaseComponent, ABC):
         return tuple(out)
 
     @classmethod
+    def _base_init_shortcut(cls) -> bool:
+        """Whether the base-init call in ``_create`` can be two dict writes.
+
+        ``super(Component, comp).__init__(id=…, children=…)`` resolves to
+        ``BaseComponent.__init__`` — a plain ``setattr`` loop — for every
+        stock component; with the stock ``__setattr__`` (and no staged
+        cache yet) those writes are exactly two instance-dict stores.
+        Exotic MROs (a mixin after ``Component`` defining ``__init__``)
+        or a ``__setattr__`` override keep the full call. Cached per
+        class.
+
+        Returns:
+            Whether the shortcut is exact for this class.
+        """
+        cached = cls.__dict__.get("_base_init_shortcut_cache")
+        if cached is None:
+            mro = cls.__mro__
+            resolved = next(
+                (
+                    init
+                    for klass in mro[mro.index(Component) + 1 :]
+                    if (init := klass.__dict__.get("__init__")) is not None
+                ),
+                None,
+            )
+            cached = (
+                resolved is BaseComponent.__init__
+                and cls.__setattr__ is Component.__setattr__
+            )
+            cls._base_init_shortcut_cache = cached
+        return cached
+
+    @classmethod
     def _create(cls: type[T], children: Sequence[BaseComponent], **props: Any) -> T:
         """Create the component.
 
@@ -1831,7 +1864,11 @@ class Component(BaseComponent, ABC):
             The component.
         """
         comp = cls.__new__(cls)
-        super(Component, comp).__init__(id=props.get("id"), children=list(children))
+        if cls._base_init_shortcut():
+            comp.__dict__["id"] = props.get("id")
+            comp.__dict__["children"] = list(children)
+        else:
+            super(Component, comp).__init__(id=props.get("id"), children=list(children))
         if _ARENA_CONSTRUCTION.get() and cls._arena_create_eligible():
             # push_node v0: the props-only Rust fast lane — one crossing
             # classifies, wraps literals via the same RustLiteralVar entry,
@@ -1876,7 +1913,11 @@ class Component(BaseComponent, ABC):
             The component.
         """
         comp = cls.__new__(cls)
-        super(Component, comp).__init__(id=props.get("id"), children=list(children))
+        if cls._base_init_shortcut():
+            comp.__dict__["id"] = props.get("id")
+            comp.__dict__["children"] = list(children)
+        else:
+            super(Component, comp).__init__(id=props.get("id"), children=list(children))
         for prop, value in props.items():
             setattr(comp, prop, value)
         return comp
