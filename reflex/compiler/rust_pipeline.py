@@ -227,8 +227,9 @@ def compile_pages(
         # the per-node fold lazily under the fold-root mark, using the
         # `app_style` dict passed to the arena entry below.
         # M3/M5 arena construction (default ON; REFLEX_ARENA_CONSTRUCT=0 to
-        # kill): page evaluation runs under the construction fast-path
-        # scope — eligible Component.create calls skip `_post_init`.
+        # kill — `pages` disables only the import-time scope in get_app):
+        # page evaluation runs under the construction fast-path scope —
+        # eligible Component.create calls skip `_post_init`.
         fold_in_freeze = os.environ.get("REFLEX_STYLE_FOLD", "") != "0"
         arena_construct = os.environ.get("REFLEX_ARENA_CONSTRUCT", "") != "0"
         with arena_construction(arena_construct):

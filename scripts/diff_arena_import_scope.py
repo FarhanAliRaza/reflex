@@ -1,4 +1,4 @@
-"""Process-level A/B: default (page-scope) vs `REFLEX_ARENA_CONSTRUCT=all`.
+"""Process-level A/B: rich app import vs the staged (default) app import.
 
 Forks once per MODE from a parent that has NOT imported the app, so both
 children inherit identical pre-import interpreter state (random seeds,
@@ -7,6 +7,9 @@ imports the app, compiles every page through the production pipeline, and
 hashes the artifacts; the parent compares. This validates import-time
 construction staging — which the per-page fork-pair harness cannot, since
 its children share the parent's imports.
+
+Mode A is ``REFLEX_ARENA_CONSTRUCT=pages`` (page scope only, the rich
+import path); mode B is the default (``get_app`` stages the import).
 
 Run from an app directory:
 ``uv run python <repo>/scripts/diff_arena_import_scope.py``.
@@ -53,8 +56,6 @@ def _compile_all_in_child(mode_env: str, out_path: str) -> int:
             )
         sys.path.insert(0, str(pathlib.Path.cwd()))
 
-        from reflex_base.components.component import _ARENA_CONSTRUCTION
-
         from reflex.compiler.compiler import compile_unevaluated_page
         from reflex.compiler.rust_pipeline import _route_to_ident
         from reflex.compiler.session import CompilerSession
@@ -63,7 +64,7 @@ def _compile_all_in_child(mode_env: str, out_path: str) -> int:
         app = prerequisites.get_and_validate_app().app
         app._apply_decorated_pages()
         sess = CompilerSession()
-        digests = {"mode_default": _ARENA_CONSTRUCTION.get(), "pages": {}}
+        digests = {"mode_default": prerequisites._stage_app_imports(), "pages": {}}
         for route, unev in app._unevaluated_pages.items():
             component = compile_unevaluated_page(
                 route, unev, app.style, app.theme, apply_style=False
@@ -93,8 +94,8 @@ def main() -> int:
     t0 = time.monotonic()
     with tempfile.TemporaryDirectory() as td:
         path_a, path_b = f"{td}/a", f"{td}/b"
-        os.waitpid(_compile_all_in_child("", path_a), 0)
-        os.waitpid(_compile_all_in_child("all", path_b), 0)
+        os.waitpid(_compile_all_in_child("pages", path_a), 0)
+        os.waitpid(_compile_all_in_child("", path_b), 0)
         with pathlib.Path(path_a).open("rb") as f:
             da = pickle.load(f)
         with pathlib.Path(path_b).open("rb") as f:
@@ -103,7 +104,7 @@ def main() -> int:
         print(f"errors: A={da.get('error')} B={db.get('error')}")
         return 1
     print(
-        f"A scope default: {da['mode_default']}  B scope default: {db['mode_default']}"
+        f"A import staged: {da['mode_default']}  B import staged: {db['mode_default']}"
     )
     mismatched = sorted(r for r in da["pages"] if da["pages"][r] != db["pages"].get(r))
     print(f"compared {len(da['pages'])} pages in {time.monotonic() - t0:.1f}s")

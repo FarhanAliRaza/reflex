@@ -78,6 +78,20 @@ classification itself (~3.4s cum profiled for 73k nodes) — its Rust
 port is the original plan's `push_node`, which becomes worthwhile only
 after items 1-2 shrink the surrounding Python.
 
+7. **Import-time staging by default LANDED (2026-06-12, the
+   compile-relevant half of the `all` flip).** `get_app` wraps the app
+   import in `arena_construction()` — the post-v1 profile showed the
+   dominant remaining framework slice was unstaged import-time nodes
+   paying Python at freeze (200k `_get_vars` fallbacks 3.8s cum, 87k
+   `_get_hooks_internal` 2.6s, 102k Python `_get_all_var_data` 2.1s,
+   cProfile-inflated). Runtime/threads stay rich; the global `all`
+   default (runtime creates too) remains the owner call. Env: `0`
+   kill-all, `pages` pipeline-only (old default), unset =
+   import+pipeline, `all` process-wide. Import-scope A/B re-pointed at
+   `pages` vs default: 425/427, the 2 known repr-address pages.
+   Measured (docs app, same session A/B): import 14.8→11.0s, compile
+   30.4→25.2s, import+compile 45.2→36.3s (−20%).
+
 6. **mirror v1 LANDED (2026-06-12, plan §4c-next Stage 1 item 1).**
    `mirror_props` now classifies ALL kwarg kinds in Rust (props, base
    fields, class_name, special attrs, style keys; events fall back)

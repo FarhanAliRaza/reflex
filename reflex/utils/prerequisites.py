@@ -12,7 +12,7 @@ import re
 import sys
 import typing
 from datetime import datetime
-from os import getcwd
+from os import environ, getcwd
 from pathlib import Path
 from types import ModuleType
 from typing import NamedTuple
@@ -171,6 +171,21 @@ def _check_app_name(config: Config):
     config._app_name_is_valid = True
 
 
+def _stage_app_imports() -> bool:
+    """Whether to stage component constructions during app import.
+
+    Module-level ``Component.create`` calls then take the arena mirror
+    fast path and stage their var harvest, so the compiler's freeze reads
+    them natively instead of falling back to per-node Python walks.
+    ``REFLEX_ARENA_CONSTRUCT=0`` kills all staging; ``=pages`` keeps the
+    page-evaluation/freeze scope but leaves imports on the rich path.
+
+    Returns:
+        Whether the app import runs under the arena construction scope.
+    """
+    return environ.get("REFLEX_ARENA_CONSTRUCT", "") not in ("0", "pages")
+
+
 def get_app(reload: bool = False) -> ModuleType:
     """Get the app module based on the default config.
 
@@ -183,6 +198,8 @@ def get_app(reload: bool = False) -> ModuleType:
     Raises:
         Exception: If an error occurs while getting the app module.
     """
+    from reflex_base.components.component import arena_construction
+
     from reflex.utils import telemetry
 
     try:
@@ -199,22 +216,23 @@ def get_app(reload: bool = False) -> ModuleType:
         cwd = getcwd()  # noqa: PTH109
         if cwd not in sys.path:
             sys.path.insert(0, cwd)
-        app = (
-            __import__(module, fromlist=(constants.CompileVars.APP,))
-            if not config.app_module
-            else config.app_module
-        )
-        if reload:
-            from reflex.page import DECORATED_PAGES
-            from reflex.state import reload_state_module
+        with arena_construction(_stage_app_imports()):
+            app = (
+                __import__(module, fromlist=(constants.CompileVars.APP,))
+                if not config.app_module
+                else config.app_module
+            )
+            if reload:
+                from reflex.page import DECORATED_PAGES
+                from reflex.state import reload_state_module
 
-            # Reset rx.State subclasses to avoid conflict when reloading.
-            reload_state_module(module=module)
+                # Reset rx.State subclasses to avoid conflict when reloading.
+                reload_state_module(module=module)
 
-            DECORATED_PAGES.clear()
+                DECORATED_PAGES.clear()
 
-            # Reload the app module.
-            importlib.reload(app)
+                # Reload the app module.
+                importlib.reload(app)
     except Exception as ex:
         telemetry.send_error(ex, context="frontend")
         raise

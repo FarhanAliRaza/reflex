@@ -376,6 +376,18 @@ touches. Three stages, ordered by leverage per risk:
    the Python `Style` call too; then the Python event-chain build.
 2. Flip `REFLEX_ARENA_CONSTRUCT=all` default (evidence already captured) + Phase
    III hard immutability (deprecate post-create harvest-field writes).
+   **Partially landed 2026-06-12 (the compile-relevant half, no owner-facing
+   semantics change):** `get_app` wraps the app import in `arena_construction()`
+   by default — import-time constructions mirror + stage, so the freeze reads
+   them natively instead of the 200k-call Python `_get_vars`/`_get_hooks_internal`
+   fallback path the post-v1 profile showed. Runtime/threads stay rich (the
+   global `all` default flip — which also covers runtime event-handler creates —
+   remains the owner call). Env values now: `0` kill-all, `pages`
+   pipeline-only (old default), unset = import+pipeline, `all` process-wide.
+   Gates: import-scope A/B re-pointed to `pages` vs default → 425/427 with the
+   2 known repr-address api-reference pages; fork-pair 427/427 on top of staged
+   imports; oracle 27/27. Measured (docs app, same-session A/B): import
+   14.8→11.0s, compile 30.4→25.2s, total 45.2→36.3s (−20%).
 3. Literal/type completion in Rust: extend `RustLiteralVar` to Decimal/datetime/
    str-subclasses; port `figure_out_type`'s container recursion with var_type
    computed as Rust data (the `VarType` enum: Scalar/List/Dict/Union/Opaque).
