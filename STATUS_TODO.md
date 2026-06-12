@@ -78,6 +78,30 @@ classification itself (~3.4s cum profiled for 73k nodes) — its Rust
 port is the original plan's `push_node`, which becomes worthwhile only
 after items 1-2 shrink the surrounding Python.
 
+9. **Freeze isinstance fast paths + counter cache keys LANDED
+   (2026-06-12).** All `is_instance(var_cls)` sites in
+   freeze/memoize/pyo3_reader settle native Vars on the RustVar
+   downcast and exact common literals without the abc machinery
+   (process abc instance checks 2.02M → 1.32M); `cached_property`'s
+   GLOBAL_CACHE keys are an `itertools.count` instead of per-prop
+   `uuid4` (74k urandom syscalls per docs compile gone).
+
+8. **Post-import-staging profile (2026-06-12, /tmp/p_v3.prof).** Docs
+   compile 25.9s + import 11.9s at tip. Remaining framework Python in
+   the freeze callbacks is now dominated by PYTHON VAR-OP machinery —
+   `ToOperation._get_all_var_data` 102k calls (1.9s cum, `.to()`
+   wrappers from user/docgen code), `cached_property.__get__` var-op
+   computation (4s cum incl. the ops themselves), CachedVarOperation
+   `__getattr__` chains — i.e. plan §4c-next Stage 2 "native var ops",
+   not quick wins. Tractable Stage 1 residue, ranked: (a) mirror v2 —
+   port `convert()`/`format_style_key` so style-bearing nodes skip the
+   Python `Style()` call (~1.5s cum: convert 0.96 + Style.__init__ +
+   convert_item); (b) the Python event-chain build
+   (`create_event_chain_fast` + `EventChain.create` + format_prop,
+   ~1s cum); (c) `get_ref` 531k crossings / `component.py:205 __get__`
+   201k reads from the freeze (descriptor-read elimination via staged
+   data); (d) session-level `import_var` memo (52k residual misses).
+
 7. **Import-time staging by default LANDED (2026-06-12, the
    compile-relevant half of the `all` flip).** `get_app` wraps the app
    import in `arena_construction()` — the post-v1 profile showed the
