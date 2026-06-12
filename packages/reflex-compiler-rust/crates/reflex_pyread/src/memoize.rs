@@ -293,12 +293,12 @@ fn bare_should_memoize<'py>(
         return Ok(None);
     };
     // Only Vars carry var_data. Non-Var contents short-circuit to None.
-    let is_var = contents
-        .is_instance(&refs.var_cls)
-        .map_err(|source| PyReadError::Attr {
+    let is_var = crate::pyo3_reader::is_var_value(&contents, &refs.var_cls).map_err(|source| {
+        PyReadError::Attr {
             attr: "isinstance(Bare.contents, Var)",
             source,
-        })?;
+        }
+    })?;
     if !is_var {
         return Ok(None);
     }

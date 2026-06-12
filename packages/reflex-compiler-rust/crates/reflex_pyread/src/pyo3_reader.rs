@@ -632,8 +632,7 @@ impl ConstructionSchema {
         base_fields: Vec<String>,
         rename_props: Vec<(String, String)>,
     ) -> Self {
-        let mut kwargs =
-            HashMap::with_capacity(props.len() + triggers.len() + base_fields.len());
+        let mut kwargs = HashMap::with_capacity(props.len() + triggers.len() + base_fields.len());
         for name in base_fields {
             kwargs.insert(name, KwargKind::BaseField);
         }
@@ -1342,7 +1341,7 @@ fn read_bare<'arena, 'py>(
             source_loc: SourceLoc::SYNTHETIC,
         });
     }
-    let is_var = isinstance(&contents, &refs.var_cls, "Bare.contents")?;
+    let is_var = is_var_value_err(&contents, &refs.var_cls, "Bare.contents")?;
     if is_var {
         let js_expr = read_attr_str(&contents, "_js_expr", "Var._js_expr")?;
         if let Some(decoded) = decode_js_string_literal(&js_expr) {
@@ -1774,7 +1773,7 @@ fn event_handler_to_js<'arena>(
     arena: &'arena Arena,
     refs: &PyRefs<'_>,
 ) -> Result<(String, VarData<'arena>), PyReadError> {
-    if isinstance(handler, &refs.var_cls, "event handler")? {
+    if is_var_value_err(handler, &refs.var_cls, "event handler")? {
         let expr = read_attr_str(handler, "_js_expr", "Var._js_expr")?;
         refs.harvest.borrow_mut().add_state_idents_in(&expr);
         let var_data = read_var_data(handler, arena, refs)?;
@@ -1789,7 +1788,7 @@ fn event_handler_to_js<'arena>(
             attr: "LiteralVar.create(event handler)",
             source,
         })?;
-    if isinstance(&wrapped, &refs.var_cls, "LiteralVar.create result")? {
+    if is_var_value_err(&wrapped, &refs.var_cls, "LiteralVar.create result")? {
         let expr = read_attr_str(&wrapped, "_js_expr", "Var._js_expr")?;
         refs.harvest.borrow_mut().add_state_idents_in(&expr);
         let var_data = read_var_data(&wrapped, arena, refs)?;
@@ -1861,7 +1860,7 @@ fn read_value<'arena, 'py>(
             attr: "LiteralVar.create(prop value)",
             source,
         })?;
-    if isinstance(&wrapped, &refs.var_cls, "LiteralVar.create result")? {
+    if is_var_value_err(&wrapped, &refs.var_cls, "LiteralVar.create result")? {
         let expr = read_attr_str(&wrapped, "_js_expr", "Var._js_expr")?;
         let var_data = read_var_data(&wrapped, arena, refs)?;
         return Ok(Value::JsExpr {
@@ -2405,7 +2404,11 @@ where
                         } else if let Ok(wrapped) =
                             refs.literal_var_cls.call_method1("create", (&handler,))
                         {
-                            if isinstance(&wrapped, &refs.var_cls, "LiteralVar.create result")? {
+                            if is_var_value_err(
+                                &wrapped,
+                                &refs.var_cls,
+                                "LiteralVar.create result",
+                            )? {
                                 f(&wrapped)?;
                             }
                         }
@@ -2450,6 +2453,42 @@ fn isinstance(
     attr_static: &'static str,
 ) -> Result<bool, PyReadError> {
     obj.is_instance(cls).map_err(|source| PyReadError::Attr {
+        attr: attr_static,
+        source,
+    })
+}
+
+/// `isinstance(value, Var)` with exact-type fast paths — the Python
+/// `_is_var` counterpart. `Var` is an abc with the native `RustVar`
+/// registered as a virtual subclass, so the plain check always runs the
+/// Python `_abc_instancecheck` machinery; native Vars settle on the
+/// downcast and exact common literal types can never be Vars.
+pub(crate) fn is_var_value(value: &Bound<'_, PyAny>, var_cls: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if value.downcast::<reflex_vars::RustVar>().is_ok() {
+        return Ok(true);
+    }
+    if value.is_none()
+        || value.downcast_exact::<PyString>().is_ok()
+        || value.downcast_exact::<PyBool>().is_ok()
+        || value.downcast_exact::<PyInt>().is_ok()
+        || value.downcast_exact::<PyFloat>().is_ok()
+        || value.downcast_exact::<PyList>().is_ok()
+        || value.downcast_exact::<PyDict>().is_ok()
+        || value.downcast_exact::<PyTuple>().is_ok()
+        || value.downcast_exact::<pyo3::types::PySet>().is_ok()
+    {
+        return Ok(false);
+    }
+    value.is_instance(var_cls)
+}
+
+/// `is_var_value` with the caller's error label (the `isinstance` shape).
+pub(crate) fn is_var_value_err(
+    value: &Bound<'_, PyAny>,
+    var_cls: &Bound<'_, PyAny>,
+    attr_static: &'static str,
+) -> Result<bool, PyReadError> {
+    is_var_value(value, var_cls).map_err(|source| PyReadError::Attr {
         attr: attr_static,
         source,
     })

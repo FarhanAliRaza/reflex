@@ -424,26 +424,24 @@ fn maybe_fold_style(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<(
                     .unwrap_or(false)
         },
     );
-    let needs_fold = !class_base
-        || style_fold_entry_present(component, refs)?
-        || {
-            // Per-node half: a non-dict style (raw Var assigned via
-            // `_unsafe_create`) still takes the fold. `read_field` probes
-            // the instance dict and falls back to the SHARED class default
-            // — unlike getattr, it doesn't materialize a fresh `Style()`
-            // per unset-style node through the descriptor factory.
-            let inst_dict = crate::pyo3_reader::instance_dict(component, refs);
-            match read_field(
-                component,
-                inst_dict.as_ref(),
-                "style",
-                &refs.attrs.style,
-                refs,
-            ) {
-                Some(style) => style.downcast::<pyo3::types::PyDict>().is_err(),
-                None => false,
-            }
-        };
+    let needs_fold = !class_base || style_fold_entry_present(component, refs)? || {
+        // Per-node half: a non-dict style (raw Var assigned via
+        // `_unsafe_create`) still takes the fold. `read_field` probes
+        // the instance dict and falls back to the SHARED class default
+        // — unlike getattr, it doesn't materialize a fresh `Style()`
+        // per unset-style node through the descriptor factory.
+        let inst_dict = crate::pyo3_reader::instance_dict(component, refs);
+        match read_field(
+            component,
+            inst_dict.as_ref(),
+            "style",
+            &refs.attrs.style,
+            refs,
+        ) {
+            Some(style) => style.downcast::<pyo3::types::PyDict>().is_err(),
+            None => false,
+        }
+    };
     if needs_fold {
         let style_obj = refs
             .style_fold_style
@@ -515,7 +513,10 @@ fn hooks_internal_native_safe(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -
                 ("_get_vars", &refs.component_get_vars_base),
                 ("_get_vars_hooks", &refs.component_get_vars_hooks_base),
                 ("_get_events_hooks", &refs.component_get_events_hooks_base),
-                ("_get_hooks_internal", &refs.component_get_hooks_internal_base),
+                (
+                    "_get_hooks_internal",
+                    &refs.component_get_hooks_internal_base,
+                ),
                 ("_get_ref_hook", &refs.component_get_ref_hook_base),
                 (
                     "_get_mount_lifecycle_hook",
@@ -1269,7 +1270,9 @@ fn extend_imports_pairs<'py>(
     };
     for pair in iter.flatten() {
         let Ok(lib) = pair.get_item(0) else { continue };
-        let Ok(fields) = pair.get_item(1) else { continue };
+        let Ok(fields) = pair.get_item(1) else {
+            continue;
+        };
         let target = imports_list_for(result, &lib)?;
         let Ok(fiter) = fields.iter() else { continue };
         for field in fiter.flatten() {
@@ -1367,11 +1370,9 @@ fn build_imports_dict<'py>(
             &mut c.get_hooks
         }) {
             if !v.is_none() && !v.is_instance_of::<pyo3::types::PyString>() {
-                if let Ok(vd) =
-                    refs.call_cached0(&v, refs.attrs.m_get_all_var_data.bind(py), |c| {
-                        &mut c.get_all_var_data
-                    })
-                {
+                if let Ok(vd) = refs.call_cached0(&v, refs.attrs.m_get_all_var_data.bind(py), |c| {
+                    &mut c.get_all_var_data
+                }) {
                     if !vd.is_none() {
                         if let Ok(pairs) = vd.getattr("imports") {
                             extend_imports_pairs(&result, &pairs)?;
@@ -1536,14 +1537,12 @@ fn build_imports_dict<'py>(
                         let lib_obj = PyString::new_bound(py, lib).into_any();
                         let target = imports_list_for(&result, &lib_obj)?;
                         for iv in ivs {
-                            let obj = Bound::new(
-                                py,
-                                reflex_vars::PyImportVar::from_struct(iv.clone()),
-                            )
-                            .map_err(|source| PyReadError::Attr {
-                                attr: "PyImportVar::from_struct",
-                                source,
-                            })?;
+                            let obj =
+                                Bound::new(py, reflex_vars::PyImportVar::from_struct(iv.clone()))
+                                    .map_err(|source| PyReadError::Attr {
+                                    attr: "PyImportVar::from_struct",
+                                    source,
+                                })?;
                             let _ = target.append(obj);
                         }
                     }
@@ -1786,7 +1785,7 @@ fn var_has_imports<'py>(
             .unwrap_or(false));
     }
     let py = value.py();
-    if !value.is_instance(&refs.var_cls).unwrap_or(false) {
+    if !crate::pyo3_reader::is_var_value(value, &refs.var_cls).unwrap_or(false) {
         return Ok(false);
     }
     let var_data = match refs.call_cached0(value, refs.attrs.m_get_all_var_data.bind(py), |c| {
@@ -2094,8 +2093,8 @@ where
                 );
                 let mut seen: SmallVec<[Symbol; 8]> = SmallVec::new();
                 let push_entry = |out: &mut SmallVec<[HookEntry; N]>,
-                                      seen: &mut SmallVec<[Symbol; 8]>,
-                                      sym: Symbol| {
+                                  seen: &mut SmallVec<[Symbol; 8]>,
+                                  sym: Symbol| {
                     // dict-update semantics: first-seen order; later
                     // values all carry the same INTERNAL position, so
                     // dedup alone reproduces the merge.
@@ -2119,16 +2118,11 @@ where
                         }
                     }
                 }
-                let id_set = match read_field(
-                    component,
-                    inst_dict.as_ref(),
-                    "id",
-                    &refs.attrs.id,
-                    refs,
-                ) {
-                    Some(v) => !v.is_none(),
-                    None => false,
-                };
+                let id_set =
+                    match read_field(component, inst_dict.as_ref(), "id", &refs.attrs.id, refs) {
+                        Some(v) => !v.is_none(),
+                        None => false,
+                    };
                 if id_set {
                     if let Ok(hook) = component.call_method0("_get_ref_hook") {
                         if !hook.is_none() {
@@ -2192,9 +2186,7 @@ where
                             let sym = intern(&code);
                             let pos = read_hook_position(&val).unwrap_or(0);
                             if seen.contains(&sym) {
-                                if let Some(entry) =
-                                    out.iter_mut().find(|e| e.code == sym)
-                                {
+                                if let Some(entry) = out.iter_mut().find(|e| e.code == sym) {
                                     entry.position = pos;
                                 }
                             } else {
@@ -2796,7 +2788,7 @@ fn read_style(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<Symbol,
     };
     // A whole-style reactive `Var` (`isinstance(self.style, Var)` branch of
     // `_get_style`) is its own `css` expression.
-    if style.is_instance(&refs.var_cls).unwrap_or(false) {
+    if crate::pyo3_reader::is_var_value(&style, &refs.var_cls).unwrap_or(false) {
         let expr = render_value_as_js(&style, refs)?;
         return Ok(if expr.is_empty() {
             Symbol::EMPTY
@@ -3177,7 +3169,7 @@ fn render_style_value(v: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<String,
     if let Some(rv) = native_var(v, refs) {
         return Ok(rv.js_expr_str().to_owned());
     }
-    if v.is_instance(&refs.var_cls).unwrap_or(false) {
+    if crate::pyo3_reader::is_var_value(v, &refs.var_cls).unwrap_or(false) {
         let expr = v
             .getattr(refs.attrs.js_expr.bind(py))
             .map_err(|source| PyReadError::Attr {
@@ -3228,7 +3220,7 @@ fn register_var_data(
     builder: &mut SnapshotBuilder,
     refs: &PyRefs<'_>,
 ) -> Result<Option<VarDataRef>, PyReadError> {
-    let is_var = match value.is_instance(&refs.var_cls) {
+    let is_var = match crate::pyo3_reader::is_var_value(value, &refs.var_cls) {
         Ok(b) => b,
         Err(_) => return Ok(None),
     };
@@ -3476,7 +3468,7 @@ fn var_has_reactive_data(value: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<
             .map(|vd| !vd.state.is_empty() || !vd.hooks.is_empty())
             .unwrap_or(false));
     }
-    let is_var = match value.is_instance(&refs.var_cls) {
+    let is_var = match crate::pyo3_reader::is_var_value(value, &refs.var_cls) {
         Ok(b) => b,
         Err(_) => return Ok(false),
     };
@@ -3618,12 +3610,12 @@ fn render_value_as_js<'py>(
     if let Some(rv) = native_var(value, refs) {
         return Ok(rv.js_expr_str().to_owned());
     }
-    let is_var = value
-        .is_instance(&refs.var_cls)
-        .map_err(|source| PyReadError::Attr {
+    let is_var = crate::pyo3_reader::is_var_value(value, &refs.var_cls).map_err(|source| {
+        PyReadError::Attr {
             attr: "isinstance(value, Var)",
             source,
-        })?;
+        }
+    })?;
     if is_var {
         let expr = value
             .getattr(refs.attrs.js_expr.bind(py))
@@ -3835,7 +3827,8 @@ fn populate_control_flow<'py>(
             // verbatim instead of the glyph (e.g. `"−"` vs `"−"`).
             if let Ok(contents) = component.getattr(refs.attrs.contents.bind(py)) {
                 if !contents.is_none() {
-                    let is_var = contents.is_instance(&refs.var_cls).unwrap_or(false);
+                    let is_var =
+                        crate::pyo3_reader::is_var_value(&contents, &refs.var_cls).unwrap_or(false);
                     let s = if is_var {
                         contents
                             .getattr(refs.attrs.js_expr.bind(py))
@@ -4194,12 +4187,12 @@ fn classify_bare<'py>(
         Ok(v) if !v.is_none() => v,
         _ => return Ok(NodeKind::Text),
     };
-    let is_var = contents
-        .is_instance(&refs.var_cls)
-        .map_err(|source| PyReadError::Attr {
+    let is_var = crate::pyo3_reader::is_var_value(&contents, &refs.var_cls).map_err(|source| {
+        PyReadError::Attr {
             attr: "isinstance(Bare.contents, Var)",
             source,
-        })?;
+        }
+    })?;
     if !is_var {
         return Ok(NodeKind::Text);
     }
