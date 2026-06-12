@@ -78,6 +78,19 @@ classification itself (~3.4s cum profiled for 73k nodes) — its Rust
 port is the original plan's `push_node`, which becomes worthwhile only
 after items 1-2 shrink the surrounding Python.
 
+10. **Base-init shortcut LANDED (2026-06-12).** `_create`/`_unsafe_create`
+   replace the `super(Component, comp).__init__` setattr loop with two
+   instance-dict stores (gated per class on the resolved super-init +
+   stock `__setattr__`): 311k init frames + 838k `__setattr__` frames
+   per docs run gone; import 11.9→8.4s. NEXT CANDIDATE spotted in the
+   import profile: the radix `create` override (132k calls, 5.1s cum)
+   only sets `alias = "RadixThemes" + tag` and a library fallback —
+   both are PER-CLASS constants; setting them as class-level field
+   defaults at class creation would delete the per-node Python
+   entirely (check `"alias" in __dict__` probes + pyi hashes first).
+   This is the cheap Python form of Stage 2's "declarative
+   transforms".
+
 9. **Freeze isinstance fast paths + counter cache keys LANDED
    (2026-06-12).** All `is_instance(var_cls)` sites in
    freeze/memoize/pyo3_reader settle native Vars on the RustVar
