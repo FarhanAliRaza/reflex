@@ -417,6 +417,7 @@ def test_native_mirror_lane_matches_python_mirror():
         native = _native_mirror_props(text_cls, dict(props))
         assert native is not None
         py_mirror = text_cls._arena_mirror_kwargs(dict(props))
+        assert py_mirror is not None
         n_mirror, n_vars = native
         assert set(n_mirror.keys()) == set(py_mirror.keys())
         for key, py_value in py_mirror.items():
@@ -425,9 +426,9 @@ def test_native_mirror_lane_matches_python_mirror():
                 assert n_value._js_expr == py_value._js_expr
             else:
                 assert n_value == py_value
-        py_vars = text_cls._arena_build_vars(
-            py_mirror, text_cls._arena_vars_class_info()
-        )
+        info = text_cls._arena_vars_class_info()
+        assert info is not None
+        py_vars = text_cls._arena_build_vars(py_mirror, info)
         assert [v._js_expr for v in n_vars] == [v._js_expr for v in py_vars]
 
 
