@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from typing import Any
 
-from reflex_base.components.component import BaseComponent, Component, ComponentStyle
+from reflex_base.components.component import (
+    _ARENA_CONSTRUCTION,
+    BaseComponent,
+    Component,
+    ComponentStyle,
+)
 from reflex_base.components.tags import Tag
 from reflex_base.components.tags.tagless import Tagless
 from reflex_base.environment import PerformanceMode, environment
@@ -74,12 +79,18 @@ class Bare(Component):
         if isinstance(contents, Var):
             if var_isinstance(contents, LiteralStringVar):
                 validate_str(contents._var_value)
-            return cls._unsafe_create(children=[], contents=contents)
-        if isinstance(contents, str):
-            validate_str(contents)
-        contents = Var.create(contents if contents is not None else "")
-
-        return cls._unsafe_create(children=[], contents=contents)
+        else:
+            if isinstance(contents, str):
+                validate_str(contents)
+            contents = Var.create(contents if contents is not None else "")
+        component = cls._unsafe_create(children=[], contents=contents)
+        if _ARENA_CONSTRUCTION.get():
+            # Stage the var harvest at construction: Bare's `_get_vars`
+            # override is exactly `yield self.contents`, so the staged
+            # tuple is authoritative; `__setattr__` drops it on a
+            # post-create contents write.
+            component.__dict__["_vars_cache"] = (contents,)
+        return component
 
     def _get_all_hooks_internal(self) -> dict[str, VarData | None]:
         """Include the hooks for the component.

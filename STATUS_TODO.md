@@ -7,7 +7,7 @@ Rust/native reads → byte-gate (oracle + fork-pair 427) → commit →
 re-profile. Continue until only user overrides remain Python.
 
 Program counters so far (docs compile, profiled, identical conditions):
-total Python function calls **57.5M → 48.7M**; isinstance+abc
+total Python function calls **57.5M → 47.9M**; isinstance+abc
 **3.35M → 2.24M**; `_post_init` 84.9k → 12.1k calls; `_get_vars`
 frames 991k → 676k; LiteralVar creates 448k → 300k; `Style.__init__`
 177k → 67k; the `_add_style_recursive` walk and per-var
@@ -18,13 +18,15 @@ Next targets, ranked by the live profile (/tmp/p2c.prof methodology —
 pattern in the session transcripts: cProfile around
 `rust_pipeline.compile_pages`, app import outside):
 
-1. **Hooks-gate port for event/ref-bearing nodes** (the remaining
-   `_get_vars_hooks` 170k frames + `_get_hooks_internal` fallback):
-   port `_get_events_hooks` + the mount-lifecycle hook (chain rendering
-   — reuse `assemble_chain_js`) + the ref hook string (`format_ref` is
-   a string op) so `read_hooks_internal`'s staged branch also covers
-   nodes WITH triggers/ids. Substantial; chain-render parity is the
-   risk.
+1. ~~Hooks-gate port for event/ref-bearing nodes~~ DONE in hybrid
+   form: events hooks are the `Hooks.EVENTS` constant; ref/lifecycle
+   stay tiny Python calls fired only when id / on_mount/on_unmount are
+   present; per-var dispatch handles non-native vars
+   (ArgsFunctionOperation) exactly. Plus Bare: its `_get_vars` override
+   (`yield self.contents`) is an allowed gate identity and Bare.create
+   stages `(contents,)` under the arena scope. `_get_hooks_internal`
+   Python executions: 276k → 87k. Residue: import-time rich nodes'
+   first freeze + forms classes (target 2).
 2. **forms.py:266 `_get_vars` override** (61k+ frames): el-form classes
    add extra vars; either port the override's contribution or stage it
    at construction via a per-class hook.

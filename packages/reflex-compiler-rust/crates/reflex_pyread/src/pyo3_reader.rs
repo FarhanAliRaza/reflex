@@ -101,6 +101,12 @@ pub struct PyRefs<'py> {
     pub component_get_hooks_internal_base: Bound<'py, PyAny>,
     pub component_get_ref_hook_base: Bound<'py, PyAny>,
     pub component_get_mount_lifecycle_hook_base: Bound<'py, PyAny>,
+    /// `Bare._get_vars` — a second ALLOWED identity for the staged-vars
+    /// gates: the override is `yield self.contents`, and a mirrored
+    /// Bare's staged tuple is exactly `(contents,)` (contents is always
+    /// LiteralVar-wrapped at construction), so the staged data equals the
+    /// override's output. `None` when the components package is absent.
+    pub bare_get_vars: Option<Bound<'py, PyAny>>,
     /// `Hooks.EVENTS` — the constant `_get_events_hooks` returns (keyed
     /// at position INTERNAL) whenever the node has event triggers. Held
     /// as a String and interned at the push site so the process intern
@@ -964,6 +970,11 @@ impl<'py> PyRefs<'py> {
         let component_get_hooks_internal_base = base_method("_get_hooks_internal")?;
         let component_get_ref_hook_base = base_method("_get_ref_hook")?;
         let component_get_mount_lifecycle_hook_base = base_method("_get_mount_lifecycle_hook")?;
+        let bare_get_vars = py
+            .import_bound("reflex_components_core.base.bare")
+            .and_then(|m| m.getattr("Bare"))
+            .and_then(|c| c.getattr("_get_vars"))
+            .ok();
         let hooks_events_code = py
             .import_bound("reflex_base.constants")
             .and_then(|m| m.getattr("Hooks"))
@@ -1079,6 +1090,7 @@ impl<'py> PyRefs<'py> {
             component_get_hooks_internal_base,
             component_get_ref_hook_base,
             component_get_mount_lifecycle_hook_base,
+            bare_get_vars,
             hooks_events_code,
             component_exclude_props_base,
             component_render_base,

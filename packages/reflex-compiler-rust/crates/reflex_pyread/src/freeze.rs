@@ -491,7 +491,10 @@ fn vars_native_safe(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> bool {
             component
                 .get_type()
                 .getattr("_get_vars")
-                .map(|f| f.is(&refs.component_get_vars_base))
+                .map(|f| {
+                    f.is(&refs.component_get_vars_base)
+                        || refs.bare_get_vars.as_ref().is_some_and(|b| f.is(b))
+                })
                 .unwrap_or(false)
         },
     )
@@ -521,7 +524,13 @@ fn hooks_internal_native_safe(component: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -
             ]
             .iter()
             .all(|(name, base)| {
-                ty.getattr(*name).map(|f| f.is(*base)).unwrap_or(false)
+                ty.getattr(*name)
+                    .map(|f| {
+                        f.is(*base)
+                            || (*name == "_get_vars"
+                                && refs.bare_get_vars.as_ref().is_some_and(|b| f.is(b)))
+                    })
+                    .unwrap_or(false)
             })
         },
     )
