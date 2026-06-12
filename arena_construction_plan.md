@@ -323,6 +323,30 @@ dict. No arena, no generations: the tuple is owned by the component; immutabilit
   fully into the freeze). Breaking-change policy (console.deprecate + fallback)
   applies.
 
+## 4a-bis. push_node v0 design (the mirror's Rust fast lane, 2026-06-12)
+
+The last framework slice: `_arena_mirror_kwargs` + `_arena_build_vars` (~5 s cum
+profiled / 73k nodes). v0 ports the DOMINANT call shape only — every kwarg is a
+schema PROP and every value is a native Var or an exact-type literal
+(`bool/int/float/str/NoneType/list/dict/tuple/set/Decimal/date/datetime` — the
+RustLiteralVar dispatch tuple at vars/base.py:1426) — anything else returns None
+and takes the Python mirror unchanged.
+
+- Rust: module-level pyfunction `mirror_props(class_key, props: &PyDict) ->
+  Option<(PyDict, PyTuple)>` + a GLOBAL schema registry (class ptr → schema +
+  held class ref + per-class info: prop order, is_var flags, Var-valued
+  defaults passed from Python at registration). Literal wrapping calls the SAME
+  in-crate `RustLiteralVar.create` entry the Python dispatch calls — identical
+  Vars by construction. Returns the mirror dict + the `_vars_cache` tuple
+  (prop vars in schema order, Var-valued class defaults for unset props; no
+  identity/style/event entries exist in this shape).
+- Python: `_arena_create_eligible` registers the class (schema pieces + default
+  vars) once; `_create` tries the native lane first, falls back to
+  `_arena_mirror_kwargs`.
+- Gates: the standard battery (oracle, parity suite, fork-pair 427, import-scope
+  A/B under `all`), plus a direct equivalence test native-lane vs Python mirror
+  per fixture (dict equality by key + per-var `_js_expr`/var_data presence).
+
 ## 4b. Critical files
 
 - `packages/reflex-base/src/reflex_base/components/component.py` — `_create`/`_post_init`
