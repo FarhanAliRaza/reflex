@@ -401,9 +401,7 @@ def test_scope_is_context_local():
 
 
 def test_native_mirror_lane_matches_python_mirror():
-    from reflex_base.components.component import (
-        _native_mirror_props,
-    )
+    from reflex_base.components.component import _native_mirror_props
 
     text_cls = type(rx.text("x"))
     with arena_construction():
