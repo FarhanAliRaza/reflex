@@ -49,6 +49,24 @@ pattern in the session transcripts: cProfile around
    the same harness is 0/427). Flipping `all` to the DEFAULT is an
    owner call: it also covers legacy `reflex run` and runtime
    construction (validation-skip semantics apply there too).
+   The freeze itself now also runs under the pipeline scope
+   (freeze-time foreach re-renders + memo prep mirror and stage;
+   fork-pair delta gate 427/427).
+
+**Asymptote state (2026-06-12).** Framework Python remaining, by
+category: (a) the mirror shim — `_arena_mirror_kwargs` +
+`_arena_build_vars` (~5 s cum profiled across 73k nodes) — this IS the
+"user calls our fast code" entry path; its Rust port is `push_node`
+(M1's schema is registered and waiting; plan §4a notes the
+invalidation-not-write-through design). (b) Gated dynamic overrides
+(Form ref collection, custom `_get_vars`/hooks chains) — the goal's
+explicit "user overrides remain" category, byte-served by exact Python
+fallbacks. (c) Owner decisions parked: flip `REFLEX_ARENA_CONSTRUCT`
+default to `all` (evidence captured above); full immutability
+enforcement (plan §4a Phase III). Everything else the profile
+identified has been ported, staged, memoized, or eliminated — each
+step byte-gated.
+
 5. Micro: `_post_init`'s setattr loop → dict update (290k Python
    `__setattr__` frames on the rich path); `BaseComponent.__init__`
    (112k calls, 0.62s profiled).
