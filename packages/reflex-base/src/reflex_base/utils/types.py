@@ -961,7 +961,59 @@ def safe_issubclass(cls: Any, cls_check: Any | tuple[Any, ...]):
         return False
 
 
+# Pure structural function of its (type-hint, flags) inputs — memoized by
+# equality so repeated checks over the same hint pairs (the Var type-system's
+# dominant pattern) collapse to dict hits. Unhashable hints skip the cache.
+_TYPEHINT_ISSUBCLASS_CACHE: dict = {}
+
+
 def typehint_issubclass(
+    possible_subclass: Any,
+    possible_superclass: Any,
+    *,
+    treat_mutable_superclasss_as_immutable: bool = False,
+    treat_literals_as_union_of_types: bool = True,
+    treat_any_as_subtype_of_everything: bool = False,
+) -> bool:
+    """Check if a type hint is a subclass of another type hint (memoized).
+
+    Args:
+        possible_subclass: The type hint to check.
+        possible_superclass: The type hint to check against.
+        treat_mutable_superclasss_as_immutable: Whether to treat target classes as immutable.
+        treat_literals_as_union_of_types: Whether to treat literals as a union of their types.
+        treat_any_as_subtype_of_everything: Whether to treat Any as a subtype of everything.
+
+    Returns:
+        Whether the type hint is a subclass of the other type hint.
+    """
+    try:
+        key = (
+            possible_subclass,
+            possible_superclass,
+            treat_mutable_superclasss_as_immutable,
+            treat_literals_as_union_of_types,
+            treat_any_as_subtype_of_everything,
+        )
+        hit = _TYPEHINT_ISSUBCLASS_CACHE.get(key)
+    except TypeError:
+        key = None
+        hit = None
+    if hit is not None:
+        return hit
+    result = _typehint_issubclass_uncached(
+        possible_subclass,
+        possible_superclass,
+        treat_mutable_superclasss_as_immutable=treat_mutable_superclasss_as_immutable,
+        treat_literals_as_union_of_types=treat_literals_as_union_of_types,
+        treat_any_as_subtype_of_everything=treat_any_as_subtype_of_everything,
+    )
+    if key is not None:
+        _TYPEHINT_ISSUBCLASS_CACHE[key] = result
+    return result
+
+
+def _typehint_issubclass_uncached(
     possible_subclass: Any,
     possible_superclass: Any,
     *,

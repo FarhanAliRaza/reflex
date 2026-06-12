@@ -111,8 +111,36 @@ from reflex_compiler_rust._native import LiteralVar as RustLiteralVar  # noqa: E
 from reflex_compiler_rust._native import RustVarData as VarData  # noqa: E402
 from reflex_compiler_rust._native import Var as RustVar  # noqa: E402
 
+# Classification is a pure, structural function of the var_type object, so
+# results are memoized by var_type equality (`Sequence[str] == Sequence[str]`
+# shares an entry), guarded by the registry length so late Var-subclass
+# registrations re-classify. Unhashable var_types skip the cache.
+_VAR_CLASSIFY_CACHE: dict = {}
+_VAR_ISINSTANCE_CACHE: dict = {}
+
 
 def _rust_var_classify(var_type: GenericType) -> type:
+    """Memoized :func:`_rust_var_classify_uncached`.
+
+    Args:
+        var_type: The var's Python type.
+
+    Returns:
+        The matched typed ``Var`` subclass (``Var`` when nothing matches).
+    """
+    token = len(_var_subclasses)
+    try:
+        hit = _VAR_CLASSIFY_CACHE.get(var_type)
+    except TypeError:
+        return _rust_var_classify_uncached(var_type)
+    if hit is not None and hit[0] == token:
+        return hit[1]
+    result = _rust_var_classify_uncached(var_type)
+    _VAR_CLASSIFY_CACHE[var_type] = (token, result)
+    return result
+
+
+def _rust_var_classify_uncached(var_type: GenericType) -> type:
     """Return the typed ``Var`` subclass that ``var_type`` classifies as.
 
     Mirrors ``Var.guess_type``'s ``_var_subclasses`` registry matching, but
@@ -228,13 +256,30 @@ def _rust_var_isinstance(instance: RustVar, cls: type) -> bool:
     Returns:
         ``True`` if ``instance`` matches ``cls``.
     """
+    is_literal = type(instance) is RustLiteralVar or isinstance(
+        instance, RustLiteralVar
+    )
+    token = len(_var_subclasses)
+    try:
+        key = (instance._var_type, cls, is_literal)
+        hit = _VAR_ISINSTANCE_CACHE.get(key)
+    except TypeError:
+        key = None
+        hit = None
+    if hit is not None and hit[0] == token:
+        return hit[1]
     matched = _rust_var_classify(instance._var_type)
     if type.__subclasscheck__(LiteralVar, cls):
-        if not isinstance(instance, RustLiteralVar):
-            return False
-        literal = _literal_pair_for(matched)
-        return literal is not None and type.__subclasscheck__(cls, literal)
-    return type.__subclasscheck__(cls, matched)
+        if not is_literal:
+            result = False
+        else:
+            literal = _literal_pair_for(matched)
+            result = literal is not None and type.__subclasscheck__(cls, literal)
+    else:
+        result = type.__subclasscheck__(cls, matched)
+    if key is not None:
+        _VAR_ISINSTANCE_CACHE[key] = (token, result)
+    return result
 
 
 def _decode_var_immutable(value: str) -> tuple[VarData | None, str]:

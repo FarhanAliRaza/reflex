@@ -7,7 +7,7 @@ Rust/native reads → byte-gate (oracle + fork-pair 427) → commit →
 re-profile. Continue until only user overrides remain Python.
 
 Program counters so far (docs compile, profiled, identical conditions):
-total Python function calls **57.5M → 46.8M**; isinstance+abc
+total Python function calls **57.5M → 44.0M**; isinstance+abc
 **3.35M → 2.24M**; `_post_init` 84.9k → 12.1k calls; `_get_vars`
 frames 991k → 676k; LiteralVar creates 448k → 300k; `Style.__init__`
 177k → 67k; the `_add_style_recursive` walk and per-var

@@ -222,6 +222,13 @@ impl RustVar {
     /// subclass (bespoke behavior, e.g. `ReflexURLCastedVar`) is produced as its
     /// casted instance via the Python registry bridge `_rust_guess_type`.
     fn guess_type(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        // Identity for every standard classification — skip the Python
+        // `_rust_guess_type` round-trip entirely (the same fast path
+        // `guess_typed` uses for op results). Only custom/unknown types,
+        // where a casted subclass may be produced, fall back to Python.
+        if rust_classify_standard(py, &slf.get().var_type)?.is_some() {
+            return Ok(slf.clone().into_any().unbind());
+        }
         py.import_bound("reflex_base.vars.base")?
             .getattr("_rust_guess_type")?
             .call1((slf,))
