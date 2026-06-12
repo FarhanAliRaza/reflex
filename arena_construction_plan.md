@@ -356,10 +356,24 @@ objects that per-node Python code (create() overrides, Var ops, mirror plumbing)
 touches. Three stages, ordered by leverage per risk:
 
 **Stage 1 — finish the current arc (incremental, every step fork-pair-gateable).**
-1. mirror v1: extend `mirror_props` to str class_name, raw base fields, and style
-   keys (port the `Style({**style, **shorthands})` merge + `convert()` into Rust)
-   → ~90%+ of construction calls become one PyO3 call. Events keep the Python
-   chain build initially.
+1. ~~mirror v1: extend `mirror_props` to str class_name, raw base fields, and style
+   keys~~ **DONE 2026-06-12.** The classification loop and var harvest run in
+   Rust; the constructions whose semantics live in Python (`Style(...)`, the
+   synthetic style `Var`, `VarData.merge`) go through cached refs to the same
+   callables the Python mirror uses (`init_mirror_globals`) — identical by
+   construction, still one `mirror_props` crossing per create call. Covered
+   shapes: props (native/Python Vars + exact literals), str/joined/Var
+   `class_name`, raw base fields, kebab special attrs, style kwarg
+   (dict/list-of-dicts/Var/Breakpoints) + loose style keys, identity-prop
+   f-string collapse. Events still fall back (the deferred chain-build item).
+   Gates: oracle 27/27, fork-pair 427/427 ×2 runs, mirror parity suite (20
+   fixtures incl. type-identity), pyright 321 baseline. Micro: special attrs
+   2.0×, class_name 1.45×, id+key 1.5×, style keys 1.18×, style dict 1.15×
+   (style shapes dominated by the Python `Style()` conversion — the remaining
+   `convert()` port is the v2 follow-up below).
+   v2 follow-up: port `convert()`/`format_style_key` (camel-case + shorthand
+   expansion + recursive VarData merge) into Rust so style-bearing nodes skip
+   the Python `Style` call too; then the Python event-chain build.
 2. Flip `REFLEX_ARENA_CONSTRUCT=all` default (evidence already captured) + Phase
    III hard immutability (deprecate post-create harvest-field writes).
 3. Literal/type completion in Rust: extend `RustLiteralVar` to Decimal/datetime/

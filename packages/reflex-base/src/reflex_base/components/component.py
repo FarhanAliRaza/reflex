@@ -19,6 +19,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
 from reflex_compiler_rust._native import RustImportVar
 from reflex_compiler_rust._native import Var as RustVar
+from reflex_compiler_rust._native import (
+    init_mirror_globals as _native_init_mirror_globals,
+)
 from reflex_compiler_rust._native import mirror_props as _native_mirror_props
 from reflex_compiler_rust._native import (
     register_mirror_class as _native_register_mirror_class,
@@ -72,6 +75,14 @@ _NEVER_VAR_TYPES = frozenset({
     tuple,
     set,
 })
+
+
+# Hand the mirror fast lane the Python callables it defers to — the same
+# objects `_arena_mirror_kwargs` uses, so the two lanes match by
+# construction (plan §4c-next Stage 1, mirror v1).
+_native_init_mirror_globals(
+    Var, Breakpoints, Style, VarData, constants.REFLEX_VAR_OPENING_TAG
+)
 
 
 def _is_var(value: Any) -> bool:
@@ -1572,10 +1583,9 @@ class Component(BaseComponent, ABC):
     def _arena_register_native(cls) -> bool:
         """Register this class with the Rust mirror fast lane.
 
-        The lane covers props-only calls; registration requires the
-        direct-build class info (no factory-produced Var defaults) and
-        all-None identity defaults, since the Rust-built ``_vars_cache``
-        carries prop vars only.
+        Registration requires the direct-build class info (no
+        factory-produced Var defaults) and all-None identity defaults,
+        since the Rust-built ``_vars_cache`` skips unset identity props.
 
         Returns:
             Whether the native lane is available for this class.
@@ -1584,7 +1594,13 @@ class Component(BaseComponent, ABC):
         if info is None or any(default is not None for default in info[1:]):
             return False
         schema = cls._construction_schema()
-        _native_register_mirror_class(cls, list(schema.props.items()), info[0])
+        _native_register_mirror_class(
+            cls,
+            list(schema.props.items()),
+            info[0],
+            sorted(schema.base_fields),
+            sorted(schema.triggers),
+        )
         return True
 
     @classmethod

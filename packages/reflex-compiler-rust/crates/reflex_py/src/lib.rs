@@ -11,8 +11,8 @@
 //!    blob, runs the parse → JSX-emit pipeline, returns a JS source string.
 //!    Salsa caching lands in D5 — for now every call rebuilds.
 
-mod session;
 mod mirror;
+mod session;
 
 use std::io::Cursor;
 
@@ -450,7 +450,8 @@ fn _native(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // The real compiler session.
     m.add_class::<session::CompilerSession>()?;
 
-    // push_node v0: the construction mirror's Rust fast lane.
+    // push_node: the construction mirror's Rust fast lane.
+    m.add_function(wrap_pyfunction!(mirror::init_mirror_globals, m)?)?;
     m.add_function(wrap_pyfunction!(mirror::register_mirror_class, m)?)?;
     m.add_function(wrap_pyfunction!(mirror::mirror_props, m)?)?;
 

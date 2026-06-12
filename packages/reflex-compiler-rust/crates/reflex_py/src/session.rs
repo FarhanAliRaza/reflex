@@ -26,8 +26,8 @@ use reflex_pyread::{
     collect_all_imports as pyread_collect_all_imports,
     collect_all_imports_into as pyread_collect_all_imports_into, freeze_component,
     freeze_component_with_class_cache, merge_imports_into as pyread_merge_imports_into,
-    should_memoize as memoize_should_memoize, ClassMetadataCache, ConstructionSchema,
-    MemoRefs, PyRefs,
+    should_memoize as memoize_should_memoize, ClassMetadataCache, ConstructionSchema, MemoRefs,
+    PyRefs,
 };
 
 /// One per Python `reflex.compiler.session.CompilerSession`. Holds the
@@ -148,7 +148,6 @@ impl CompilerSession {
         );
         Ok((page_js, memo_bodies, imports_dict, app_wraps_dict))
     }
-
 }
 
 /// Memoize + emit a frozen `Snapshot` into `(page_js, memo_bodies)`. The
@@ -304,10 +303,7 @@ impl CompilerSession {
 
     /// M1 round-trip hook: the registered rename map for `cls`, or
     /// `None` when no schema is registered.
-    fn class_schema_rename_props(
-        &self,
-        cls: &Bound<'_, PyAny>,
-    ) -> Option<Vec<(String, String)>> {
+    fn class_schema_rename_props(&self, cls: &Bound<'_, PyAny>) -> Option<Vec<(String, String)>> {
         let key = cls.as_ptr() as usize;
         self.class_metadata
             .borrow()
@@ -929,7 +925,6 @@ impl CompilerSession {
             )?;
         Ok((page_js, memo_bodies, imports_dict, app_wraps_dict))
     }
-
 }
 
 /// Open `out_path` for buffered write and run `f` on the writer, mapping

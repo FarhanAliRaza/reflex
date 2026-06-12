@@ -78,6 +78,19 @@ classification itself (~3.4s cum profiled for 73k nodes) — its Rust
 port is the original plan's `push_node`, which becomes worthwhile only
 after items 1-2 shrink the surrounding Python.
 
+6. **mirror v1 LANDED (2026-06-12, plan §4c-next Stage 1 item 1).**
+   `mirror_props` now classifies ALL kwarg kinds in Rust (props, base
+   fields, class_name, special attrs, style keys; events fall back)
+   and builds the var harvest natively; `Style(...)`/`VarData.merge`/
+   the synthetic style `Var` go through cached refs to the exact
+   Python callables (`init_mirror_globals`). One crossing per create
+   call for ~all non-event shapes. Micro vs Python mirror: special
+   attrs 2.0×, class_name 1.45×, id+key 1.5×, style keys 1.18×, style
+   dict 1.15× (style shapes dominated by the Python `Style()`
+   conversion — its `convert()` port is mirror v2). Gates: oracle
+   27/27, fork-pair 427/427 (two clean runs), import-scope A/B,
+   20-fixture parity test incl. type identity.
+
 
 
 Companion to `RUST_PIPELINE_FINDINGS.md` (numbers + reasoning live there) and
