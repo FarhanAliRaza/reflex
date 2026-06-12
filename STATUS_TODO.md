@@ -37,19 +37,18 @@ pattern in the session transcripts: cProfile around
    in PyRefs (143k → 54k calls; the residue is per-page misses — a
    session-level memo would cut further). The property's own result is
    shared, so the Python `ImportVar` type is preserved exactly.
-4. **First-freeze priming of import-time (docgen-cached) rich nodes**
-   — now the TOP residue (200k of the remaining 550k `_get_vars`
-   frames; plus 88k hooks-fallback for custom-chain classes and 121k
-   Form subtree-walk frames). Attack: widen the construction scope to
-   import time (make the mirror the default everywhere, not just under
-   the pipeline contextvar). The original lifecycle objections are
-   weaker now: mirrors are plain instances (pickle/deepcopy fine) and
-   `__setattr__` invalidation guards the staged caches. CAVEAT: the
-   fork-pair gate cannot test an import-time scope change (both
-   children share the parent's imports) — needs a process-level A/B
-   (import with scope on vs off, then the per-page fork-pair within
-   each) or golden-based comparison. Also covers the 2.1k freeze-time
-   foreach re-renders.
+4. **Import-time scope widening — LANDED as opt-in, VALIDATED.**
+   `REFLEX_ARENA_CONSTRUCT=all` widens the construction default to the
+   whole process (import-time docgen constructions mirror + stage).
+   Gate: `scripts/diff_arena_import_scope.py` — forks once per MODE
+   from a pre-import parent (identical heap/seed state), compiles all
+   427 pages per child: **424/427 byte-identical; the 3 api-reference
+   diffs are `repr()` MEMORY ADDRESSES in docgen output**
+   (`<function App.<lambda> at 0x...>` — allocation noise, the same
+   pages that drift in any cross-process A/A; the A/A control through
+   the same harness is 0/427). Flipping `all` to the DEFAULT is an
+   owner call: it also covers legacy `reflex run` and runtime
+   construction (validation-skip semantics apply there too).
 5. Micro: `_post_init`'s setattr loop → dict update (290k Python
    `__setattr__` frames on the rich path); `BaseComponent.__init__`
    (112k calls, 0.62s profiled).

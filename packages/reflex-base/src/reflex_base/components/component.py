@@ -8,6 +8,7 @@ import dataclasses
 import enum
 import functools
 import operator
+import os
 import typing
 from abc import ABC, ABCMeta, abstractmethod
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -95,12 +96,17 @@ if TYPE_CHECKING:
     import reflex.state
 
 # M3 arena construction gate: set by the Rust pipeline around page
-# evaluation only (via `arena_construction`). Off everywhere else —
+# evaluation (via `arena_construction`), and off everywhere else —
 # module import, runtime events, legacy `reflex run`, tests — so
-# components built outside page evaluation always take the full
-# `_post_init` path.
+# components built outside page evaluation take the full `_post_init`
+# path. `REFLEX_ARENA_CONSTRUCT=all` (opt-in) widens the default to the
+# whole process, staging import-time constructions too: mirrors are
+# plain instances (pickle/deepcopy-safe) and `__setattr__` invalidation
+# guards the staged harvest, so the page-scope restriction is a
+# conservatism, not a correctness requirement.
 _ARENA_CONSTRUCTION: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "reflex_arena_construction", default=False
+    "reflex_arena_construction",
+    default=os.environ.get("REFLEX_ARENA_CONSTRUCT", "") == "all",
 )
 
 
