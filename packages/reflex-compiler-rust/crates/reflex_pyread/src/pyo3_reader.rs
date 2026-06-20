@@ -73,6 +73,7 @@ impl From<PyReadError> for PyErr {
 pub struct PyRefs<'py> {
     pub var_cls: Bound<'py, PyAny>,
     pub literal_var_cls: Bound<'py, PyAny>,
+    pub to_operation_cls: Bound<'py, PyAny>,
     /// `reflex_base.utils.format.format_library_name` for normalizing
     /// `Component.library` and `VarData.imports` module specifiers.
     pub format_library_name: Bound<'py, PyAny>,
@@ -339,6 +340,9 @@ pub struct InternedAttrs {
     pub style_fold_root: Py<PyString>,
     pub vars_cache: Py<PyString>,
     pub is_default: Py<PyString>,
+    // ToOperation (`.to()` wrapper) fields, for the native unwrap.
+    pub to_op_original: Py<PyString>,
+    pub to_op_var_data: Py<PyString>,
 }
 
 impl InternedAttrs {
@@ -403,6 +407,8 @@ impl InternedAttrs {
             style_fold_root: s("_style_fold_root"),
             vars_cache: s("_vars_cache"),
             is_default: s("is_default"),
+            to_op_original: s("_original"),
+            to_op_var_data: s("_var_data"),
         }
     }
 }
@@ -903,6 +909,13 @@ impl<'py> PyRefs<'py> {
                     attr: "reflex_base.vars.base.LiteralVar",
                     source,
                 })?;
+        let to_operation_cls =
+            vars_mod
+                .getattr("ToOperation")
+                .map_err(|source| PyReadError::Attr {
+                    attr: "reflex_base.vars.base.ToOperation",
+                    source,
+                })?;
         let format_library_name = py
             .import_bound("reflex_base.utils.format")
             .and_then(|m| m.getattr("format_library_name"))
@@ -1081,6 +1094,7 @@ impl<'py> PyRefs<'py> {
         Ok(Self {
             var_cls,
             literal_var_cls,
+            to_operation_cls,
             format_library_name,
             format_as_emotion,
             component_get_style_base,

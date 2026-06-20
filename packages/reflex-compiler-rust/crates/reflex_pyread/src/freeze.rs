@@ -307,9 +307,8 @@ fn class_get_rename_props<'py>(
 /// own. Eligibility is cached per class: exact `RustVar`, or a subclass
 /// whose `_js_expr` and `_get_all_var_data` descriptors are identical to
 /// the base ones (a Python override keeps the generic path).
-fn native_var<'a>(value: &'a Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Option<&'a RustVar> {
-    let bound = value.downcast::<RustVar>().ok()?;
-    let safe = class_bool_flag(
+fn rustvar_is_safe(value: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> bool {
+    class_bool_flag(
         value,
         refs,
         |m| m.rustvar_direct,
@@ -327,12 +326,41 @@ fn native_var<'a>(value: &'a Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Option<&'a 
                     .map(|d| d.is(&refs.rustvar_gavd_desc))
                     .unwrap_or(false)
         },
-    );
-    if safe {
-        Some(bound.get())
-    } else {
-        None
+    )
+}
+
+/// Read a Var as its native `RustVar`, transparently unwrapping `.to()`
+/// (`ToOperation`) wrappers.
+///
+/// `.to()` returns a Python `ToOperation` whose `_js_expr` delegates to its
+/// `_original` and whose `VarData` is exactly `_original`'s when its own
+/// `_var_data` is `None` (the default — `.to()` adds no imports/hooks). At
+/// freeze time that wrapper is transparent, so walk the lossless chain to
+/// the underlying native var instead of paying the Python
+/// `_get_all_var_data` / `__getattr__` protocol per node. A level with a
+/// non-`None` `_var_data` (rare) stops the unwrap and falls to the Python
+/// path, which merges it correctly. Returns an owned reference since the
+/// resolved var may live one or more `_original` hops from `value`.
+fn native_var<'py>(value: &Bound<'py, PyAny>, refs: &PyRefs<'py>) -> Option<Bound<'py, RustVar>> {
+    if let Ok(bound) = value.downcast::<RustVar>() {
+        return rustvar_is_safe(value, refs).then(|| bound.clone());
     }
+    let py = value.py();
+    let mut cur = value.clone();
+    while cur.is_instance(&refs.to_operation_cls).unwrap_or(false) {
+        match cur.getattr(refs.attrs.to_op_var_data.bind(py)) {
+            Ok(vd) if vd.is_none() => {}
+            _ => return None,
+        }
+        let Ok(original) = cur.getattr(refs.attrs.to_op_original.bind(py)) else {
+            return None;
+        };
+        if let Ok(bound) = original.downcast::<RustVar>() {
+            return rustvar_is_safe(&original, refs).then(|| bound.clone());
+        }
+        cur = original;
+    }
+    None
 }
 
 /// M2 deferred style fold: whether `component` carries the
@@ -1515,7 +1543,7 @@ fn build_imports_dict<'py>(
                         }
                         continue;
                     };
-                    let Some(vd) = rv.var_data_ref() else {
+                    let Some(vd) = rv.get().var_data_ref() else {
                         continue;
                     };
                     if vd.imports.is_empty() {
@@ -1802,6 +1830,7 @@ fn var_has_imports<'py>(
 ) -> Result<bool, PyReadError> {
     if let Some(rv) = native_var(value, refs) {
         return Ok(rv
+            .get()
             .var_data_ref()
             .map(|vd| !vd.imports.is_empty())
             .unwrap_or(false));
@@ -2172,7 +2201,7 @@ where
                 }
                 for v in &items {
                     if let Some(rv) = native_var(v, refs) {
-                        let Some(vd) = rv.var_data_ref() else {
+                        let Some(vd) = rv.get().var_data_ref() else {
                             continue;
                         };
                         for code in &vd.hooks {
@@ -3192,7 +3221,7 @@ fn render_style_value(v: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<String,
         return Ok("null".to_owned());
     }
     if let Some(rv) = native_var(v, refs) {
-        return Ok(rv.js_expr_str().to_owned());
+        return Ok(rv.get().js_expr_str().to_owned());
     }
     if crate::pyo3_reader::is_var_value(v, &refs.var_cls).unwrap_or(false) {
         let expr = v
@@ -3267,7 +3296,7 @@ fn register_var_data(
     // `None`, and a dep's string form is its `js_expr`.
     let (hooks_syms, imports_pairs, deps_syms, components_syms, state_sym, position) =
         if let Some(rv) = native_var(value, refs) {
-            let Some(vd) = rv.var_data_ref() else {
+            let Some(vd) = rv.get().var_data_ref() else {
                 return Ok(None);
             };
             let hooks: Vec<Symbol> = vd.hooks.iter().map(|h| intern(h)).collect();
@@ -3489,6 +3518,7 @@ fn var_has_reactive_data(value: &Bound<'_, PyAny>, refs: &PyRefs<'_>) -> Result<
     // `PyVarData.components` getter is always empty.
     if let Some(rv) = native_var(value, refs) {
         return Ok(rv
+            .get()
             .var_data_ref()
             .map(|vd| !vd.state.is_empty() || !vd.hooks.is_empty())
             .unwrap_or(false));
@@ -3633,7 +3663,7 @@ fn render_value_as_js<'py>(
     }
     // Native Vars: read the Rust-owned expression directly.
     if let Some(rv) = native_var(value, refs) {
-        return Ok(rv.js_expr_str().to_owned());
+        return Ok(rv.get().js_expr_str().to_owned());
     }
     let is_var = crate::pyo3_reader::is_var_value(value, &refs.var_cls).map_err(|source| {
         PyReadError::Attr {
