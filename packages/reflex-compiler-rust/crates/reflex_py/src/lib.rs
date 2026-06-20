@@ -11,6 +11,7 @@
 //!    blob, runs the parse → JSX-emit pipeline, returns a JS source string.
 //!    Salsa caching lands in D5 — for now every call rebuilds.
 
+mod arena_spike;
 mod mirror;
 mod session;
 
@@ -449,6 +450,12 @@ fn _native(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // The real compiler session.
     m.add_class::<session::CompilerSession>()?;
+
+    // Stage 2 spike: handle-based construction feasibility probes.
+    m.add_function(wrap_pyfunction!(arena_spike::spike_push_node, m)?)?;
+    m.add_function(wrap_pyfunction!(arena_spike::spike_node_attr, m)?)?;
+    m.add_function(wrap_pyfunction!(arena_spike::spike_node_child_count, m)?)?;
+    m.add_function(wrap_pyfunction!(arena_spike::spike_reset, m)?)?;
 
     // push_node: the construction mirror's Rust fast lane.
     m.add_function(wrap_pyfunction!(mirror::init_mirror_globals, m)?)?;
