@@ -1,6 +1,8 @@
 """Tests for the warm fork-per-compile dev compile daemon."""
 
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -120,48 +122,42 @@ def test_first_party_module_names_includes_namespace_packages(tmp_path, monkeypa
         sys.modules.pop("ns_under_test.leaf", None)
 
 
-@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork (POSIX)")
+_REDEFINE_CHILD = """
+import warnings
+
+warnings.simplefilter("ignore")
+import reflex as rx
+from reflex.utils import compile_daemon
+
+
+def _define():
+    class DaemonResetUser(rx.Model, table=True):
+        name: str
+
+
+_define()
+compile_daemon._reset_model_metadata()
+_define()  # must NOT raise "Table 'daemonresetuser' is already defined"
+print("REDEFINE_OK")
+"""
+
+
 def test_reset_model_metadata_allows_table_redefinition():
     """After reset, an ``rx.Model`` table can be redefined without conflict.
 
-    Regression: the forked child inherits the warm, populated SQLAlchemy
-    ``MetaData``; re-evaluating a page that defines a model raised
-    ``Table '...' is already defined``. Run in a fork so clearing the global
-    metadata can't affect the test process.
+    Regression: a warm process holds a populated SQLAlchemy ``MetaData``;
+    re-evaluating a page that defines a model raised ``Table '...' is already
+    defined``. Run in a clean subprocess so clearing the global metadata can't
+    affect the test process and the child does not inherit the warm pytest
+    interpreter's (model/metaclass) state.
     """
-    read_fd, write_fd = os.pipe()
-    pid = os.fork()
-    if pid == 0:  # child
-        os.close(read_fd)
-        result = b"E"
-        try:
-            import warnings
-
-            warnings.simplefilter("ignore")
-            import reflex as rx
-
-            def _define():
-                class DaemonResetUser(rx.Model, table=True):
-                    name: str
-
-            _define()
-            compile_daemon._reset_model_metadata()
-            _define()  # must NOT raise "Table 'daemonresetuser' is already defined"
-            result = b"1"
-        except Exception:
-            import traceback
-
-            traceback.print_exc()
-        finally:
-            os.write(write_fd, result)
-            os.close(write_fd)
-            os._exit(0)
-
-    os.close(write_fd)
-    out = os.read(read_fd, 1)
-    os.close(read_fd)
-    os.waitpid(pid, 0)
-    assert out == b"1"
+    result = subprocess.run(
+        [sys.executable, "-c", _REDEFINE_CHILD],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "REDEFINE_OK" in result.stdout, result.stderr
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork (POSIX)")

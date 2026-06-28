@@ -1,6 +1,11 @@
 """Tests for the experimental incremental compile cache (in-process page cache)."""
 
+from typing import TYPE_CHECKING, cast
+
 from reflex.compiler import page_cache
+
+if TYPE_CHECKING:
+    from reflex_base.plugins import CompileContext, PageContext
 
 
 def test_global_epoch_tracks_global_files(tmp_path):
@@ -48,7 +53,7 @@ def test_used_state_files_from_output_and_memos(tmp_path):
 
 def test_validate_page_fine_grained_deps():
     page_cache.clear_page_store()
-    ctx = object()
+    ctx = cast("PageContext", object())
     dep = "/proj/state.py"
     # page depends on file `dep` at content hash H1, under global epoch "e1"
     page_cache.store_page("/x", "e1", {dep: "H1"}, ctx, True)
@@ -65,7 +70,7 @@ def test_validate_page_fine_grained_deps():
 
 def test_validate_page_with_no_deps_only_tracks_epoch():
     page_cache.clear_page_store()
-    ctx = object()
+    ctx = cast("PageContext", object())
     # page depends on NO files
     page_cache.store_page("/x", "e1", {}, ctx, False)
     # some unrelated file changed -> page is still a hit (it depends on nothing)
@@ -80,12 +85,17 @@ def test_validate_page_with_no_deps_only_tracks_epoch():
 def _fake_ctx(pages, imports=None, memo=None, stateful=None, wraps=None):
     from types import SimpleNamespace
 
-    return SimpleNamespace(
-        compiled_pages={r: SimpleNamespace(output_code=c) for r, c in pages.items()},
-        all_imports=imports or {},
-        auto_memo_components=memo or {},
-        stateful_routes=stateful or {},
-        app_wrap_components=wraps or {},
+    return cast(
+        "CompileContext",
+        SimpleNamespace(
+            compiled_pages={
+                r: SimpleNamespace(output_code=c) for r, c in pages.items()
+            },
+            all_imports=imports or {},
+            auto_memo_components=memo or {},
+            stateful_routes=stateful or {},
+            app_wrap_components=wraps or {},
+        ),
     )
 
 
