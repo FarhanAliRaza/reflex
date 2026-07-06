@@ -14,32 +14,73 @@ widgets are grouped namespaces of styled Base UI parts (``dialog.root``,
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
 
+from reflex_base.vars.base import get_python_literal
+
 import reflex as rx
+from reflex.components.component import Component
 from reflex_components_experimental import baseui as b
 from reflex_components_experimental.utils import merge_class_name
 
 
-def _styled(part: type[b.BaseUI], default_cls: str):
+def _styled(part: Callable[..., rx.Component], default_cls: str):
     """Return a ``create`` that prepends ``default_cls`` under any override.
 
     Args:
-        part: A Base UI part component class.
+        part: An unstyled Base UI adapter callable.
         default_cls: The token Tailwind classes to apply by default.
 
     Returns:
-        A callable mirroring ``part.create`` with merged ``class_name``.
+        A callable mirroring ``part`` with merged ``class_name``.
     """
 
     def create(*children, **props):
         merge_class_name(default_cls, props)
-        return part.create(*children, **props)
+        return part(*children, **props)
 
     return create
 
 
-# --- Switch -----------------------------------------------------------------
+def _native_button_child_as_render_prop(children: tuple, props: dict) -> tuple:
+    """Move a single native button child into Base UI's render prop.
+
+    Args:
+        children: Positional children passed to a trigger.
+        props: Trigger props, mutated when a native button child is found.
+
+    Returns:
+        The children that should remain under the trigger.
+    """
+    if "render_" in props or len(children) != 1:
+        return children
+    child = children[0]
+    if isinstance(child, Component) and getattr(child, "tag", None) == "button":
+        props["render_"] = child
+        return ()
+    return children
+
+
+def _button_child_trigger(part: Callable[..., rx.Component], default_cls: str):
+    """Return a styled trigger that composes native button children safely.
+
+    Args:
+        part: An unstyled Base UI trigger adapter callable.
+        default_cls: The token Tailwind classes to apply by default.
+
+    Returns:
+        A trigger callable that avoids nested native buttons.
+    """
+    styled = _styled(part, default_cls)
+
+    def create(*children, **props):
+        children = _native_button_child_as_render_prop(children, props)
+        return styled(*children, **props)
+
+    return create
+
+
 _SWITCH_SIZES = {
     "1": ("var(--space-4)", "max(var(--radius-1),var(--radius-thumb))"),
     "2": ("calc(var(--space-5)*5/6)", "max(var(--radius-2),var(--radius-thumb))"),
@@ -47,7 +88,7 @@ _SWITCH_SIZES = {
 }
 
 
-def switch(size: str = "2", **props) -> b.SwitchRoot:
+def switch(size: str = "2", **props) -> rx.Component:
     """An accessible Radix-faithful switch (Base UI ``role=switch``).
 
     Args:
@@ -83,10 +124,9 @@ def switch(size: str = "2", **props) -> b.SwitchRoot:
         f"data-[checked]:[transform:translateX({translate_x})]"
     )
     merge_class_name(root_cls, props)
-    return b.SwitchRoot.create(b.SwitchThumb.create(class_name=thumb_cls), **props)
+    return b.switch_root(b.switch_thumb(class_name=thumb_cls), **props)
 
 
-# --- Checkbox ---------------------------------------------------------------
 _CHECKBOX_SIZES = {
     "1": ("calc(var(--space-4)*0.875)", "calc(var(--radius-1)*0.875)"),
     "2": ("var(--space-4)", "var(--radius-1)"),
@@ -99,7 +139,7 @@ _CHECK_SVG = (
 )
 
 
-def checkbox(size: str = "2", **props) -> b.CheckboxRoot:
+def checkbox(size: str = "2", **props) -> rx.Component:
     """An accessible Radix-faithful checkbox (Base UI ``role=checkbox``).
 
     Args:
@@ -133,12 +173,11 @@ def checkbox(size: str = "2", **props) -> b.CheckboxRoot:
         class_name="w-[72%] h-[72%]",
     )
     merge_class_name(root_cls, props)
-    return b.CheckboxRoot.create(
-        b.CheckboxIndicator.create(check, class_name=indicator_cls), **props
+    return b.checkbox_root(
+        b.checkbox_indicator(check, class_name=indicator_cls), **props
     )
 
 
-# --- Radio ------------------------------------------------------------------
 _RADIO_SIZES = {
     "1": "calc(var(--space-4)*0.875)",
     "2": "var(--space-4)",
@@ -146,7 +185,7 @@ _RADIO_SIZES = {
 }
 
 
-def radio_group(*children, **props) -> b.RadioGroup:
+def radio_group(*children, **props) -> rx.Component:
     """An accessible radio group (``role=radiogroup``, arrow-key navigation).
 
     Args:
@@ -158,10 +197,10 @@ def radio_group(*children, **props) -> b.RadioGroup:
         The radio group component.
     """
     merge_class_name("flex flex-col gap-2", props)
-    return b.RadioGroup.create(*children, **props)
+    return b.radio_group(*children, **props)
 
 
-def radio(value: str, size: str = "2", **props) -> b.RadioRoot:
+def radio(value: str, size: str = "2", **props) -> rx.Component:
     """A single accessible radio item (``role=radio``) for use in a group.
 
     Args:
@@ -188,12 +227,11 @@ def radio(value: str, size: str = "2", **props) -> b.RadioRoot:
         "bg-[var(--accent-contrast)] data-[unchecked]:hidden"
     )
     merge_class_name(root_cls, props)
-    return b.RadioRoot.create(
-        b.RadioIndicator.create(class_name=indicator_cls), value=value, **props
+    return b.radio_root(
+        b.radio_indicator(class_name=indicator_cls), value=value, **props
     )
 
 
-# --- Tabs -------------------------------------------------------------------
 _TABS_SIZES = {
     "1": ("1", "--space-6", "--space-1", "--space-1", "calc(var(--space-1)*0.5)", "1"),
     "2": ("2", "--space-7", "--space-2", "--space-2", "var(--space-1)", "2"),
@@ -220,10 +258,10 @@ def _tabs_list(*children, size: str = "2", **props) -> rx.Component:
         f"tracking-[var(--letter-spacing-{fs})]"
     )
     merge_class_name(cls, props)
-    return b.TabsList.create(*children, **props)
+    return b.tabs_list(*children, **props)
 
 
-def _tabs_tab(text: str, value: str, size: str = "2", **props) -> b.TabsTab:
+def _tabs_tab(text: str, value: str, size: str = "2", **props) -> rx.Component:
     """Styled Base UI Tab (selected state via ``data-[selected]``).
 
     Args:
@@ -258,18 +296,17 @@ def _tabs_tab(text: str, value: str, size: str = "2", **props) -> b.TabsTab:
         "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2",
     )
     merge_class_name(f"group {trigger_cls}", props)
-    return b.TabsTab.create(sizing, visible, value=value, **props)
+    return b.tabs_tab(sizing, visible, value=value, **props)
 
 
 tabs = SimpleNamespace(
-    root=b.TabsRoot.create,
+    root=b.tabs_root,
     list=_tabs_list,
     tab=_tabs_tab,
-    panel=b.TabsPanel.create,
+    panel=b.tabs_panel,
 )
 
 
-# --- SegmentedControl (ToggleGroup) -----------------------------------------
 _SEG_SIZES = {
     "1": ("1", "--space-5", "--space-3", "1", "2"),
     "2": ("2", "--space-6", "--space-4", "2", "2"),
@@ -277,7 +314,7 @@ _SEG_SIZES = {
 }
 
 
-def _seg_root(*children, size: str = "2", **props) -> b.ToggleGroup:
+def _seg_root(*children, size: str = "2", **props) -> rx.Component:
     """Styled Base UI ToggleGroup as a segmented control root.
 
     Args:
@@ -298,10 +335,10 @@ def _seg_root(*children, size: str = "2", **props) -> b.ToggleGroup:
         f"h-[var({h})] rounded-[max(var(--radius-{rad}),var(--radius-full))]"
     )
     merge_class_name(cls, props)
-    return b.ToggleGroup.create(*children, **props)
+    return b.toggle_group(*children, **props)
 
 
-def _seg_item(text: str, value: str, size: str = "2", **props) -> b.Toggle:
+def _seg_item(text: str, value: str, size: str = "2", **props) -> rx.Component:
     """Styled Base UI Toggle as a segmented control item.
 
     Args:
@@ -336,7 +373,7 @@ def _seg_item(text: str, value: str, size: str = "2", **props) -> b.Toggle:
         "group flex items-stretch select-none cursor-pointer bg-transparent border-0 p-0",
         props,
     )
-    return b.Toggle.create(
+    return b.toggle(
         rx.el.span(sizing, visible, class_name=label_cls), value=value, **props
     )
 
@@ -344,7 +381,6 @@ def _seg_item(text: str, value: str, size: str = "2", **props) -> b.Toggle:
 segmented_control = SimpleNamespace(root=_seg_root, item=_seg_item)
 
 
-# --- Slider -----------------------------------------------------------------
 _SLIDER_TRACK = {
     "1": "calc(var(--space-2)*0.75)",
     "2": "var(--space-2)",
@@ -356,7 +392,7 @@ _SLIDER_RADIUS = (
 )
 
 
-def slider(size: str = "2", **props) -> b.SliderRoot:
+def slider(size: str = "2", **props) -> rx.Component:
     """An accessible Radix-faithful slider (arrow-key value changes).
 
     Args:
@@ -386,11 +422,11 @@ def slider(size: str = "2", **props) -> b.SliderRoot:
         "after:shadow-[0_0_0_1px_var(--black-a4)]"
     )
     merge_class_name("relative flex items-center select-none touch-none w-full", props)
-    return b.SliderRoot.create(
-        b.SliderControl.create(
-            b.SliderTrack.create(
-                b.SliderIndicator.create(class_name=indicator_cls),
-                b.SliderThumb.create(class_name=thumb_cls),
+    return b.slider_root(
+        b.slider_control(
+            b.slider_track(
+                b.slider_indicator(class_name=indicator_cls),
+                b.slider_thumb(class_name=thumb_cls),
                 class_name=track_cls,
             ),
             class_name="flex items-center w-full grow",
@@ -399,7 +435,6 @@ def slider(size: str = "2", **props) -> b.SliderRoot:
     )
 
 
-# --- Progress ---------------------------------------------------------------
 _PROGRESS_HEIGHT = {
     "1": "var(--space-1)",
     "2": "calc(var(--space-2)*0.75)",
@@ -411,7 +446,7 @@ _PROGRESS_RADIUS = (
 )
 
 
-def progress(size: str = "2", value: int = 50, **props) -> b.ProgressRoot:
+def progress(size: str = "2", value: int = 50, **props) -> rx.Component:
     """An accessible Radix-faithful progress bar (``role=progressbar``).
 
     Args:
@@ -430,9 +465,9 @@ def progress(size: str = "2", value: int = 50, **props) -> b.ProgressRoot:
     )
     indicator_cls = "block h-full bg-[var(--accent-track)]"
     merge_class_name("block w-full", props)
-    return b.ProgressRoot.create(
-        b.ProgressTrack.create(
-            b.ProgressIndicator.create(class_name=indicator_cls),
+    return b.progress_root(
+        b.progress_track(
+            b.progress_indicator(class_name=indicator_cls),
             class_name=track_cls,
         ),
         value=value,
@@ -440,7 +475,6 @@ def progress(size: str = "2", value: int = 50, **props) -> b.ProgressRoot:
     )
 
 
-# --- ScrollArea -------------------------------------------------------------
 _SCROLLBAR_SIZE = {"1": "var(--space-1)", "2": "var(--space-2)", "3": "var(--space-3)"}
 
 
@@ -462,12 +496,12 @@ def scroll_area(*children, size: str = "1", **props) -> rx.Component:
     )
     thumb_cls = "relative grow rounded-[inherit] bg-[var(--gray-a8)]"
     merge_class_name("relative overflow-hidden", props)
-    return b.ScrollAreaRoot.create(
-        b.ScrollAreaViewport.create(
+    return b.scroll_area_root(
+        b.scroll_area_viewport(
             *children, class_name="w-full h-full overscroll-contain"
         ),
-        b.ScrollAreaScrollbar.create(
-            b.ScrollAreaThumb.create(class_name=thumb_cls),
+        b.scroll_area_scrollbar(
+            b.scroll_area_thumb(class_name=thumb_cls),
             orientation="vertical",
             class_name=scrollbar_cls,
         ),
@@ -475,7 +509,6 @@ def scroll_area(*children, size: str = "1", **props) -> rx.Component:
     )
 
 
-# --- Overlay panel styling --------------------------------------------------
 _BACKDROP = (
     "fixed inset-0 bg-[var(--color-overlay)] "
     "data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 "
@@ -517,15 +550,17 @@ _MENU_ITEM = (
 )
 
 
-# --- Dialog -----------------------------------------------------------------
 def _overlay_dialog(
-    parts: tuple[type[b.BaseUI], ...], popup_cls: str, *, backdrop: bool = True
+    parts: tuple[Callable[..., rx.Component], ...],
+    popup_cls: str,
+    *,
+    backdrop: bool = True,
 ):
     """Build a dialog-family namespace from a Base UI part bundle.
 
     Args:
-        parts: Tuple of (Root, Trigger, Portal, Backdrop, Popup, Title,
-            Description, Close) part classes.
+        parts: Tuple of (root, trigger, portal, backdrop, popup, title,
+            description, close) adapter callables.
         popup_cls: Popup panel Tailwind classes.
         backdrop: Whether to expose a styled backdrop.
 
@@ -534,9 +569,9 @@ def _overlay_dialog(
     """
     root, trigger, portal, backdrop_p, popup, title, desc, close = parts
     ns = SimpleNamespace(
-        root=root.create,
-        trigger=_styled(trigger, "outline-none"),
-        portal=portal.create,
+        root=root,
+        trigger=_button_child_trigger(trigger, "outline-none"),
+        portal=portal,
         popup=_styled(popup, popup_cls),
         title=_styled(
             title,
@@ -554,89 +589,85 @@ def _overlay_dialog(
 
 dialog = _overlay_dialog(
     (
-        b.DialogRoot,
-        b.DialogTrigger,
-        b.DialogPortal,
-        b.DialogBackdrop,
-        b.DialogPopup,
-        b.DialogTitle,
-        b.DialogDescription,
-        b.DialogClose,
+        b.dialog_root,
+        b.dialog_trigger,
+        b.dialog_portal,
+        b.dialog_backdrop,
+        b.dialog_popup,
+        b.dialog_title,
+        b.dialog_description,
+        b.dialog_close,
     ),
     _DIALOG_POPUP,
 )
 
 alert_dialog = _overlay_dialog(
     (
-        b.AlertDialogRoot,
-        b.AlertDialogTrigger,
-        b.AlertDialogPortal,
-        b.AlertDialogBackdrop,
-        b.AlertDialogPopup,
-        b.AlertDialogTitle,
-        b.AlertDialogDescription,
-        b.AlertDialogClose,
+        b.alert_dialog_root,
+        b.alert_dialog_trigger,
+        b.alert_dialog_portal,
+        b.alert_dialog_backdrop,
+        b.alert_dialog_popup,
+        b.alert_dialog_title,
+        b.alert_dialog_description,
+        b.alert_dialog_close,
     ),
     _DIALOG_POPUP,
 )
 
 
-# --- Popover ----------------------------------------------------------------
 popover = SimpleNamespace(
-    root=b.PopoverRoot.create,
-    trigger=_styled(b.PopoverTrigger, "outline-none"),
-    portal=b.PopoverPortal.create,
-    positioner=b.PopoverPositioner.create,
-    popup=_styled(b.PopoverPopup, _POPOVER_POPUP),
+    root=b.popover_root,
+    trigger=_button_child_trigger(b.popover_trigger, "outline-none"),
+    portal=b.popover_portal,
+    positioner=b.popover_positioner,
+    popup=_styled(b.popover_popup, _POPOVER_POPUP),
     title=_styled(
-        b.PopoverTitle,
+        b.popover_title,
         "m-0 font-bold text-[length:var(--font-size-3)] text-[var(--gray-12)]",
     ),
     description=_styled(
-        b.PopoverDescription, "text-[length:var(--font-size-2)] text-[var(--gray-a11)]"
+        b.popover_description,
+        "text-[length:var(--font-size-2)] text-[var(--gray-a11)]",
     ),
-    close=_styled(b.PopoverClose, "outline-none"),
+    close=_styled(b.popover_close, "outline-none"),
 )
 
 
-# --- HoverCard (PreviewCard) ------------------------------------------------
 hover_card = SimpleNamespace(
-    root=b.PreviewCardRoot.create,
-    trigger=_styled(b.PreviewCardTrigger, "outline-none"),
-    portal=b.PreviewCardPortal.create,
-    positioner=b.PreviewCardPositioner.create,
-    popup=_styled(b.PreviewCardPopup, _HOVERCARD_POPUP),
+    root=b.preview_card_root,
+    trigger=_button_child_trigger(b.preview_card_trigger, "outline-none"),
+    portal=b.preview_card_portal,
+    positioner=b.preview_card_positioner,
+    popup=_styled(b.preview_card_popup, _HOVERCARD_POPUP),
 )
 
 
-# --- Tooltip ----------------------------------------------------------------
 tooltip = SimpleNamespace(
-    provider=b.TooltipProvider.create,
-    root=b.TooltipRoot.create,
-    trigger=_styled(b.TooltipTrigger, "outline-none"),
-    portal=b.TooltipPortal.create,
-    positioner=b.TooltipPositioner.create,
-    popup=_styled(b.TooltipPopup, _TOOLTIP_POPUP),
+    provider=b.tooltip_provider,
+    root=b.tooltip_root,
+    trigger=_button_child_trigger(b.tooltip_trigger, "outline-none"),
+    portal=b.tooltip_portal,
+    positioner=b.tooltip_positioner,
+    popup=_styled(b.tooltip_popup, _TOOLTIP_POPUP),
 )
 
 
-# --- Menu -------------------------------------------------------------------
 menu = SimpleNamespace(
-    root=b.MenuRoot.create,
-    trigger=_styled(b.MenuTrigger, "outline-none"),
-    portal=b.MenuPortal.create,
-    positioner=b.MenuPositioner.create,
-    popup=_styled(b.MenuPopup, _MENU_POPUP),
-    item=_styled(b.MenuItem, _MENU_ITEM),
-    group=b.MenuGroup.create,
+    root=b.menu_root,
+    trigger=_button_child_trigger(b.menu_trigger, "outline-none"),
+    portal=b.menu_portal,
+    positioner=b.menu_positioner,
+    popup=_styled(b.menu_popup, _MENU_POPUP),
+    item=_styled(b.menu_item, _MENU_ITEM),
+    group=b.menu_group,
     group_label=_styled(
-        b.MenuGroupLabel,
+        b.menu_group_label,
         "px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--font-size-1)] text-[var(--gray-a10)]",
     ),
 )
 
 
-# --- Select -----------------------------------------------------------------
 _SELECT_TRIGGER_BASE = (
     "inline-flex items-center justify-between shrink-0 select-none align-top box-border cursor-default "
     "font-[family-name:var(--default-font-family)] font-[var(--font-weight-regular)] not-italic "
@@ -661,6 +692,31 @@ _SELECT_ITEM = (
 )
 
 
+def _select_item_label_from_children(children: tuple) -> str | None:
+    """Infer a Select item label from simple item text children.
+
+    Args:
+        children: Children passed to ``select.item``.
+
+    Returns:
+        The literal item label, if one can be inferred.
+    """
+    if len(children) != 1:
+        return None
+    child = children[0]
+    if isinstance(child, str):
+        return child
+    if (
+        not isinstance(child, Component)
+        or getattr(child, "tag", None) != "Select.ItemText"
+    ):
+        return None
+    if len(child.children) != 1:
+        return None
+    value = get_python_literal(getattr(child.children[0], "contents", None))
+    return value if isinstance(value, str) else None
+
+
 def _select_trigger(*children, **props) -> rx.Component:
     """Styled Base UI Select trigger with a chevron icon.
 
@@ -672,7 +728,7 @@ def _select_trigger(*children, **props) -> rx.Component:
         The select trigger component.
     """
     merge_class_name(_SELECT_TRIGGER_BASE, props)
-    icon = b.SelectIcon.create(
+    icon = b.select_icon(
         rx.el.svg(
             rx.el.path(
                 d="M4.5 6L8 9.5L11.5 6",
@@ -684,22 +740,83 @@ def _select_trigger(*children, **props) -> rx.Component:
             class_name="w-[9px] h-[9px] shrink-0",
         )
     )
-    return b.SelectTrigger.create(*children, icon, **props)
+    return b.select_trigger(*children, icon, **props)
 
 
-select = SimpleNamespace(
-    root=b.SelectRoot.create,
+_styled_select_item = _styled(b.select_item, _SELECT_ITEM)
+
+
+def _select_item(*children, **props) -> rx.Component:
+    """Styled Base UI Select item with a Radix-compatible display label.
+
+    Args:
+        *children: Item content.
+        **props: Extra props plus ``class_name``.
+
+    Returns:
+        The select item component.
+    """
+    if "label" not in props:
+        label = _select_item_label_from_children(children)
+        if label is not None:
+            props["label"] = label
+    return _styled_select_item(*children, **props)
+
+
+def _select(items: list[str], **props) -> rx.Component:
+    """High-level Select matching the Radix ``rx.select([...])`` shape.
+
+    Args:
+        items: Item labels and values.
+        **props: Root props, plus ``placeholder`` for the trigger value.
+
+    Returns:
+        The composed select component.
+    """
+    placeholder = props.pop("placeholder", None)
+    return b.select_root(
+        _select_trigger(b.select_value(placeholder=placeholder)),
+        b.select_portal(
+            b.select_positioner(
+                b.select_popup(*[
+                    _select_item(b.select_item_text(item), value=item, label=item)
+                    for item in items
+                ])
+            )
+        ),
+        items=items,
+        **props,
+    )
+
+
+class _SelectNamespace(SimpleNamespace):
+    """Callable select namespace that preserves compound-part access."""
+
+    def __call__(self, items: list[str], **props) -> rx.Component:
+        """Create a high-level select component.
+
+        Args:
+            items: Item labels and values.
+            **props: Root props, plus ``placeholder`` for the trigger value.
+
+        Returns:
+            The composed select component.
+        """
+        return _select(items, **props)
+
+
+select = _SelectNamespace(
+    root=b.select_root,
     trigger=_select_trigger,
-    value=b.SelectValue.create,
-    portal=b.SelectPortal.create,
-    positioner=b.SelectPositioner.create,
-    popup=_styled(b.SelectPopup, _SELECT_POPUP),
-    item=_styled(b.SelectItem, _SELECT_ITEM),
-    item_text=b.SelectItemText.create,
+    value=b.select_value,
+    portal=b.select_portal,
+    positioner=b.select_positioner,
+    popup=_styled(b.select_popup, _SELECT_POPUP),
+    item=_select_item,
+    item_text=b.select_item_text,
 )
 
 
-# --- Accordion --------------------------------------------------------------
 def _accordion_trigger(*children, **props) -> rx.Component:
     """Styled Base UI Accordion header+trigger.
 
@@ -716,17 +833,18 @@ def _accordion_trigger(*children, **props) -> rx.Component:
         "outline-none focus-visible:outline-2 focus-visible:outline-[var(--focus-8)]"
     )
     merge_class_name(cls, props)
-    return b.AccordionHeader.create(b.AccordionTrigger.create(*children, **props))
+    return b.accordion_header(b.accordion_trigger(*children, **props))
 
 
 accordion = SimpleNamespace(
-    root=_styled(b.AccordionRoot, "flex flex-col w-full"),
+    root=_styled(b.accordion_root, "flex flex-col w-full"),
     item=_styled(
-        b.AccordionItem,
+        b.accordion_item,
         "block overflow-hidden w-full box-border m-0 rounded-[var(--radius-4)]",
     ),
     trigger=_accordion_trigger,
     panel=_styled(
-        b.AccordionPanel, "overflow-hidden px-[var(--space-4)] py-[var(--space-3)]"
+        b.accordion_panel,
+        "overflow-hidden px-[var(--space-4)] py-[var(--space-3)]",
     ),
 )

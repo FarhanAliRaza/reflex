@@ -7,7 +7,6 @@ by ``diff.py``. Re-exported from ``parity.py`` so they are reachable as
 """
 
 import reflex as rx
-
 from buispike.bui import cn
 
 # --- Tabs (TabsList + TabsTrigger) ------------------------------------------
@@ -31,14 +30,17 @@ def tabs_list(*children, size: str = "2", **props) -> rx.Component:
     return rx.el.div(*children, **props)
 
 
-def tabs_trigger(text: str, size: str = "2", active: bool = False, **props) -> rx.Component:
+def tabs_trigger(
+    text: str, size: str = "2", active: bool = False, **props
+) -> rx.Component:
     """A Radix-faithful TabsTrigger."""
     fs, h, px, ipx, ipy, irad = _TABS_SIZES[size]
     color = "text-[var(--gray-12)]" if active else "text-[var(--gray-a11)]"
     before = (
         "before:content-[''] before:box-border before:absolute before:h-0.5 "
         "before:bottom-0 before:left-0 before:right-0 before:bg-[var(--accent-indicator)]"
-        if active else ""
+        if active
+        else ""
     )
     trigger_cls = (
         "flex items-center justify-center shrink-0 relative select-none box-border text-start "
@@ -54,7 +56,9 @@ def tabs_trigger(text: str, size: str = "2", active: bool = False, **props) -> r
     # active/medium copies carry --tab-active-letter-spacing (-0.01em), which
     # tightens them; the sizing copy is always medium so width is stable.
     act_ls = "tracking-[-0.01em]" if active else ""
-    sizing = rx.el.span(text, class_name=f"{base_inner} font-medium tracking-[-0.01em] invisible")
+    sizing = rx.el.span(
+        text, class_name=f"{base_inner} font-medium tracking-[-0.01em] invisible"
+    )
     visible = rx.el.span(
         text,
         class_name=f"{base_inner} {weight} {act_ls} absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2",
@@ -86,14 +90,17 @@ def segmented_root(*children, size: str = "2", **props) -> rx.Component:
     return rx.el.div(*children, **props)
 
 
-def segmented_item(text: str, size: str = "2", active: bool = False, **props) -> rx.Component:
+def segmented_item(
+    text: str, size: str = "2", active: bool = False, **props
+) -> rx.Component:
     """A Radix-faithful SegmentedControl item."""
     fs, _h, px, gap, rad = _SEG_SIZES[size]
     before = (
         "before:content-[''] before:absolute before:inset-px before:-z-10 "
         f"before:rounded-[max(0.5px,calc(max(var(--radius-{rad}),var(--radius-full))-1px))] "
         "before:bg-[var(--segmented-control-indicator-background-color)]"
-        if active else ""
+        if active
+        else ""
     )
     weight = "font-medium" if active else "font-normal"
     label_cls = (
@@ -104,13 +111,17 @@ def segmented_item(text: str, size: str = "2", active: bool = False, **props) ->
     fsz = f"text-[length:var(--font-size-{fs})]"
     # Like Radix: an in-flow medium + (-0.01em) sizing copy fixes the column
     # width so items don't reflow when activated; visible copy overlaid.
-    sizing = rx.el.span(text, class_name=f"{fsz} font-medium tracking-[-0.01em] invisible")
+    sizing = rx.el.span(
+        text, class_name=f"{fsz} font-medium tracking-[-0.01em] invisible"
+    )
     vls = "tracking-[-0.01em]" if active else f"tracking-[var(--letter-spacing-{fs})]"
     visible = rx.el.span(
         text,
         class_name=f"{fsz} {weight} {vls} absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2",
     )
-    props["class_name"] = cn("flex items-stretch select-none", props.pop("class_name", ""))
+    props["class_name"] = cn(
+        "flex items-stretch select-none", props.pop("class_name", "")
+    )
     return rx.el.div(rx.el.span(sizing, visible, class_name=label_cls), **props)
 
 
@@ -122,14 +133,20 @@ _SWITCH_SIZES = {
 }
 
 
-def switch(checked: bool = False, size: str = "2", variant: str = "surface", **props) -> rx.Component:
+def switch(
+    checked: bool = False, size: str = "2", variant: str = "surface", **props
+) -> rx.Component:
     """A Radix-faithful switch in a fixed checked/unchecked state."""
     height, radius = _SWITCH_SIZES[size]
     state = "checked" if checked else "unchecked"
     width = f"calc({height}*1.75)"
     thumb_size = f"calc({height}_-_1px*2)"
     translate_x = f"calc({width}_-_{height})"
-    bg_pos = "before:[background-position:0%]" if checked else "before:[background-position-x:100%]"
+    bg_pos = (
+        "before:[background-position:0%]"
+        if checked
+        else "before:[background-position-x:100%]"
+    )
     root_cls = (
         "relative inline-flex items-center align-top shrink-0 text-start "
         f"h-[{height}] before:content-[''] before:block "
@@ -148,7 +165,9 @@ def switch(checked: bool = False, size: str = "2", variant: str = "surface", **p
     )
     props["class_name"] = cn(root_cls, props.pop("class_name", ""))
     props.setdefault("custom_attrs", {})["data-state"] = state
-    return rx.el.button(rx.el.span(class_name=thumb_cls, custom_attrs={"data-state": state}), **props)
+    return rx.el.button(
+        rx.el.span(class_name=thumb_cls, custom_attrs={"data-state": state}), **props
+    )
 
 
 _CHECKBOX_SIZES = {
@@ -158,12 +177,15 @@ _CHECKBOX_SIZES = {
 }
 
 
-def checkbox(checked: bool = False, size: str = "2", variant: str = "surface", **props) -> rx.Component:
+def checkbox(
+    checked: bool = False, size: str = "2", variant: str = "surface", **props
+) -> rx.Component:
     """A Radix-faithful checkbox in a fixed state."""
     csize, radius = _CHECKBOX_SIZES[size]
     state = "checked" if checked else "unchecked"
     before_bg = (
-        "before:bg-[var(--accent-indicator)]" if checked
+        "before:bg-[var(--accent-indicator)]"
+        if checked
         else "before:bg-[var(--color-surface)] before:shadow-[inset_0_0_0_1px_var(--gray-a7)]"
     )
     root_cls = (
@@ -178,10 +200,16 @@ def checkbox(checked: bool = False, size: str = "2", variant: str = "surface", *
     return rx.el.button(**props)
 
 
-_RADIO_SIZES = {"1": "calc(var(--space-4)*0.875)", "2": "var(--space-4)", "3": "calc(var(--space-4)*1.25)"}
+_RADIO_SIZES = {
+    "1": "calc(var(--space-4)*0.875)",
+    "2": "var(--space-4)",
+    "3": "calc(var(--space-4)*1.25)",
+}
 
 
-def radio(checked: bool = False, size: str = "2", variant: str = "surface", **props) -> rx.Component:
+def radio(
+    checked: bool = False, size: str = "2", variant: str = "surface", **props
+) -> rx.Component:
     """A Radix-faithful single radio item in a fixed state."""
     rsize = _RADIO_SIZES[size]
     state = "checked" if checked else "unchecked"
@@ -206,7 +234,11 @@ def radio(checked: bool = False, size: str = "2", variant: str = "surface", **pr
 
 
 # --- Slider / Progress / ScrollArea -----------------------------------------
-_SLIDER_TRACK = {"1": "calc(var(--space-2)*0.75)", "2": "var(--space-2)", "3": "calc(var(--space-2)*1.25)"}
+_SLIDER_TRACK = {
+    "1": "calc(var(--space-2)*0.75)",
+    "2": "var(--space-2)",
+    "3": "calc(var(--space-2)*1.25)",
+}
 _SLIDER_RADIUS = (
     "rounded-[max(calc(var(--radius-factor)*var(--slider-track-size)/3),"
     "calc(var(--radius-factor)*var(--radius-thumb)))]"
@@ -249,7 +281,11 @@ def slider_thumb(size: str = "2", **props) -> rx.Component:
     return rx.el.span(**props)
 
 
-_PROGRESS_HEIGHT = {"1": "var(--space-1)", "2": "calc(var(--space-2)*0.75)", "3": "var(--space-2)"}
+_PROGRESS_HEIGHT = {
+    "1": "var(--space-1)",
+    "2": "calc(var(--space-2)*0.75)",
+    "3": "var(--space-2)",
+}
 _PROGRESS_RADIUS = (
     "rounded-[max(calc(var(--radius-factor)*var(--progress-height)/3),"
     "calc(var(--radius-factor)*var(--radius-thumb)))]"
@@ -288,14 +324,33 @@ def scroll_area_scrollbar(*children, size: str = "1", **props) -> rx.Component:
 
 def scroll_area_thumb(**props) -> rx.Component:
     """A Radix-faithful scrollbar thumb."""
-    props["class_name"] = cn("relative grow rounded-[inherit] bg-[var(--gray-a8)]", props.pop("class_name", ""))
+    props["class_name"] = cn(
+        "relative grow rounded-[inherit] bg-[var(--gray-a8)]",
+        props.pop("class_name", ""),
+    )
     return rx.el.div(**props)
 
 
 # --- Layout primitives ------------------------------------------------------
-_FLEX_DIR = {"row": "flex-row", "column": "flex-col", "row-reverse": "flex-row-reverse", "column-reverse": "flex-col-reverse"}
-_ALIGN = {"start": "items-start", "center": "items-center", "end": "items-end", "baseline": "items-baseline", "stretch": "items-stretch"}
-_JUSTIFY = {"start": "justify-start", "center": "justify-center", "end": "justify-end", "between": "justify-between"}
+_FLEX_DIR = {
+    "row": "flex-row",
+    "column": "flex-col",
+    "row-reverse": "flex-row-reverse",
+    "column-reverse": "flex-col-reverse",
+}
+_ALIGN = {
+    "start": "items-start",
+    "center": "items-center",
+    "end": "items-end",
+    "baseline": "items-baseline",
+    "stretch": "items-stretch",
+}
+_JUSTIFY = {
+    "start": "justify-start",
+    "center": "justify-center",
+    "end": "justify-end",
+    "between": "justify-between",
+}
 
 
 def box(*children, **props) -> rx.Component:
@@ -304,7 +359,9 @@ def box(*children, **props) -> rx.Component:
     return rx.el.div(*children, **props)
 
 
-def flex(*children, direction=None, gap=None, align=None, justify=None, **props) -> rx.Component:
+def flex(
+    *children, direction=None, gap=None, align=None, justify=None, **props
+) -> rx.Component:
     """A Radix-faithful Flex container."""
     classes = ["flex box-border justify-start"]
     if direction:
@@ -319,9 +376,14 @@ def flex(*children, direction=None, gap=None, align=None, justify=None, **props)
     return rx.el.div(*children, **props)
 
 
-def grid(*children, columns=None, gap=None, align=None, justify=None, **props) -> rx.Component:
+def grid(
+    *children, columns=None, gap=None, align=None, justify=None, **props
+) -> rx.Component:
     """A Radix-faithful Grid container."""
-    classes = ["grid box-border items-stretch justify-start", "[grid-template-rows:none]"]
+    classes = [
+        "grid box-border items-stretch justify-start",
+        "[grid-template-rows:none]",
+    ]
     if columns and columns != "1":
         classes.append(f"[grid-template-columns:repeat({columns},minmax(0,1fr))]")
     else:
@@ -336,13 +398,23 @@ def grid(*children, columns=None, gap=None, align=None, justify=None, **props) -
     return rx.el.div(*children, **props)
 
 
-_CONTAINER_MAX = {"1": "--container-1", "2": "--container-2", "3": "--container-3", "4": "--container-4"}
+_CONTAINER_MAX = {
+    "1": "--container-1",
+    "2": "--container-2",
+    "3": "--container-3",
+    "4": "--container-4",
+}
 
 
 def container(*children, size: str = "3", **props) -> rx.Component:
     """A Radix-faithful Container."""
-    props["class_name"] = cn("flex box-border flex-col items-center shrink-0 grow p-[16px]", props.pop("class_name", ""))
-    inner = rx.el.div(*children, class_name=f"w-full max-w-[var({_CONTAINER_MAX[size]})]")
+    props["class_name"] = cn(
+        "flex box-border flex-col items-center shrink-0 grow p-[16px]",
+        props.pop("class_name", ""),
+    )
+    inner = rx.el.div(
+        *children, class_name=f"w-full max-w-[var({_CONTAINER_MAX[size]})]"
+    )
     return rx.el.div(inner, **props)
 
 
@@ -351,7 +423,10 @@ _SECTION_PY = {"1": "--space-5", "2": "--space-7", "3": "--space-9"}
 
 def section(*children, size: str = "3", **props) -> rx.Component:
     """A Radix-faithful Section."""
-    props["class_name"] = cn(f"box-border shrink-0 py-[var({_SECTION_PY[size]})]", props.pop("class_name", ""))
+    props["class_name"] = cn(
+        f"box-border shrink-0 py-[var({_SECTION_PY[size]})]",
+        props.pop("class_name", ""),
+    )
     return rx.el.section(*children, **props)
 
 
@@ -368,7 +443,9 @@ def skeleton(*children, **props) -> rx.Component:
 
 def inset(*children, **props) -> rx.Component:
     """A Radix-faithful Inset (side=all, standalone)."""
-    props["class_name"] = cn("box-border overflow-hidden m-0", props.pop("class_name", ""))
+    props["class_name"] = cn(
+        "box-border overflow-hidden m-0", props.pop("class_name", "")
+    )
     return rx.el.div(*children, **props)
 
 
@@ -379,7 +456,10 @@ def tooltip_content(*children, **props) -> rx.Component:
     props["class_name"] = cn(cls, props.pop("class_name", ""))
     # Block inner (like Radix's <p class=rt-Text size-1>) so the panel's strut
     # doesn't inflate the height; panel keeps inherited font-size/line-height.
-    inner = rx.el.p(*children, class_name="m-0 text-[length:var(--font-size-1)] leading-[var(--line-height-1)]")
+    inner = rx.el.p(
+        *children,
+        class_name="m-0 text-[length:var(--font-size-1)] leading-[var(--line-height-1)] tracking-[var(--letter-spacing-1)]",
+    )
     return rx.el.div(inner, **props)
 
 
@@ -435,7 +515,10 @@ def accordion_trigger(*children, **props) -> rx.Component:
 
 def accordion_item(*children, **props) -> rx.Component:
     """A Radix-faithful (classic) accordion item box (single/first+last)."""
-    props["class_name"] = cn("block overflow-hidden w-full box-border m-0 rounded-[var(--radius-4)]", props.pop("class_name", ""))
+    props["class_name"] = cn(
+        "block overflow-hidden w-full box-border m-0 rounded-[var(--radius-4)]",
+        props.pop("class_name", ""),
+    )
     return rx.el.div(*children, **props)
 
 
@@ -459,12 +542,16 @@ def menu_content(*children, **props) -> rx.Component:
     so the content box size matches.
     """
     props["class_name"] = cn(_MENU_CONTENT, props.pop("class_name", ""))
-    return rx.el.div(rx.el.div(*children, class_name="flex flex-col p-[var(--space-2)]"), **props)
+    return rx.el.div(
+        rx.el.div(*children, class_name="flex flex-col p-[var(--space-2)]"), **props
+    )
 
 
 def menu_item(text: str, highlighted: bool = False, **props) -> rx.Component:
     """A Radix-faithful menu item (size 2)."""
-    cls = _MENU_ITEM + (" bg-[var(--accent-9)] text-[var(--accent-contrast)]" if highlighted else "")
+    cls = _MENU_ITEM + (
+        " bg-[var(--accent-9)] text-[var(--accent-contrast)]" if highlighted else ""
+    )
     props["class_name"] = cn(cls, props.pop("class_name", ""))
     return rx.el.div(text, **props)
 
@@ -485,7 +572,9 @@ _SELECT_TRIGGER_VARIANTS = {
 }
 
 
-def select_trigger(text: str, size: str = "2", variant: str = "surface", **props) -> rx.Component:
+def select_trigger(
+    text: str, size: str = "2", variant: str = "surface", **props
+) -> rx.Component:
     """A Radix-faithful select trigger button."""
     h, px, gap, fs, rad = _SELECT_TRIGGER_SIZES[size]
     cls = (
@@ -495,12 +584,18 @@ def select_trigger(text: str, size: str = "2", variant: str = "surface", **props
         f"{_SELECT_TRIGGER_VARIANTS[variant]}"
     )
     props["class_name"] = cn(cls, props.pop("class_name", ""))
-    chevron = rx.el.span(class_name="w-[9px] h-[9px] shrink-0")  # matches .rt-SelectIcon width
+    chevron = rx.el.span(
+        class_name="w-[9px] h-[9px] shrink-0"
+    )  # matches .rt-SelectIcon width
     return rx.el.button(rx.el.span(text), chevron, **props)
 
 
 _SELECT_CONTENT = "flex flex-col overflow-hidden box-border bg-[var(--color-panel-solid)] shadow-[var(--shadow-5)]"
-_SELECT_CONTENT_SIZES = {"1": ("--space-1", "--radius-3"), "2": ("--space-2", "--radius-4"), "3": ("--space-2", "--radius-4")}
+_SELECT_CONTENT_SIZES = {
+    "1": ("--space-1", "--radius-3"),
+    "2": ("--space-2", "--radius-4"),
+    "3": ("--space-2", "--radius-4"),
+}
 _SELECT_ITEM_SIZES = {
     "1": ("--space-5", "calc(var(--space-5)/1.2)", "1", "--radius-1"),
     "2": ("--space-6", "var(--space-5)", "2", "--radius-2"),
@@ -511,11 +606,21 @@ _SELECT_ITEM_SIZES = {
 def select_content(*children, size: str = "2", **props) -> rx.Component:
     """A Radix-faithful select content panel (solid)."""
     pad, rad = _SELECT_CONTENT_SIZES[size]
-    props["class_name"] = cn(f"{_SELECT_CONTENT} rounded-[var({rad})]", props.pop("class_name", ""))
-    return rx.el.div(rx.el.div(*children, class_name=f"flex flex-col p-[var({pad})]"), **props)
+    props["class_name"] = cn(
+        f"{_SELECT_CONTENT} rounded-[var({rad})]", props.pop("class_name", "")
+    )
+    return rx.el.div(
+        rx.el.div(*children, class_name=f"flex flex-col p-[var({pad})]"), **props
+    )
 
 
-def select_item(text: str, size: str = "2", variant: str = "solid", highlighted: bool = False, **props) -> rx.Component:
+def select_item(
+    text: str,
+    size: str = "2",
+    variant: str = "solid",
+    highlighted: bool = False,
+    **props,
+) -> rx.Component:
     """A Radix-faithful select item."""
     h, padx, fs, rad = _SELECT_ITEM_SIZES[size]
     cls = (
@@ -525,6 +630,10 @@ def select_item(text: str, size: str = "2", variant: str = "solid", highlighted:
         f"tracking-[var(--letter-spacing-{fs})] rounded-[var({rad})]"
     )
     if highlighted:
-        cls += " bg-[var(--accent-9)] text-[var(--accent-contrast)]" if variant == "solid" else " bg-[var(--accent-a4)]"
+        cls += (
+            " bg-[var(--accent-9)] text-[var(--accent-contrast)]"
+            if variant == "solid"
+            else " bg-[var(--accent-a4)]"
+        )
     props["class_name"] = cn(cls, props.pop("class_name", ""))
     return rx.el.div(rx.el.span(text), **props)

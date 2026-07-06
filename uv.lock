@@ -3628,10 +3628,16 @@ name = "reflex-components-experimental"
 source = { editable = "packages/reflex-components-experimental" }
 dependencies = [
     { name = "reflex" },
+    { name = "reflex-components-core" },
+    { name = "reflex-components-internal" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "reflex", editable = "." }]
+requires-dist = [
+    { name = "reflex", editable = "." },
+    { name = "reflex-components-core", editable = "packages/reflex-components-core" },
+    { name = "reflex-components-internal", editable = "packages/reflex-components-internal" },
+]
 
 [[package]]
 name = "reflex-components-gridjs"

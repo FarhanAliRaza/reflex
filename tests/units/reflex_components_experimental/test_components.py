@@ -38,6 +38,18 @@ def test_button_renders_token_classes():
     assert "cn(" not in render
 
 
+@pytest.mark.parametrize("variant", ["solid", "soft", "surface"])
+def test_button_filled_variants_do_not_emit_transparent_background(variant):
+    render = str(rxe.button("Go", variant=variant).render())
+    assert "bg-transparent" not in render
+
+
+@pytest.mark.parametrize("variant", ["outline", "ghost"])
+def test_button_unfilled_variants_emit_transparent_background(variant):
+    render = str(rxe.button("Go", variant=variant).render())
+    assert "bg-transparent" in render
+
+
 def test_class_name_override_is_merged():
     render = str(rxe.button("x", class_name="bg-red-500").render())
     # a user override switches to the runtime cn() merge path
@@ -226,6 +238,87 @@ def test_layout_gap_range(gap):
             assert f"--space-{gap}" in render
 
 
+@pytest.mark.parametrize("spacing", [str(n) for n in range(10)])
+def test_layout_spacing_alias_matches_radix_api(spacing):
+    for comp in (rxe.flex(spacing=spacing), rxe.grid(spacing=spacing)):
+        render = str(comp.render())
+        if spacing == "0":
+            assert "--space-0" not in render
+            assert "gap-0" in render
+        else:
+            assert f"gap-[var(--space-{spacing})]" in render
+
+
+def test_grid_axis_spacing_aliases_match_radix_api():
+    render = str(rxe.grid(spacing_x="2", spacing_y="4").render())
+    assert "gap-x-[var(--space-2)]" in render
+    assert "gap-y-[var(--space-4)]" in render
+
+
+def test_flex_alignment_overrides_do_not_emit_conflicting_defaults():
+    render = str(rxe.flex(justify="between", align="center").render())
+    assert "justify-between" in render
+    assert "items-center" in render
+    assert "justify-start" not in render
+    assert "items-stretch" not in render
+
+
+def test_grid_alignment_overrides_do_not_emit_conflicting_defaults():
+    render = str(rxe.grid(justify="center", align="center").render())
+    assert "justify-center" in render
+    assert "items-center" in render
+    assert "justify-start" not in render
+    assert "items-stretch" not in render
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        rxe.dialog.trigger,
+        rxe.alert_dialog.trigger,
+        rxe.popover.trigger,
+        rxe.hover_card.trigger,
+        rxe.tooltip.trigger,
+        rxe.menu.trigger,
+    ],
+)
+def test_overlay_triggers_render_native_button_child_as_trigger(trigger):
+    rendered = trigger(rxe.button("Open")).render()
+    assert rendered["children"] == []
+    assert any(str(prop).startswith("render:") for prop in rendered["props"])
+
+
+def test_menu_trigger_plain_content_stays_native_trigger():
+    rendered = rxe.menu.trigger("Open").render()
+    assert rendered["children"]
+    assert not any(str(prop).startswith("render:") for prop in rendered["props"])
+
+
+def test_select_item_infers_label_from_item_text():
+    render = str(
+        rxe.select.item(
+            rxe.select.item_text("Developer experience"), value="dx"
+        ).render()
+    )
+    assert 'label:"Developer experience"' in render
+
+
+def test_select_high_level_api_matches_radix_shape():
+    assert callable(rxe.select)
+    assert callable(rxe.select.trigger)
+    render = str(
+        rxe.select(
+            ["Performance", "Accessibility", "Developer experience"],
+            default_value="Developer experience",
+            placeholder="Focus area",
+        ).render()
+    )
+    assert "Select.Root" in render
+    assert "Developer experience" in render
+    assert "Focus area" in render
+    assert 'value:"dx"' not in render
+
+
 def test_theme_defines_all_referenced_tokens():
     # Every var(--token) referenced by a component class string must be
     # defined in the shipped theme (or be a component-local `[--x:...]` var).
@@ -252,6 +345,52 @@ def test_theme_defines_all_referenced_tokens():
     )
 
 
+class _VarState(rx.State):
+    """State for driving size/variant as Vars in tests."""
+
+    v: str = "solid"
+    s: str = "2"
+
+
+def test_button_variant_var_enumerates_all_branches():
+    # A state-driven variant must compile to a match whose branches carry
+    # every variant's full class string as a literal (Tailwind-scannable).
+    render = str(rxe.button("x", variant=_VarState.v).render())
+    for token in (
+        "bg-[var(--accent-9)]",  # solid
+        "bg-[var(--accent-a3)]",  # soft
+        "shadow-[inset_0_0_0_1px_var(--accent-a8)]",  # outline
+        "bg-[var(--accent-surface)]",  # surface
+        "-mx-[var(--space-2)]",  # ghost box model
+    ):
+        assert token in render, token
+
+
+def test_button_size_and_variant_var_cross_product():
+    render = str(rxe.button("x", size=_VarState.s, variant=_VarState.v).render())
+    # every size's height token appears (non-ghost branches)
+    for space in ("--space-5", "--space-6", "--space-7", "--space-8"):
+        assert f"h-[var({space})]" in render, space
+    # ghost branches for multiple sizes appear too
+    assert "-mx-[var(--space-2)]" in render
+    assert "-mx-[var(--space-3)]" in render
+
+
+def test_button_static_path_unchanged_by_var_support():
+    # Plain strings must still produce a single static class literal,
+    # no match and no cn.
+    render = str(rxe.button("x", size="3", variant="outline").render())
+    assert "switch" not in render
+    assert "cn(" not in render
+    assert "shadow-[inset_0_0_0_1px_var(--accent-a8)]" in render
+
+
+def test_button_var_with_class_name_override_merges():
+    render = str(rxe.button("x", variant=_VarState.v, class_name="bg-red-500").render())
+    assert "bg-red-500" in render
+    assert "cn(" in render
+
+
 def test_switch_wraps_base_ui():
     # The accessible switch is backed by Base UI (role=switch at runtime) and
     # declares the headless package as a dependency.
@@ -263,6 +402,9 @@ def test_switch_wraps_base_ui():
     assert "Switch.Thumb" in render
     # checked styling tracks Base UI state rather than being hard-coded.
     assert "data-[checked]" in render
+    # The experimental adapter must strip reflex-components-internal defaults.
+    assert "bg-secondary-4" not in render
+    assert "translate-x-3" not in render
 
 
 def test_interactive_components_render():

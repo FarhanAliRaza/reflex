@@ -1,531 +1,239 @@
-"""Low-level Reflex wrappers for Base UI (``@base-ui/react``) headless parts.
+"""Unstyled adapters over ``reflex-components-internal``'s Base UI parts.
 
-Base UI supplies the behavior and accessibility (ARIA roles/states, keyboard
-navigation, focus management, type-ahead, focus trapping) that plain HTML
-elements lack; the experimental components layer Radix-token Tailwind styling on
-top of these parts so the result is both pixel-faithful *and* accessible.
-
-Each part is a thin :class:`~reflex.Component` subclass. The visible npm package
-is a versioned root (``@base-ui/react@1.5.0``) declared via ``lib_dependencies``;
-parts import from per-component subpaths (e.g. ``@base-ui/react/switch``) with
-``install=False`` so the subpath is never mistaken for an installable package.
+The internal package owns the ``@base-ui/react`` wrapper layer (part classes,
+props, version pin). Its parts carry the site's default styling in ``create``,
+so each adapter here injects ``unstyled=True`` — the experimental components
+then layer their own Radix-parity Tailwind classes on the bare parts.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
+from reflex_components_internal.components.base.accordion import (
+    AccordionHeader,
+    AccordionItem,
+    AccordionPanel,
+    AccordionRoot,
+    AccordionTrigger,
+)
+from reflex_components_internal.components.base.alert_dialog import (
+    AlertDialogBackdrop,
+    AlertDialogClose,
+    AlertDialogDescription,
+    AlertDialogPopup,
+    AlertDialogPortal,
+    AlertDialogRoot,
+    AlertDialogTitle,
+    AlertDialogTrigger,
+)
+from reflex_components_internal.components.base.checkbox import (
+    CheckboxIndicator,
+    CheckboxRoot,
+)
+from reflex_components_internal.components.base.dialog import (
+    DialogBackdrop,
+    DialogClose,
+    DialogDescription,
+    DialogPopup,
+    DialogPortal,
+    DialogRoot,
+    DialogTitle,
+    DialogTrigger,
+)
+from reflex_components_internal.components.base.menu import (
+    MenuGroup,
+    MenuGroupLabel,
+    MenuItem,
+    MenuPopup,
+    MenuPortal,
+    MenuPositioner,
+    MenuRoot,
+    MenuTrigger,
+)
+from reflex_components_internal.components.base.popover import (
+    PopoverClose,
+    PopoverDescription,
+    PopoverPopup,
+    PopoverPortal,
+    PopoverPositioner,
+    PopoverRoot,
+    PopoverTitle,
+    PopoverTrigger,
+)
+from reflex_components_internal.components.base.preview_card import (
+    PreviewCardPopup,
+    PreviewCardPortal,
+    PreviewCardPositioner,
+    PreviewCardRoot,
+    PreviewCardTrigger,
+)
+from reflex_components_internal.components.base.progress import (
+    ProgressIndicator,
+    ProgressRoot,
+    ProgressTrack,
+)
+from reflex_components_internal.components.base.radio import (
+    RadioGroup,
+    RadioIndicator,
+    RadioRoot,
+)
+from reflex_components_internal.components.base.scroll_area import (
+    ScrollAreaRoot,
+    ScrollAreaScrollbar,
+    ScrollAreaThumb,
+    ScrollAreaViewport,
+)
+from reflex_components_internal.components.base.select import (
+    SelectIcon,
+    SelectItem,
+    SelectItemText,
+    SelectPopup,
+    SelectPortal,
+    SelectPositioner,
+    SelectRoot,
+    SelectTrigger,
+    SelectValue,
+)
+from reflex_components_internal.components.base.slider import (
+    SliderControl,
+    SliderIndicator,
+    SliderRoot,
+    SliderThumb,
+    SliderTrack,
+)
+from reflex_components_internal.components.base.switch import SwitchRoot, SwitchThumb
+from reflex_components_internal.components.base.tabs import (
+    TabsList,
+    TabsPanel,
+    TabsRoot,
+    TabsTab,
+)
+from reflex_components_internal.components.base.toggle import Toggle
+from reflex_components_internal.components.base.toggle_group import ToggleGroupRoot
+from reflex_components_internal.components.base.tooltip import (
+    TooltipPopup,
+    TooltipPortal,
+    TooltipPositioner,
+    TooltipProvider,
+    TooltipRoot,
+    TooltipTrigger,
+)
+
 from reflex.components.component import Component
-from reflex.event import EventHandler, passthrough_event_spec
-from reflex.utils.imports import ImportVar
-from reflex.vars.base import Var
-
-PKG = "@base-ui/react"
-VER = "1.5.0"
 
 
-class BaseUI(Component):
-    """Base for every Base UI part: declares the npm dependency.
-
-    Subclasses set ``library`` to a subpath (``@base-ui/react/<part>``) and a
-    dot-qualified ``tag`` (``Switch.Root``); the import is rendered from the
-    subpath but not installed (the versioned root below is installed instead).
-    """
-
-    lib_dependencies: list[str] = [f"{PKG}@{VER}"]
-
-    @property
-    def import_var(self) -> ImportVar:
-        """Import the namespace object from the subpath without installing it.
-
-        Returns:
-            The import var for this part's namespace (e.g. ``Switch``).
-        """
-        return ImportVar(tag=(self.tag or "").partition(".")[0], install=False)
-
-
-def _leaf(subpath: str, tag: str) -> type[BaseUI]:
-    """Build a prop-less Base UI part wrapper (children + ``class_name`` only).
+def _unstyled(part: type[Component]) -> Callable[..., Component]:
+    """Wrap a part's ``create`` so the internal default styling is skipped.
 
     Args:
-        subpath: The ``@base-ui/react`` subpath (e.g. ``"dialog"``).
-        tag: The dot-qualified component tag (e.g. ``"Dialog.Portal"``).
+        part: An internal Base UI part component class.
 
     Returns:
-        A :class:`BaseUI` subclass for that part.
+        A create callable that passes ``unstyled=True`` by default.
     """
-    return type(
-        tag.replace(".", ""),
-        (BaseUI,),
-        {
-            "library": f"{PKG}/{subpath}",
-            "tag": tag,
-            "__module__": __name__,
-            "__doc__": f"Base UI {tag} part.",
-        },
-    )
 
-
-# Positioner-style props shared by floating popups.
-class _Positioner(BaseUI):
-    """Shared base for popup positioner parts (side/align/offset props)."""
-
-    side: Var[str]
-    align: Var[str]
-    side_offset: Var[int]
-    align_offset: Var[int]
-    sticky: Var[bool]
-
-
-# --- Switch -----------------------------------------------------------------
-class SwitchRoot(BaseUI):
-    """Accessible switch root (``role=switch``, space/enter toggle)."""
-
-    library = f"{PKG}/switch"
-    tag = "Switch.Root"
-
-    checked: Var[bool]
-    default_checked: Var[bool]
-    disabled: Var[bool]
-    required: Var[bool]
-    name: Var[str]
-    value: Var[str]
-    on_checked_change: EventHandler[passthrough_event_spec(bool)]
-
-
-SwitchThumb = _leaf("switch", "Switch.Thumb")
-
-
-# --- Checkbox ---------------------------------------------------------------
-class CheckboxRoot(BaseUI):
-    """Accessible checkbox root (``role=checkbox``)."""
-
-    library = f"{PKG}/checkbox"
-    tag = "Checkbox.Root"
-
-    checked: Var[bool]
-    default_checked: Var[bool]
-    indeterminate: Var[bool]
-    disabled: Var[bool]
-    required: Var[bool]
-    name: Var[str]
-    value: Var[str]
-    on_checked_change: EventHandler[passthrough_event_spec(bool)]
-
-
-CheckboxIndicator = _leaf("checkbox", "Checkbox.Indicator")
-
-
-# --- Radio ------------------------------------------------------------------
-class RadioGroup(BaseUI):
-    """Accessible radio group (``role=radiogroup``, arrow-key navigation)."""
-
-    library = f"{PKG}/radio-group"
-    tag = "RadioGroup"
-
-    value: Var[str]
-    default_value: Var[str]
-    disabled: Var[bool]
-    required: Var[bool]
-    name: Var[str]
-    on_value_change: EventHandler[passthrough_event_spec(str)]
-
-
-class RadioRoot(BaseUI):
-    """A single radio item within a radio group."""
-
-    library = f"{PKG}/radio"
-    tag = "Radio.Root"
-
-    value: Var[str]
-    disabled: Var[bool]
-
-
-RadioIndicator = _leaf("radio", "Radio.Indicator")
-
-
-# --- Tabs -------------------------------------------------------------------
-class TabsRoot(BaseUI):
-    """Tabs root container."""
-
-    library = f"{PKG}/tabs"
-    tag = "Tabs.Root"
-
-    value: Var[str]
-    default_value: Var[str]
-    orientation: Var[str]
-    on_value_change: EventHandler[passthrough_event_spec(str)]
-
-
-TabsList = _leaf("tabs", "Tabs.List")
-TabsIndicator = _leaf("tabs", "Tabs.Indicator")
-
-
-class TabsTab(BaseUI):
-    """A single tab trigger (``role=tab``, arrow-key navigable)."""
-
-    library = f"{PKG}/tabs"
-    tag = "Tabs.Tab"
-
-    value: Var[str]
-    disabled: Var[bool]
-
-
-class TabsPanel(BaseUI):
-    """A tab panel associated with a tab value."""
-
-    library = f"{PKG}/tabs"
-    tag = "Tabs.Panel"
-
-    value: Var[str]
-
-
-# --- Slider -----------------------------------------------------------------
-class SliderRoot(BaseUI):
-    """Slider root (arrow-key value changes, ``aria-valuenow``)."""
-
-    library = f"{PKG}/slider"
-    tag = "Slider.Root"
-
-    value: Var[int | list[int]]
-    default_value: Var[int | list[int]]
-    min: Var[int]
-    max: Var[int]
-    step: Var[int]
-    disabled: Var[bool]
-    orientation: Var[str]
-    name: Var[str]
-    on_value_change: EventHandler[passthrough_event_spec(int)]
-    on_value_committed: EventHandler[passthrough_event_spec(int)]
-
-
-SliderControl = _leaf("slider", "Slider.Control")
-SliderTrack = _leaf("slider", "Slider.Track")
-SliderIndicator = _leaf("slider", "Slider.Indicator")
-SliderThumb = _leaf("slider", "Slider.Thumb")
-SliderValue = _leaf("slider", "Slider.Value")
-
-
-# --- Progress ---------------------------------------------------------------
-class ProgressRoot(BaseUI):
-    """Progress root (``role=progressbar`` with value/min/max)."""
-
-    library = f"{PKG}/progress"
-    tag = "Progress.Root"
-
-    value: Var[int]
-    min: Var[int]
-    max: Var[int]
-
-
-ProgressTrack = _leaf("progress", "Progress.Track")
-ProgressIndicator = _leaf("progress", "Progress.Indicator")
-ProgressLabel = _leaf("progress", "Progress.Label")
-
-
-# --- Dialog -----------------------------------------------------------------
-class DialogRoot(BaseUI):
-    """Dialog root (focus trap, ``aria-modal``, ESC to close)."""
-
-    library = f"{PKG}/dialog"
-    tag = "Dialog.Root"
-
-    open: Var[bool]
-    default_open: Var[bool]
-    modal: Var[bool]
-    on_open_change: EventHandler[passthrough_event_spec(bool)]
-
-
-DialogTrigger = _leaf("dialog", "Dialog.Trigger")
-DialogPortal = _leaf("dialog", "Dialog.Portal")
-DialogBackdrop = _leaf("dialog", "Dialog.Backdrop")
-DialogPopup = _leaf("dialog", "Dialog.Popup")
-DialogTitle = _leaf("dialog", "Dialog.Title")
-DialogDescription = _leaf("dialog", "Dialog.Description")
-DialogClose = _leaf("dialog", "Dialog.Close")
-
-
-# --- AlertDialog ------------------------------------------------------------
-class AlertDialogRoot(BaseUI):
-    """Alert dialog root (modal, no dismiss-on-outside-click)."""
-
-    library = f"{PKG}/alert-dialog"
-    tag = "AlertDialog.Root"
-
-    open: Var[bool]
-    default_open: Var[bool]
-    on_open_change: EventHandler[passthrough_event_spec(bool)]
-
-
-AlertDialogTrigger = _leaf("alert-dialog", "AlertDialog.Trigger")
-AlertDialogPortal = _leaf("alert-dialog", "AlertDialog.Portal")
-AlertDialogBackdrop = _leaf("alert-dialog", "AlertDialog.Backdrop")
-AlertDialogPopup = _leaf("alert-dialog", "AlertDialog.Popup")
-AlertDialogTitle = _leaf("alert-dialog", "AlertDialog.Title")
-AlertDialogDescription = _leaf("alert-dialog", "AlertDialog.Description")
-AlertDialogClose = _leaf("alert-dialog", "AlertDialog.Close")
-
-
-# --- Popover ----------------------------------------------------------------
-class PopoverRoot(BaseUI):
-    """Popover root (focus management, ESC/outside-click to close)."""
-
-    library = f"{PKG}/popover"
-    tag = "Popover.Root"
-
-    open: Var[bool]
-    default_open: Var[bool]
-    modal: Var[bool]
-    on_open_change: EventHandler[passthrough_event_spec(bool)]
-
-
-PopoverTrigger = _leaf("popover", "Popover.Trigger")
-PopoverPortal = _leaf("popover", "Popover.Portal")
-PopoverBackdrop = _leaf("popover", "Popover.Backdrop")
-PopoverTitle = _leaf("popover", "Popover.Title")
-PopoverDescription = _leaf("popover", "Popover.Description")
-PopoverClose = _leaf("popover", "Popover.Close")
-PopoverArrow = _leaf("popover", "Popover.Arrow")
-
-
-class PopoverPositioner(_Positioner):
-    """Popover positioner (anchored placement)."""
-
-    library = f"{PKG}/popover"
-    tag = "Popover.Positioner"
-
-
-PopoverPopup = _leaf("popover", "Popover.Popup")
-
-
-# --- Tooltip ----------------------------------------------------------------
-class TooltipProvider(BaseUI):
-    """Tooltip provider (shared open/close delays)."""
-
-    library = f"{PKG}/tooltip"
-    tag = "Tooltip.Provider"
-
-    delay: Var[int]
-    close_delay: Var[int]
-
-
-class TooltipRoot(BaseUI):
-    """Tooltip root (``role=tooltip`` popup, hover/focus triggered)."""
-
-    library = f"{PKG}/tooltip"
-    tag = "Tooltip.Root"
-
-    open: Var[bool]
-    default_open: Var[bool]
-    delay: Var[int]
-    on_open_change: EventHandler[passthrough_event_spec(bool)]
-
-
-TooltipTrigger = _leaf("tooltip", "Tooltip.Trigger")
-TooltipPortal = _leaf("tooltip", "Tooltip.Portal")
-TooltipArrow = _leaf("tooltip", "Tooltip.Arrow")
-
-
-class TooltipPositioner(_Positioner):
-    """Tooltip positioner (anchored placement)."""
-
-    library = f"{PKG}/tooltip"
-    tag = "Tooltip.Positioner"
-
-
-TooltipPopup = _leaf("tooltip", "Tooltip.Popup")
-
-
-# --- PreviewCard (hover card) -----------------------------------------------
-class PreviewCardRoot(BaseUI):
-    """Preview/hover card root (hover-triggered, focusable content)."""
-
-    library = f"{PKG}/preview-card"
-    tag = "PreviewCard.Root"
-
-    open: Var[bool]
-    default_open: Var[bool]
-    delay: Var[int]
-    on_open_change: EventHandler[passthrough_event_spec(bool)]
-
-
-PreviewCardTrigger = _leaf("preview-card", "PreviewCard.Trigger")
-PreviewCardPortal = _leaf("preview-card", "PreviewCard.Portal")
-PreviewCardArrow = _leaf("preview-card", "PreviewCard.Arrow")
-
-
-class PreviewCardPositioner(_Positioner):
-    """Preview card positioner (anchored placement)."""
-
-    library = f"{PKG}/preview-card"
-    tag = "PreviewCard.Positioner"
-
-
-PreviewCardPopup = _leaf("preview-card", "PreviewCard.Popup")
-
-
-# --- Menu -------------------------------------------------------------------
-class MenuRoot(BaseUI):
-    """Dropdown menu root (roving focus, type-ahead, ESC to close)."""
-
-    library = f"{PKG}/menu"
-    tag = "Menu.Root"
-
-    open: Var[bool]
-    default_open: Var[bool]
-    modal: Var[bool]
-    on_open_change: EventHandler[passthrough_event_spec(bool)]
-
-
-MenuTrigger = _leaf("menu", "Menu.Trigger")
-MenuPortal = _leaf("menu", "Menu.Portal")
-MenuBackdrop = _leaf("menu", "Menu.Backdrop")
-MenuPopup = _leaf("menu", "Menu.Popup")
-MenuGroup = _leaf("menu", "Menu.Group")
-MenuGroupLabel = _leaf("menu", "Menu.GroupLabel")
-MenuArrow = _leaf("menu", "Menu.Arrow")
-
-
-class MenuPositioner(_Positioner):
-    """Menu positioner (anchored placement)."""
-
-    library = f"{PKG}/menu"
-    tag = "Menu.Positioner"
-
-
-class MenuItem(BaseUI):
-    """A menu item (``role=menuitem``, keyboard-activatable)."""
-
-    library = f"{PKG}/menu"
-    tag = "Menu.Item"
-
-    disabled: Var[bool]
-    close_on_click: Var[bool]
-    on_click: EventHandler[list]
-
-
-# --- Select -----------------------------------------------------------------
-class SelectRoot(BaseUI):
-    """Select root (``role=combobox``/``listbox``, type-ahead)."""
-
-    library = f"{PKG}/select"
-    tag = "Select.Root"
-
-    value: Var[str]
-    default_value: Var[str]
-    open: Var[bool]
-    default_open: Var[bool]
-    name: Var[str]
-    disabled: Var[bool]
-    required: Var[bool]
-    on_value_change: EventHandler[passthrough_event_spec(str)]
-    on_open_change: EventHandler[passthrough_event_spec(bool)]
-
-
-SelectTrigger = _leaf("select", "Select.Trigger")
-SelectIcon = _leaf("select", "Select.Icon")
-SelectPortal = _leaf("select", "Select.Portal")
-SelectBackdrop = _leaf("select", "Select.Backdrop")
-SelectPopup = _leaf("select", "Select.Popup")
-SelectItemText = _leaf("select", "Select.ItemText")
-SelectItemIndicator = _leaf("select", "Select.ItemIndicator")
-SelectList = _leaf("select", "Select.List")
-
-
-class SelectValue(BaseUI):
-    """The select trigger's current-value display."""
-
-    library = f"{PKG}/select"
-    tag = "Select.Value"
-
-    placeholder: Var[str]
-
-
-class SelectPositioner(_Positioner):
-    """Select positioner (anchored placement)."""
-
-    library = f"{PKG}/select"
-    tag = "Select.Positioner"
-
-
-class SelectItem(BaseUI):
-    """A select option (``role=option``)."""
-
-    library = f"{PKG}/select"
-    tag = "Select.Item"
-
-    value: Var[str]
-    disabled: Var[bool]
-
-
-# --- Accordion --------------------------------------------------------------
-class AccordionRoot(BaseUI):
-    """Accordion root (header/trigger/panel ARIA wiring)."""
-
-    library = f"{PKG}/accordion"
-    tag = "Accordion.Root"
-
-    value: Var[list[str]]
-    default_value: Var[list[str]]
-    open_multiple: Var[bool]
-    disabled: Var[bool]
-    on_value_change: EventHandler[passthrough_event_spec(list)]
-
-
-AccordionHeader = _leaf("accordion", "Accordion.Header")
-AccordionPanel = _leaf("accordion", "Accordion.Panel")
-
-
-class AccordionItem(BaseUI):
-    """An accordion item."""
-
-    library = f"{PKG}/accordion"
-    tag = "Accordion.Item"
-
-    value: Var[str]
-    disabled: Var[bool]
-
-
-AccordionTrigger = _leaf("accordion", "Accordion.Trigger")
-
-
-# --- ToggleGroup (SegmentedControl) -----------------------------------------
-class ToggleGroup(BaseUI):
-    """Toggle group (single/multiple pressed toggles, arrow-key navigation)."""
-
-    library = f"{PKG}/toggle-group"
-    tag = "ToggleGroup"
-
-    value: Var[list[str]]
-    default_value: Var[list[str]]
-    toggle_multiple: Var[bool]
-    disabled: Var[bool]
-    on_value_change: EventHandler[passthrough_event_spec(list)]
-
-
-class Toggle(BaseUI):
-    """A single toggle button (``aria-pressed``)."""
-
-    library = f"{PKG}/toggle"
-    tag = "Toggle"
-
-    value: Var[str]
-    pressed: Var[bool]
-    default_pressed: Var[bool]
-    disabled: Var[bool]
-    on_pressed_change: EventHandler[passthrough_event_spec(bool)]
-
-
-# --- ScrollArea -------------------------------------------------------------
-ScrollAreaRoot = _leaf("scroll-area", "ScrollArea.Root")
-ScrollAreaViewport = _leaf("scroll-area", "ScrollArea.Viewport")
-ScrollAreaContent = _leaf("scroll-area", "ScrollArea.Content")
-ScrollAreaCorner = _leaf("scroll-area", "ScrollArea.Corner")
-ScrollAreaThumb = _leaf("scroll-area", "ScrollArea.Thumb")
-
-
-class ScrollAreaScrollbar(BaseUI):
-    """A scroll-area scrollbar (orientation-aware)."""
-
-    library = f"{PKG}/scroll-area"
-    tag = "ScrollArea.Scrollbar"
-
-    orientation: Var[str]
+    def create(*children, **props) -> Component:
+        props.setdefault("unstyled", True)
+        return part.create(*children, **props)
+
+    return create
+
+
+switch_root = _unstyled(SwitchRoot)
+switch_thumb = _unstyled(SwitchThumb)
+
+checkbox_root = _unstyled(CheckboxRoot)
+checkbox_indicator = _unstyled(CheckboxIndicator)
+
+radio_group = _unstyled(RadioGroup)
+radio_root = _unstyled(RadioRoot)
+radio_indicator = _unstyled(RadioIndicator)
+
+tabs_root = _unstyled(TabsRoot)
+tabs_list = _unstyled(TabsList)
+tabs_tab = _unstyled(TabsTab)
+tabs_panel = _unstyled(TabsPanel)
+
+toggle = _unstyled(Toggle)
+toggle_group = _unstyled(ToggleGroupRoot)
+
+slider_root = _unstyled(SliderRoot)
+slider_control = _unstyled(SliderControl)
+slider_track = _unstyled(SliderTrack)
+slider_indicator = _unstyled(SliderIndicator)
+slider_thumb = _unstyled(SliderThumb)
+
+progress_root = _unstyled(ProgressRoot)
+progress_track = _unstyled(ProgressTrack)
+progress_indicator = _unstyled(ProgressIndicator)
+
+scroll_area_root = _unstyled(ScrollAreaRoot)
+scroll_area_viewport = _unstyled(ScrollAreaViewport)
+scroll_area_scrollbar = _unstyled(ScrollAreaScrollbar)
+scroll_area_thumb = _unstyled(ScrollAreaThumb)
+
+dialog_root = _unstyled(DialogRoot)
+dialog_trigger = _unstyled(DialogTrigger)
+dialog_portal = _unstyled(DialogPortal)
+dialog_backdrop = _unstyled(DialogBackdrop)
+dialog_popup = _unstyled(DialogPopup)
+dialog_title = _unstyled(DialogTitle)
+dialog_description = _unstyled(DialogDescription)
+dialog_close = _unstyled(DialogClose)
+
+alert_dialog_root = _unstyled(AlertDialogRoot)
+alert_dialog_trigger = _unstyled(AlertDialogTrigger)
+alert_dialog_portal = _unstyled(AlertDialogPortal)
+alert_dialog_backdrop = _unstyled(AlertDialogBackdrop)
+alert_dialog_popup = _unstyled(AlertDialogPopup)
+alert_dialog_title = _unstyled(AlertDialogTitle)
+alert_dialog_description = _unstyled(AlertDialogDescription)
+alert_dialog_close = _unstyled(AlertDialogClose)
+
+popover_root = _unstyled(PopoverRoot)
+popover_trigger = _unstyled(PopoverTrigger)
+popover_portal = _unstyled(PopoverPortal)
+popover_positioner = _unstyled(PopoverPositioner)
+popover_popup = _unstyled(PopoverPopup)
+popover_title = _unstyled(PopoverTitle)
+popover_description = _unstyled(PopoverDescription)
+popover_close = _unstyled(PopoverClose)
+
+preview_card_root = _unstyled(PreviewCardRoot)
+preview_card_trigger = _unstyled(PreviewCardTrigger)
+preview_card_portal = _unstyled(PreviewCardPortal)
+preview_card_positioner = _unstyled(PreviewCardPositioner)
+preview_card_popup = _unstyled(PreviewCardPopup)
+
+tooltip_provider = _unstyled(TooltipProvider)
+tooltip_root = _unstyled(TooltipRoot)
+tooltip_trigger = _unstyled(TooltipTrigger)
+tooltip_portal = _unstyled(TooltipPortal)
+tooltip_positioner = _unstyled(TooltipPositioner)
+tooltip_popup = _unstyled(TooltipPopup)
+
+menu_root = _unstyled(MenuRoot)
+menu_trigger = _unstyled(MenuTrigger)
+menu_portal = _unstyled(MenuPortal)
+menu_positioner = _unstyled(MenuPositioner)
+menu_popup = _unstyled(MenuPopup)
+menu_item = _unstyled(MenuItem)
+menu_group = _unstyled(MenuGroup)
+menu_group_label = _unstyled(MenuGroupLabel)
+
+select_root = _unstyled(SelectRoot)
+select_trigger = _unstyled(SelectTrigger)
+select_value = _unstyled(SelectValue)
+select_icon = _unstyled(SelectIcon)
+select_portal = _unstyled(SelectPortal)
+select_positioner = _unstyled(SelectPositioner)
+select_popup = _unstyled(SelectPopup)
+select_item = _unstyled(SelectItem)
+select_item_text = _unstyled(SelectItemText)
+
+accordion_root = _unstyled(AccordionRoot)
+accordion_item = _unstyled(AccordionItem)
+accordion_header = _unstyled(AccordionHeader)
+accordion_trigger = _unstyled(AccordionTrigger)
+accordion_panel = _unstyled(AccordionPanel)

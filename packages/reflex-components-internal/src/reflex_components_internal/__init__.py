@@ -4,6 +4,7 @@ from reflex.utils import lazy_loader
 
 _COMPONENTS_MAPPING = {
     "components.base.accordion": ["accordion"],
+    "components.base.alert_dialog": ["alert_dialog"],
     "components.base.avatar": ["avatar"],
     "components.base.badge": ["badge"],
     "components.base.button": ["button"],
@@ -20,7 +21,9 @@ _COMPONENTS_MAPPING = {
     "components.base.navigation_menu": ["navigation_menu"],
     "components.base.otp_field": ["otp_field"],
     "components.base.popover": ["popover"],
+    "components.base.progress": ["progress"],
     "components.base.preview_card": ["preview_card"],
+    "components.base.radio": ["radio"],
     "components.base.scroll_area": ["scroll_area"],
     "components.base.select": ["select"],
     "components.base.skeleton": ["skeleton"],

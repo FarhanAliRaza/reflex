@@ -1,12 +1,13 @@
 """Radix-parity button (mirrors ``.rt-BaseButton`` / ``.rt-Button``)."""
 
 import reflex as rx
-from reflex_components_experimental.utils import merge_class_name
+from reflex.vars.base import Var
+from reflex_components_experimental.utils import merge_class_name, variant_classes
 
 _BTN_BASE = (
     "inline-flex items-center justify-center shrink-0 align-top box-border "
     "relative select-none font-medium whitespace-nowrap border-0 "
-    "cursor-[var(--cursor-button)] bg-transparent"
+    "cursor-[var(--cursor-button)]"
 )
 
 # non-ghost size -> (height, px, gap, font-size idx, radius idx)
@@ -27,9 +28,9 @@ _GHOST_SIZES = {
 _VARIANT_COLORS = {
     "solid": "bg-[var(--accent-9)] text-[var(--accent-contrast)] hover:bg-[var(--accent-10)]",
     "soft": "bg-[var(--accent-a3)] text-[var(--accent-a11)] hover:bg-[var(--accent-a4)]",
-    "outline": "shadow-[inset_0_0_0_1px_var(--accent-a8)] text-[var(--accent-a11)] hover:bg-[var(--accent-a2)]",
+    "outline": "bg-transparent shadow-[inset_0_0_0_1px_var(--accent-a8)] text-[var(--accent-a11)] hover:bg-[var(--accent-a2)]",
     "surface": "bg-[var(--accent-surface)] shadow-[inset_0_0_0_1px_var(--accent-a7)] text-[var(--accent-a11)]",
-    "ghost": "text-[var(--accent-a11)] hover:bg-[var(--accent-a3)]",
+    "ghost": "bg-transparent text-[var(--accent-a11)] hover:bg-[var(--accent-a3)]",
 }
 
 
@@ -59,20 +60,27 @@ def _classes(size: str, variant: str) -> str:
 
 def button(
     *children,
-    size: str = "2",
-    variant: str = "solid",
+    size: str | Var = "2",
+    variant: str | Var = "solid",
     **props,
 ) -> rx.Component:
     """A Radix-faithful button.
 
     Args:
         *children: Button content.
-        size: Radix size ("1"-"4").
-        variant: solid/soft/outline/surface/ghost.
+        size: Radix size ("1"-"4"); may be a state Var.
+        variant: solid/soft/outline/surface/ghost; may be a state Var.
         **props: Extra props; ``class_name`` overrides win via cn.
 
     Returns:
         The button element.
     """
-    merge_class_name(_classes(size, variant), props)
+    cls = variant_classes(
+        _classes,
+        {
+            "size": (size, ("1", "2", "3", "4"), "2"),
+            "variant": (variant, tuple(_VARIANT_COLORS), "solid"),
+        },
+    )
+    merge_class_name(cls, props)
     return rx.el.button(*children, **props)

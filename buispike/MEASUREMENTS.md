@@ -42,9 +42,10 @@ import _rxcss_9968e39e from "$/styles/components/9968e39e/switch.module.css"
   Popup/Title/Description/Close) and a `button`, styled with **Tailwind utility
   classes** against a token theme, with `cn()` (clsx + tailwind-merge) so user
   `class_name` overrides win deterministically.
-- `buispike/assets/theme.css` — the swappable token layer (`--primary-* →
-  violet`, `--secondary-* → slate`, gray, light + `.dark`), generated from the
-  real Radix scales.
+- token layer — now generated at compile time by `ExperimentalThemePlugin`
+  from vendored Radix scales (`--accent-*`/`--gray-*` aliased to the chosen
+  colors, light + `.dark` + P3); the static `assets/theme.css` used for the
+  original measurements was removed once generation landed.
 - `buispike/buispike.py` — app exercising all of it: interactive switch (Python
   state round-trip), default + overridden buttons, a dialog, and dark mode
   (toggled on `<html>` so the portaled dialog is themed too).

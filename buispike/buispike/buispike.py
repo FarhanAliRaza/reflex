@@ -6,7 +6,6 @@ a pixel-diff. A `/demo` page keeps the original interactive showcase.
 """
 
 import reflex as rx
-
 from buispike import parity as P
 from buispike.bui import button as demo_button
 from buispike.bui import dialog, switch
@@ -18,7 +17,9 @@ _TEXT_WEIGHTS = ["regular", "medium", "bold"]
 
 
 def _cell(content, tid: str) -> rx.Component:
-    return rx.el.div(content, custom_attrs={"data-testid": tid}, class_name="inline-flex p-1")
+    return rx.el.div(
+        content, custom_attrs={"data-testid": tid}, class_name="inline-flex p-1"
+    )
 
 
 def _pair(key: str, radix_node, mine_node) -> rx.Component:
@@ -121,17 +122,18 @@ def _build_rows():
         )
     for s in ["1", "2", "3", "4"]:
         k = f"avatar-{s}"
-        rows.append(
-            _pair(k, rx.avatar(fallback="RX", size=s), P.avatar("RX", size=s))
-        )
+        rows.append(_pair(k, rx.avatar(fallback="RX", size=s), P.avatar("RX", size=s)))
     for s in ["1", "2", "3"]:
         k = f"spinner-{s}"
         rows.append(_pair(k, rx.spinner(size=s), P.spinner(size=s)))
     for s in ["1", "2", "3", "5"]:
         k = f"link-{s}"
         rows.append(
-            _pair(k, rx.link("Read more", size=s, color_scheme="violet", href="#"),
-                  P.link("Read more", size=s))
+            _pair(
+                k,
+                rx.link("Read more", size=s, color_scheme="violet", href="#"),
+                P.link("Read more", size=s),
+            )
         )
 
     def _row(key, radix_node, mine_node):
@@ -147,201 +149,567 @@ def _build_rows():
 
     for s in ["1", "2", "3"]:
         k = f"tbl-head-{s}"
-        rows.append(_row(
-            k,
-            rx.table.root(rx.table.header(rx.table.row(
-                rx.table.column_header_cell("H", custom_attrs={"data-testid": f"radix-{k}"}))), size=s),
-            _tbl(P.table_header_cell("H", size=s, custom_attrs={"data-testid": f"mine-{k}"})),
-        ))
+        rows.append(
+            _row(
+                k,
+                rx.table.root(
+                    rx.table.header(
+                        rx.table.row(
+                            rx.table.column_header_cell(
+                                "H", custom_attrs={"data-testid": f"radix-{k}"}
+                            )
+                        )
+                    ),
+                    size=s,
+                ),
+                _tbl(
+                    P.table_header_cell(
+                        "H", size=s, custom_attrs={"data-testid": f"mine-{k}"}
+                    )
+                ),
+            )
+        )
     for s in ["1", "2", "3"]:
         k = f"tbl-cell-{s}"
-        rows.append(_row(
-            k,
-            rx.table.root(rx.table.body(rx.table.row(
-                rx.table.cell("C", custom_attrs={"data-testid": f"radix-{k}"}))), size=s),
-            _tbl(P.table_cell("C", size=s, custom_attrs={"data-testid": f"mine-{k}"})),
-        ))
-    rows.append(_row(
-        "dl-label",
-        rx.data_list.root(rx.data_list.item(
-            rx.data_list.label("Name", custom_attrs={"data-testid": "radix-dl-label"}),
-            rx.data_list.value("Value"))),
-        P.data_list_label("Name", custom_attrs={"data-testid": "mine-dl-label"}),
-    ))
-    rows.append(_row(
-        "dl-value",
-        rx.data_list.root(
-            rx.data_list.item(rx.data_list.label("A"), rx.data_list.value("V1")),
-            rx.data_list.item(
-                rx.data_list.label("B"),
-                rx.data_list.value("V2", custom_attrs={"data-testid": "radix-dl-value"})),
-            rx.data_list.item(rx.data_list.label("C"), rx.data_list.value("V3")),
-        ),
-        P.data_list_value("V2", custom_attrs={"data-testid": "mine-dl-value"}),
-    ))
+        rows.append(
+            _row(
+                k,
+                rx.table.root(
+                    rx.table.body(
+                        rx.table.row(
+                            rx.table.cell(
+                                "C", custom_attrs={"data-testid": f"radix-{k}"}
+                            )
+                        )
+                    ),
+                    size=s,
+                ),
+                _tbl(
+                    P.table_cell("C", size=s, custom_attrs={"data-testid": f"mine-{k}"})
+                ),
+            )
+        )
+    rows.append(
+        _row(
+            "dl-label",
+            rx.data_list.root(
+                rx.data_list.item(
+                    rx.data_list.label(
+                        "Name", custom_attrs={"data-testid": "radix-dl-label"}
+                    ),
+                    rx.data_list.value("Value"),
+                )
+            ),
+            P.data_list_label("Name", custom_attrs={"data-testid": "mine-dl-label"}),
+        )
+    )
+    rows.append(
+        _row(
+            "dl-value",
+            rx.data_list.root(
+                rx.data_list.item(rx.data_list.label("A"), rx.data_list.value("V1")),
+                rx.data_list.item(
+                    rx.data_list.label("B"),
+                    rx.data_list.value(
+                        "V2", custom_attrs={"data-testid": "radix-dl-value"}
+                    ),
+                ),
+                rx.data_list.item(rx.data_list.label("C"), rx.data_list.value("V3")),
+            ),
+            P.data_list_value("V2", custom_attrs={"data-testid": "mine-dl-value"}),
+        )
+    )
     for v in ["surface", "soft"]:
         for s in ["1", "2", "3"]:
-            rows.append(_pair(
-                f"tf-{v}-{s}",
-                rx.input(placeholder="Text", size=s, variant=v, color_scheme="violet"),
-                P.text_field(placeholder="Text", size=s, variant=v),
-            ))
-            rows.append(_pair(
-                f"ta-{v}-{s}",
-                rx.text_area(placeholder="Text", size=s, variant=v, color_scheme="violet", width="200px"),
-                P.text_area(placeholder="Text", size=s, variant=v, class_name="w-[200px]"),
-            ))
+            rows.append(
+                _pair(
+                    f"tf-{v}-{s}",
+                    rx.input(
+                        placeholder="Text", size=s, variant=v, color_scheme="violet"
+                    ),
+                    P.text_field(placeholder="Text", size=s, variant=v),
+                )
+            )
+            rows.append(
+                _pair(
+                    f"ta-{v}-{s}",
+                    rx.text_area(
+                        placeholder="Text",
+                        size=s,
+                        variant=v,
+                        color_scheme="violet",
+                        width="200px",
+                    ),
+                    P.text_area(
+                        placeholder="Text", size=s, variant=v, class_name="w-[200px]"
+                    ),
+                )
+            )
     # Switch / Checkbox / Radio (fixed states; visuals on ::before/::after)
     for s in ["1", "2", "3"]:
-        rows.append(_pair(f"switch-on-{s}", rx.switch(size=s, default_checked=True, color_scheme="violet"), P.switch(checked=True, size=s)))
-        rows.append(_pair(f"switch-off-{s}", rx.switch(size=s, default_checked=False, color_scheme="violet"), P.switch(checked=False, size=s)))
-        rows.append(_pair(f"cb-on-{s}", rx.checkbox(size=s, default_checked=True, color_scheme="violet"), P.checkbox(checked=True, size=s)))
-        rows.append(_pair(f"cb-off-{s}", rx.checkbox(size=s, default_checked=False, color_scheme="violet"), P.checkbox(checked=False, size=s)))
-        rows.append(_pair(f"radio-on-{s}", rx.radio_group.root(rx.radio_group.item(value="a"), size=s, default_value="a", variant="surface", color_scheme="violet"), P.radio(checked=True, size=s)))
-        rows.append(_pair(f"radio-off-{s}", rx.radio_group.root(rx.radio_group.item(value="a"), size=s, default_value="", variant="surface", color_scheme="violet"), P.radio(checked=False, size=s)))
+        rows.append(
+            _pair(
+                f"switch-on-{s}",
+                rx.switch(size=s, default_checked=True, color_scheme="violet"),
+                P.switch(checked=True, size=s),
+            )
+        )
+        rows.append(
+            _pair(
+                f"switch-off-{s}",
+                rx.switch(size=s, default_checked=False, color_scheme="violet"),
+                P.switch(checked=False, size=s),
+            )
+        )
+        rows.append(
+            _pair(
+                f"cb-on-{s}",
+                rx.checkbox(size=s, default_checked=True, color_scheme="violet"),
+                P.checkbox(checked=True, size=s),
+            )
+        )
+        rows.append(
+            _pair(
+                f"cb-off-{s}",
+                rx.checkbox(size=s, default_checked=False, color_scheme="violet"),
+                P.checkbox(checked=False, size=s),
+            )
+        )
+        rows.append(
+            _pair(
+                f"radio-on-{s}",
+                rx.radio_group.root(
+                    rx.radio_group.item(value="a"),
+                    size=s,
+                    default_value="a",
+                    variant="surface",
+                    color_scheme="violet",
+                ),
+                P.radio(checked=True, size=s),
+            )
+        )
+        rows.append(
+            _pair(
+                f"radio-off-{s}",
+                rx.radio_group.root(
+                    rx.radio_group.item(value="a"),
+                    size=s,
+                    default_value="",
+                    variant="surface",
+                    color_scheme="violet",
+                ),
+                P.radio(checked=False, size=s),
+            )
+        )
     # Layout primitives
     for g in ["1", "2", "3"]:
-        rows.append(_pair(f"flex-gap-{g}", rx.flex(rx.el.span("A"), rx.el.span("B"), spacing=g, direction="row"), P.flex(rx.el.span("A"), rx.el.span("B"), gap=g, direction="row")))
-        rows.append(_pair(f"grid-gap-{g}", rx.grid(rx.el.span("A"), rx.el.span("B"), columns="2", spacing=g), P.grid(rx.el.span("A"), rx.el.span("B"), columns="2", gap=g)))
+        rows.append(
+            _pair(
+                f"flex-gap-{g}",
+                rx.flex(rx.el.span("A"), rx.el.span("B"), spacing=g, direction="row"),
+                P.flex(rx.el.span("A"), rx.el.span("B"), gap=g, direction="row"),
+            )
+        )
+        rows.append(
+            _pair(
+                f"grid-gap-{g}",
+                rx.grid(rx.el.span("A"), rx.el.span("B"), columns="2", spacing=g),
+                P.grid(rx.el.span("A"), rx.el.span("B"), columns="2", gap=g),
+            )
+        )
     for s in ["1", "2", "3"]:
-        rows.append(_pair(f"section-{s}", rx.section(rx.el.span("X"), size=s), P.section(rx.el.span("X"), size=s)))
-    rows.append(_pair("box-1", rx.box(rx.el.span("X"), class_name="w-[80px] h-[40px]"), P.box(rx.el.span("X"), class_name="w-[80px] h-[40px]")))
+        rows.append(
+            _pair(
+                f"section-{s}",
+                rx.section(rx.el.span("X"), size=s),
+                P.section(rx.el.span("X"), size=s),
+            )
+        )
+    rows.append(
+        _pair(
+            "box-1",
+            rx.box(rx.el.span("X"), class_name="w-[80px] h-[40px]"),
+            P.box(rx.el.span("X"), class_name="w-[80px] h-[40px]"),
+        )
+    )
     # Tabs trigger (active + idle)
     for s in ["1", "2"]:
         for state, act in [("active", True), ("idle", False)]:
             k = f"tabs-{state}-{s}"
-            rows.append(_row(
-                k,
-                rx.tabs.root(rx.tabs.list(
-                    rx.tabs.trigger("Tab", value="a", custom_attrs={"data-testid": f"radix-{k}"}),
-                    rx.tabs.trigger("Tab", value="b"), size=s),
-                    default_value=("a" if act else "b")),
-                P.tabs_list(
-                    P.tabs_trigger("Tab", size=s, active=act, custom_attrs={"data-testid": f"mine-{k}"}),
-                    P.tabs_trigger("Tab", size=s, active=not act), size=s),
-            ))
+            rows.append(
+                _row(
+                    k,
+                    rx.tabs.root(
+                        rx.tabs.list(
+                            rx.tabs.trigger(
+                                "Tab",
+                                value="a",
+                                custom_attrs={"data-testid": f"radix-{k}"},
+                            ),
+                            rx.tabs.trigger("Tab", value="b"),
+                            size=s,
+                        ),
+                        default_value=("a" if act else "b"),
+                    ),
+                    P.tabs_list(
+                        P.tabs_trigger(
+                            "Tab",
+                            size=s,
+                            active=act,
+                            custom_attrs={"data-testid": f"mine-{k}"},
+                        ),
+                        P.tabs_trigger("Tab", size=s, active=not act),
+                        size=s,
+                    ),
+                )
+            )
     # Accordion trigger + item
-    rows.append(_row(
-        "accordion-trigger",
-        rx.accordion.root(rx.accordion.item(
-            rx.accordion.header(rx.accordion.trigger("Header", custom_attrs={"data-testid": "radix-accordion-trigger"})),
-            rx.accordion.content("Content", value="a"), value="a"),
-            type="single", default_value="a", collapsible=True, color_scheme="violet", width="300px"),
-        P.accordion_trigger("Header", custom_attrs={"data-testid": "mine-accordion-trigger"}, class_name="w-[300px]"),
-    ))
+    rows.append(
+        _row(
+            "accordion-trigger",
+            rx.accordion.root(
+                rx.accordion.item(
+                    rx.accordion.header(
+                        rx.accordion.trigger(
+                            "Header",
+                            custom_attrs={"data-testid": "radix-accordion-trigger"},
+                        )
+                    ),
+                    rx.accordion.content("Content", value="a"),
+                    value="a",
+                ),
+                type="single",
+                default_value="a",
+                collapsible=True,
+                color_scheme="violet",
+                width="300px",
+            ),
+            P.accordion_trigger(
+                "Header",
+                custom_attrs={"data-testid": "mine-accordion-trigger"},
+                class_name="w-[300px]",
+            ),
+        )
+    )
     # Select trigger
-    rows.append(_row(
-        "select-trigger-2",
-        rx.select.root(rx.select.trigger(custom_attrs={"data-testid": "radix-select-trigger-2"}),
-                       rx.select.content(rx.select.item("a", value="a")), default_value="a", size="2"),
-        P.select_trigger("a", size="2", variant="surface", custom_attrs={"data-testid": "mine-select-trigger-2"}),
-    ))
+    rows.append(
+        _row(
+            "select-trigger-2",
+            rx.select.root(
+                rx.select.trigger(
+                    custom_attrs={"data-testid": "radix-select-trigger-2"}
+                ),
+                rx.select.content(rx.select.item("a", value="a")),
+                default_value="a",
+                size="2",
+            ),
+            P.select_trigger(
+                "a",
+                size="2",
+                variant="surface",
+                custom_attrs={"data-testid": "mine-select-trigger-2"},
+            ),
+        )
+    )
     # Overlay content panels (rendered open via default_open/open)
-    rows.append(_row(
-        "tooltip-content",
-        rx.tooltip(rx.button("x"), content="hi", default_open=True, custom_attrs={"data-testid": "radix-tooltip-content"}),
-        P.tooltip_content("hi", custom_attrs={"data-testid": "mine-tooltip-content"}),
-    ))
-    rows.append(_row(
-        "popover-content",
-        rx.popover.root(rx.popover.trigger(rx.button("x")),
-                        rx.popover.content("hi", custom_attrs={"data-testid": "radix-popover-content"}), open=True),
-        P.popover_content("hi", custom_attrs={"data-testid": "mine-popover-content"}),
-    ))
-    rows.append(_row(
-        "alertdialog-content",
-        rx.alert_dialog.root(rx.alert_dialog.trigger(rx.button("Open")),
-                             rx.alert_dialog.content("Body", custom_attrs={"data-testid": "radix-alertdialog-content"}), default_open=True),
-        rx.el.div(P.alert_dialog_content("Body", custom_attrs={"data-testid": "mine-alertdialog-content"}),
-                  class_name="w-[1100px] px-[16px]"),
-    ))
-    rows.append(_row(
-        "seg-root-2",
-        rx.segmented_control.root(rx.segmented_control.item("One", value="a"), rx.segmented_control.item("Two", value="b"),
-                                  size="2", default_value="a", custom_attrs={"data-testid": "radix-seg-root-2"}),
-        P.segmented_root(P.segmented_item("One", size="2", active=True), P.segmented_item("Two", size="2"),
-                         size="2", custom_attrs={"data-testid": "mine-seg-root-2"}),
-    ))
-    rows.append(_row(
-        "select-content",
-        rx.select.root(rx.select.trigger(), rx.select.content(rx.select.item("a", value="a"),
-                       custom_attrs={"data-testid": "radix-select-content"}, size="2", variant="solid", position="popper"),
-                       default_value="a", size="2", open=True),
-        P.select_content(P.select_item("a", size="2"), size="2", custom_attrs={"data-testid": "mine-select-content"}),
-    ))
-    rows.append(_row(
-        "select-item",
-        rx.select.root(rx.select.trigger(), rx.select.content(
-            rx.select.item("Hi", value="b", custom_attrs={"data-testid": "radix-select-item", "data-highlighted": ""}),
-            size="2", variant="solid", position="popper"), default_value="a", size="2", open=True),
-        P.select_content(P.select_item("Hi", size="2", highlighted=True, custom_attrs={"data-testid": "mine-select-item"}), size="2"),
-    ))
-    rows.append(_row(
-        "hovercard-content",
-        rx.hover_card.root(rx.hover_card.trigger(rx.el.span("x")),
-                           rx.hover_card.content("hi", custom_attrs={"data-testid": "radix-hovercard-content"}), default_open=True),
-        P.hovercard_content("hi", custom_attrs={"data-testid": "mine-hovercard-content"}),
-    ))
-    rows.append(_row(
-        "dialog-content",
-        rx.dialog.root(rx.dialog.trigger(rx.button("Open")),
-                       rx.dialog.content("Body", custom_attrs={"data-testid": "radix-dialog-content"}), default_open=True),
-        rx.el.div(P.dialog_content("Body", custom_attrs={"data-testid": "mine-dialog-content"}),
-                  class_name="w-[1100px] px-[16px]"),
-    ))
-    rows.append(_row(
-        "menu-content",
-        rx.menu.root(rx.menu.trigger(rx.button("Menu")),
-                     rx.menu.content(rx.menu.item("Item A"), custom_attrs={"data-testid": "radix-menu-content"}, size="2"), open=True),
-        P.menu_content(P.menu_item("Item A"), custom_attrs={"data-testid": "mine-menu-content"}),
-    ))
-    rows.append(_row(
-        "menu-item",
-        rx.menu.root(rx.menu.trigger(rx.button("Menu")),
-                     rx.menu.content(rx.menu.item("Hi", custom_attrs={"data-testid": "radix-menu-item", "data-highlighted": ""}), size="2"), open=True),
-        P.menu_content(P.menu_item("Hi", highlighted=True, custom_attrs={"data-testid": "mine-menu-item"})),
-    ))
+    rows.append(
+        _row(
+            "tooltip-content",
+            rx.tooltip(
+                rx.button("x"),
+                content="hi",
+                default_open=True,
+                custom_attrs={"data-testid": "radix-tooltip-content"},
+            ),
+            P.tooltip_content(
+                "hi", custom_attrs={"data-testid": "mine-tooltip-content"}
+            ),
+        )
+    )
+    rows.append(
+        _row(
+            "popover-content",
+            rx.popover.root(
+                rx.popover.trigger(rx.button("x")),
+                rx.popover.content(
+                    "hi", custom_attrs={"data-testid": "radix-popover-content"}
+                ),
+                open=True,
+            ),
+            P.popover_content(
+                "hi", custom_attrs={"data-testid": "mine-popover-content"}
+            ),
+        )
+    )
+    rows.append(
+        _row(
+            "alertdialog-content",
+            rx.alert_dialog.root(
+                rx.alert_dialog.trigger(rx.button("Open")),
+                rx.alert_dialog.content(
+                    "Body", custom_attrs={"data-testid": "radix-alertdialog-content"}
+                ),
+                default_open=True,
+            ),
+            rx.el.div(
+                P.alert_dialog_content(
+                    "Body", custom_attrs={"data-testid": "mine-alertdialog-content"}
+                ),
+                class_name="w-[1100px] px-[16px]",
+            ),
+        )
+    )
+    rows.append(
+        _row(
+            "seg-root-2",
+            rx.segmented_control.root(
+                rx.segmented_control.item("One", value="a"),
+                rx.segmented_control.item("Two", value="b"),
+                size="2",
+                default_value="a",
+                custom_attrs={"data-testid": "radix-seg-root-2"},
+            ),
+            P.segmented_root(
+                P.segmented_item("One", size="2", active=True),
+                P.segmented_item("Two", size="2"),
+                size="2",
+                custom_attrs={"data-testid": "mine-seg-root-2"},
+            ),
+        )
+    )
+    rows.append(
+        _row(
+            "select-content",
+            rx.select.root(
+                rx.select.trigger(),
+                rx.select.content(
+                    rx.select.item("a", value="a"),
+                    custom_attrs={"data-testid": "radix-select-content"},
+                    size="2",
+                    variant="solid",
+                    position="popper",
+                ),
+                default_value="a",
+                size="2",
+                open=True,
+            ),
+            P.select_content(
+                P.select_item("a", size="2"),
+                size="2",
+                custom_attrs={"data-testid": "mine-select-content"},
+            ),
+        )
+    )
+    rows.append(
+        _row(
+            "select-item",
+            rx.select.root(
+                rx.select.trigger(),
+                rx.select.content(
+                    rx.select.item(
+                        "Hi",
+                        value="b",
+                        custom_attrs={
+                            "data-testid": "radix-select-item",
+                            "data-highlighted": "",
+                        },
+                    ),
+                    size="2",
+                    variant="solid",
+                    position="popper",
+                ),
+                default_value="a",
+                size="2",
+                open=True,
+            ),
+            P.select_content(
+                P.select_item(
+                    "Hi",
+                    size="2",
+                    highlighted=True,
+                    custom_attrs={"data-testid": "mine-select-item"},
+                ),
+                size="2",
+            ),
+        )
+    )
+    rows.append(
+        _row(
+            "hovercard-content",
+            rx.hover_card.root(
+                rx.hover_card.trigger(rx.el.span("x")),
+                rx.hover_card.content(
+                    "hi", custom_attrs={"data-testid": "radix-hovercard-content"}
+                ),
+                default_open=True,
+            ),
+            P.hovercard_content(
+                "hi", custom_attrs={"data-testid": "mine-hovercard-content"}
+            ),
+        )
+    )
+    rows.append(
+        _row(
+            "dialog-content",
+            rx.dialog.root(
+                rx.dialog.trigger(rx.button("Open")),
+                rx.dialog.content(
+                    "Body", custom_attrs={"data-testid": "radix-dialog-content"}
+                ),
+                default_open=True,
+            ),
+            rx.el.div(
+                P.dialog_content(
+                    "Body", custom_attrs={"data-testid": "mine-dialog-content"}
+                ),
+                class_name="w-[1100px] px-[16px]",
+            ),
+        )
+    )
+    rows.append(
+        _row(
+            "menu-content",
+            rx.menu.root(
+                rx.menu.trigger(rx.button("Menu")),
+                rx.menu.content(
+                    rx.menu.item("Item A"),
+                    custom_attrs={"data-testid": "radix-menu-content"},
+                    size="2",
+                ),
+                open=True,
+            ),
+            P.menu_content(
+                P.menu_item("Item A"), custom_attrs={"data-testid": "mine-menu-content"}
+            ),
+        )
+    )
+    rows.append(
+        _row(
+            "menu-item",
+            rx.menu.root(
+                rx.menu.trigger(rx.button("Menu")),
+                rx.menu.content(
+                    rx.menu.item(
+                        "Hi",
+                        custom_attrs={
+                            "data-testid": "radix-menu-item",
+                            "data-highlighted": "",
+                        },
+                    ),
+                    size="2",
+                ),
+                open=True,
+            ),
+            P.menu_content(
+                P.menu_item(
+                    "Hi",
+                    highlighted=True,
+                    custom_attrs={"data-testid": "mine-menu-item"},
+                )
+            ),
+        )
+    )
     # Progress / Slider / ScrollArea (multi-part; radix leaf via RADIX_LEAF)
-    rows.append(_row(
-        "progress-track",
-        rx.el.div(rx.progress(value=50, size="2", color_scheme="violet", width="120px"),
-                  custom_attrs={"data-testid": "radix-progress-track"}, class_name="w-[120px] inline-flex"),
-        P.progress_root(P.progress_indicator(value=50), size="2",
-                        custom_attrs={"data-testid": "mine-progress-track"}, class_name="w-[120px]"),
-    ))
-    rows.append(_row(
-        "slider-track",
-        rx.el.div(rx.slider(default_value=[50], size="2", color_scheme="violet", width="120px"),
-                  custom_attrs={"data-testid": "radix-slider-track"}, class_name="w-[120px] inline-flex items-center"),
-        rx.el.div(P.slider_track(P.slider_range(size="2", value=50), size="2",
-                                 custom_attrs={"data-testid": "mine-slider-track"}),
-                  class_name="w-[120px] flex items-center"),
-    ))
+    rows.append(
+        _row(
+            "progress-track",
+            rx.el.div(
+                rx.progress(value=50, size="2", color_scheme="violet", width="120px"),
+                custom_attrs={"data-testid": "radix-progress-track"},
+                class_name="w-[120px] inline-flex",
+            ),
+            P.progress_root(
+                P.progress_indicator(value=50),
+                size="2",
+                custom_attrs={"data-testid": "mine-progress-track"},
+                class_name="w-[120px]",
+            ),
+        )
+    )
+    rows.append(
+        _row(
+            "slider-track",
+            rx.el.div(
+                rx.slider(
+                    default_value=[50], size="2", color_scheme="violet", width="120px"
+                ),
+                custom_attrs={"data-testid": "radix-slider-track"},
+                class_name="w-[120px] inline-flex items-center",
+            ),
+            rx.el.div(
+                P.slider_track(
+                    P.slider_range(size="2", value=50),
+                    size="2",
+                    custom_attrs={"data-testid": "mine-slider-track"},
+                ),
+                class_name="w-[120px] flex items-center",
+            ),
+        )
+    )
     # Remaining: container, inset, skeleton, accordion item, slider thumb, context menu
     for s in ["1", "2", "3", "4"]:
-        rows.append(_pair(f"container-{s}", rx.container(rx.el.span("X"), size=s), P.container(rx.el.span("X"), size=s)))
-    rows.append(_pair("inset-1",
-        rx.inset(rx.el.span("X"), class_name="w-[80px] h-[40px]"),
-        P.inset(rx.el.span("X"), class_name="w-[80px] h-[40px]")))
-    rows.append(_pair("skeleton-1",
-        rx.skeleton(rx.el.span("x"), width="120px", height="20px"),
-        P.skeleton(rx.el.span("x"), class_name="w-[120px] h-[20px]")))
-    rows.append(_row(
-        "accordion-item",
-        rx.accordion.root(rx.accordion.item(
-                              rx.accordion.header(rx.accordion.trigger("H")),
-                              rx.accordion.content("C", value="a"), value="a",
-                              custom_attrs={"data-testid": "radix-accordion-item"}),
-                          type="single", default_value="", collapsible=True, color_scheme="violet", width="300px"),
-        P.accordion_item(P.accordion_trigger("H"), custom_attrs={"data-testid": "mine-accordion-item"}, class_name="w-[300px]"),
-    ))
-    rows.append(_row(
-        "slider-thumb",
-        rx.el.div(rx.slider(default_value=[50], size="2", color_scheme="violet", width="120px"),
-                  custom_attrs={"data-testid": "radix-slider-thumb"}, class_name="w-[120px] inline-flex items-center"),
-        rx.el.div(P.slider_thumb(size="2", custom_attrs={"data-testid": "mine-slider-thumb"}),
-                  class_name="w-[120px] flex items-center"),
-    ))
+        rows.append(
+            _pair(
+                f"container-{s}",
+                rx.container(rx.el.span("X"), size=s),
+                P.container(rx.el.span("X"), size=s),
+            )
+        )
+    rows.append(
+        _pair(
+            "inset-1",
+            rx.inset(rx.el.span("X"), class_name="w-[80px] h-[40px]"),
+            P.inset(rx.el.span("X"), class_name="w-[80px] h-[40px]"),
+        )
+    )
+    rows.append(
+        _pair(
+            "skeleton-1",
+            rx.skeleton(rx.el.span("x"), width="120px", height="20px"),
+            P.skeleton(rx.el.span("x"), class_name="w-[120px] h-[20px]"),
+        )
+    )
+    rows.append(
+        _row(
+            "accordion-item",
+            rx.accordion.root(
+                rx.accordion.item(
+                    rx.accordion.header(rx.accordion.trigger("H")),
+                    rx.accordion.content("C", value="a"),
+                    value="a",
+                    custom_attrs={"data-testid": "radix-accordion-item"},
+                ),
+                type="single",
+                default_value="",
+                collapsible=True,
+                color_scheme="violet",
+                width="300px",
+            ),
+            P.accordion_item(
+                P.accordion_trigger("H"),
+                custom_attrs={"data-testid": "mine-accordion-item"},
+                class_name="w-[300px]",
+            ),
+        )
+    )
+    rows.append(
+        _row(
+            "slider-thumb",
+            rx.el.div(
+                rx.slider(
+                    default_value=[50], size="2", color_scheme="violet", width="120px"
+                ),
+                custom_attrs={"data-testid": "radix-slider-thumb"},
+                class_name="w-[120px] inline-flex items-center",
+            ),
+            rx.el.div(
+                P.slider_thumb(
+                    size="2", custom_attrs={"data-testid": "mine-slider-thumb"}
+                ),
+                class_name="w-[120px] flex items-center",
+            ),
+        )
+    )
     return rows
 
 
@@ -405,19 +773,23 @@ _cmp = __import__("os").environ.get("REFLEX_CMP")
 if _cmp == "a11y":
     # Accessible interactive layer (Base UI behavior + token styling).
     from buispike import cmp as _cmppages
+
     app = rx.App()
     app.add_page(_cmppages.a11y_page, route="/")
 elif _cmp == "pkg":
     # Package end-to-end: theme comes only from ExperimentalThemePlugin (rxconfig),
     # no manual stylesheet.
     from buispike import cmp as _cmppages
+
     app = rx.App()
     app.add_page(_cmppages.pkg_page, route="/")
 elif _cmp in ("parity", "radix"):
     from buispike import cmp as _cmppages
-    app = rx.App(stylesheets=["theme.css"])
+
+    # Tokens come solely from ExperimentalThemePlugin's generated stylesheet.
+    app = rx.App()
     app.add_page(getattr(_cmppages, f"{_cmp}_page"), route="/")
 else:
-    app = rx.App(stylesheets=["theme.css"])
+    app = rx.App()
     app.add_page(index, route="/")
     app.add_page(demo, route="/demo")

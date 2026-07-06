@@ -7,22 +7,46 @@ components are visually identical by construction. We compare a rich property
 set for each case and report mismatches.
 """
 
+import os
 import sys
 
 from playwright.sync_api import sync_playwright
 
-URL = "http://localhost:3000"
+URL = os.environ.get("BUISPIKE_URL", "http://localhost:3000")
 
 PROPS = [
-    "width", "height",
-    "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
-    "marginTop", "marginRight", "marginBottom", "marginLeft",
-    "fontSize", "fontWeight", "fontFamily", "letterSpacing", "lineHeight",
-    "color", "backgroundColor",
-    "borderTopLeftRadius", "borderTopRightRadius",
-    "borderBottomLeftRadius", "borderBottomRightRadius",
-    "boxShadow", "columnGap", "rowGap", "display", "justifyContent", "alignItems",
-    "opacity", "textAlign", "fontStyle", "borderLeftWidth", "borderLeftColor",
+    "width",
+    "height",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "marginTop",
+    "marginRight",
+    "marginBottom",
+    "marginLeft",
+    "fontSize",
+    "fontWeight",
+    "fontFamily",
+    "letterSpacing",
+    "lineHeight",
+    "color",
+    "backgroundColor",
+    "borderTopLeftRadius",
+    "borderTopRightRadius",
+    "borderBottomLeftRadius",
+    "borderBottomRightRadius",
+    "boxShadow",
+    "columnGap",
+    "rowGap",
+    "display",
+    "justifyContent",
+    "alignItems",
+    "opacity",
+    "textAlign",
+    "fontStyle",
+    "borderLeftWidth",
+    "borderLeftColor",
     "borderLeftStyle",
 ]
 
@@ -46,15 +70,11 @@ COMPONENTS = {
     ],
     "heading": [f"head-{s}" for s in ["1", "2", "4", "6", "9"]],
     "code": [
-        f"code-{v}-{s}"
-        for v in ["soft", "solid", "outline"]
-        for s in ["1", "2", "3"]
+        f"code-{v}-{s}" for v in ["soft", "solid", "outline"] for s in ["1", "2", "3"]
     ],
     "inline": ["inline-em", "inline-strong", "inline-quote"],
     "callout": [
-        f"callout-{v}-{s}"
-        for v in ["soft", "surface", "outline"]
-        for s in ["1", "2"]
+        f"callout-{v}-{s}" for v in ["soft", "surface", "outline"] for s in ["1", "2"]
     ],
     "blockquote": [f"bq-{s}" for s in ["1", "2", "3", "5"]],
     "card": [f"card-{s}" for s in ["1", "2"]],
@@ -97,27 +117,45 @@ COMPONENTS = {
 
 # Components whose styled leaf carries the testid directly (measure el, not child).
 DIRECT = {
-    "table_header", "table_cell", "data_list",
-    "tabs_trigger", "accordion_trigger", "select_trigger",
-    "tooltip_content", "popover_content", "hovercard_content",
-    "dialog_content", "menu_content", "menu_item",
-    "alertdialog_content", "segmented_root", "select_content", "select_item",
-    "progress_track", "slider_track",
-    "accordion_item", "slider_thumb",
+    "table_header",
+    "table_cell",
+    "data_list",
+    "tabs_trigger",
+    "accordion_trigger",
+    "select_trigger",
+    "tooltip_content",
+    "popover_content",
+    "hovercard_content",
+    "dialog_content",
+    "menu_content",
+    "menu_item",
+    "alertdialog_content",
+    "segmented_root",
+    "select_content",
+    "select_item",
+    "progress_track",
+    "slider_track",
+    "accordion_item",
+    "slider_thumb",
 }
 
 # Radix side: the styled leaf is nested; reach it by appending this selector to
 # the radix testid (and measure it directly). The mine side is unchanged.
 RADIX_LEAF = {
-    "checkbox": ".rt-BaseCheckboxRoot", "radio": ".rt-BaseRadioRoot",
-    "progress_track": ".rt-ProgressRoot", "slider_track": ".rt-SliderTrack",
+    "checkbox": ".rt-BaseCheckboxRoot",
+    "radio": ".rt-BaseRadioRoot",
+    "progress_track": ".rt-ProgressRoot",
+    "slider_track": ".rt-SliderTrack",
     "slider_thumb": ".rt-SliderThumb",
 }
 
 # A child element the root/pseudo checks miss: (radix leaf, mine leaf, props).
 CHILD = {
-    "switch": (".rt-SwitchThumb", "span",
-               ["width", "height", "backgroundColor", "borderTopLeftRadius", "transform"]),
+    "switch": (
+        ".rt-SwitchThumb",
+        "span",
+        ["width", "height", "backgroundColor", "borderTopLeftRadius", "transform"],
+    ),
 }
 
 # Props to ignore per component (environmental, not styling): dialog content is
@@ -135,10 +173,22 @@ PSEUDO = {
         "::before": ["width", "height", "borderTopLeftRadius", "backgroundColor"],
     },
     "checkbox": {
-        "::before": ["width", "height", "borderTopLeftRadius", "backgroundColor", "boxShadow"],
+        "::before": [
+            "width",
+            "height",
+            "borderTopLeftRadius",
+            "backgroundColor",
+            "boxShadow",
+        ],
     },
     "radio": {
-        "::before": ["width", "height", "borderTopLeftRadius", "backgroundColor", "boxShadow"],
+        "::before": [
+            "width",
+            "height",
+            "borderTopLeftRadius",
+            "backgroundColor",
+            "boxShadow",
+        ],
     },
     "slider_thumb": {
         "::after": ["backgroundColor", "borderTopLeftRadius", "boxShadow"],
@@ -195,7 +245,7 @@ def check(pg, cases, prefix_radix, prefix_mine, label, direct=False):
             else:
                 r = _styles(pg, f"[data-testid={prefix_radix}-{key}]", direct)
             m = _styles(pg, f"[data-testid={prefix_mine}-{key}]", direct)
-        except Exception:  # noqa: BLE001
+        except Exception:
             details.append(f"  [MISS] {label} {key:12} (element not in DOM)")
             continue
         # border style/color are invisible (and thus irrelevant) when width is 0;
@@ -204,14 +254,14 @@ def check(pg, cases, prefix_radix, prefix_mine, label, direct=False):
         if _round_px(r.get("borderLeftWidth")) in ("0.0px", "0px"):
             skip |= {"borderLeftStyle", "borderLeftColor"}
         diffs = [
-            (p, r[p], m[p])
-            for p in PROPS
-            if p not in skip and not _eq(p, r[p], m[p])
+            (p, r[p], m[p]) for p in PROPS if p not in skip and not _eq(p, r[p], m[p])
         ]
         total += len(PROPS)
         matched += len(PROPS) - len(diffs)
         flag = "ok " if not diffs else "OFF"
-        details.append(f"  [{flag}] {label} {key:12} {len(PROPS)-len(diffs)}/{len(PROPS)}")
+        details.append(
+            f"  [{flag}] {label} {key:12} {len(PROPS) - len(diffs)}/{len(PROPS)}"
+        )
         for p, rv, mv in diffs:
             details.append(f"        - {p}: radix={rv!r} mine={mv!r}")
     return matched, total, details
@@ -238,11 +288,13 @@ def check_pseudo(pg, comp, cases):
         for pseudo, props in PSEUDO[comp].items():
             try:
                 if leaf:
-                    r = _pseudo(pg, f"[data-testid=radix-{key}] {leaf}", pseudo, props, True)
+                    r = _pseudo(
+                        pg, f"[data-testid=radix-{key}] {leaf}", pseudo, props, True
+                    )
                 else:
                     r = _pseudo(pg, f"[data-testid=radix-{key}]", pseudo, props)
                 m = _pseudo(pg, f"[data-testid=mine-{key}]", pseudo, props)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
             d = [(p, r[p], m[p]) for p in props if _norm(p, r[p]) != _norm(p, m[p])]
             total += len(props)
@@ -269,7 +321,7 @@ def check_child(pg, comp, cases):
         try:
             r = _child(pg, f"[data-testid=radix-{key}] {rleaf}", props)
             m = _child(pg, f"[data-testid=mine-{key}] {mleaf}", props)
-        except Exception:  # noqa: BLE001
+        except Exception:
             details.append(f"  [MISS] {comp} child {key}")
             continue
         d = [(p, r[p], m[p]) for p in props if not _eq(p, r[p], m[p])]
@@ -291,7 +343,9 @@ def run():
         pg.wait_for_timeout(500)
         # Freeze every running animation to the same clock instant so animated
         # properties (e.g. the skeleton pulse) compare at an identical frame.
-        pg.evaluate("document.getAnimations().forEach(a=>{try{a.pause();a.currentTime=0;}catch(e){}})")
+        pg.evaluate(
+            "document.getAnimations().forEach(a=>{try{a.pause();a.currentTime=0;}catch(e){}})"
+        )
         for comp, cases in COMPONENTS.items():
             matched, total, details = check(
                 pg, cases, "radix", "mine", comp, direct=comp in DIRECT
@@ -308,9 +362,17 @@ def run():
                 details += cd
             gmatched += matched
             gtotal += total
-            offs = [d for d in details if "OFF" in d or "MISS" in d or d.startswith("        ")]
+            offs = [
+                d
+                for d in details
+                if "OFF" in d or "MISS" in d or d.startswith("        ")
+            ]
             pct = (100.0 * matched / total) if total else 0.0
-            tag = f"{matched}/{total} ({pct:.1f}%)" if total else "NOT RENDERED (portal/open-state)"
+            tag = (
+                f"{matched}/{total} ({pct:.1f}%)"
+                if total
+                else "NOT RENDERED (portal/open-state)"
+            )
             print(f"--- {comp}: {tag} ---")
             for d in offs:
                 print(d)
@@ -324,6 +386,6 @@ if __name__ == "__main__":
     try:
         pct = run()
         sys.exit(0 if pct == 100.0 else 2)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"FAILED: {e}")
         sys.exit(1)
