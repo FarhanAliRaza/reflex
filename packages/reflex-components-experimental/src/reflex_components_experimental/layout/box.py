@@ -1,7 +1,7 @@
 """Radix-parity Box layout primitive."""
 
 import reflex as rx
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 
 def box(*children, **props) -> rx.Component:
@@ -10,5 +10,5 @@ def box(*children, **props) -> rx.Component:
     Returns:
         The rendered component.
     """
-    props["class_name"] = cn("block box-border", props.pop("class_name", ""))
+    merge_class_name("block box-border", props)
     return rx.el.div(*children, **props)

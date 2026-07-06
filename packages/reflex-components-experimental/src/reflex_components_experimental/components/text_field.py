@@ -6,7 +6,7 @@ padding. ``line-height`` is inherited (1.5).
 """
 
 import reflex as rx
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 _TF_BASE = (
     "box-border flex items-stretch text-start not-italic "
@@ -33,12 +33,20 @@ _TF_SIZES = {
         "calc(var(--space-3)-var(--tf-bw))",
     ),
 }
-_TF_VARIANTS = {
+# variant -> (border width, background, text color, shadow); shared with
+# text_area — .rt-TextFieldRoot and .rt-TextAreaRoot use identical variants.
+FIELD_VARIANTS = {
     "surface": (
         "1px",
         "bg-[var(--color-surface)]",
         "text-[var(--gray-12)]",
         "shadow-[inset_0_0_0_1px_var(--gray-a7)]",
+    ),
+    "classic": (
+        "1px",
+        "bg-[var(--color-surface)]",
+        "text-[var(--gray-12)]",
+        "shadow-[var(--shadow-1)]",
     ),
     "soft": ("0px", "bg-[var(--accent-a3)]", "text-[var(--accent-12)]", ""),
 }
@@ -49,15 +57,21 @@ def text_field(
 ) -> rx.Component:
     """A Radix-faithful text field (matches .rt-TextFieldRoot box model).
 
+    Args:
+        *children: Unused (input takes no children); accepted for API symmetry.
+        size: "1"-"3".
+        variant: classic/surface/soft.
+        **props: Extra props.
+
     Returns:
         The rendered component.
     """
     height, radius, fs, pad = _TF_SIZES[size]
-    bw, bg, color, shadow = _TF_VARIANTS[variant]
+    bw, bg, color, shadow = FIELD_VARIANTS[variant]
     cls = (
         f"{_TF_BASE} [--tf-bw:{bw}] h-[var({height})] p-[var(--tf-bw)] rounded-[{radius}] "
         f"text-[length:var(--font-size-{fs})] tracking-[var(--letter-spacing-{fs})] "
         f"[text-indent:{pad}] {bg} {color} {shadow}"
     )
-    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    merge_class_name(cls, props)
     return rx.el.input(**props)

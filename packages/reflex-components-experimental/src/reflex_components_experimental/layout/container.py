@@ -1,7 +1,7 @@
 """Radix-parity Container (centered, max-width by size)."""
 
 import reflex as rx
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 _CONTAINER_MAX = {
     "1": "--container-1",
@@ -17,9 +17,8 @@ def container(*children, size: str = "3", **props) -> rx.Component:
     Returns:
         The rendered component.
     """
-    props["class_name"] = cn(
-        "flex box-border flex-col items-center shrink-0 grow p-[16px]",
-        props.pop("class_name", ""),
+    merge_class_name(
+        "flex box-border flex-col items-center shrink-0 grow p-[16px]", props
     )
     inner = rx.el.div(
         *children, class_name=f"w-full max-w-[var({_CONTAINER_MAX[size]})]"

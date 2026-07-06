@@ -34,8 +34,14 @@ def cn(*classes) -> Var:
 def merge_class_name(default: str, props: dict) -> None:
     """Set ``props['class_name']`` to ``default`` merged with any user override.
 
+    Without an override the default is kept as a plain string (no runtime
+    ``cn()`` call); with one, ``cn`` resolves conflicts at runtime.
+
     Args:
         default: The component's default class string.
         props: The component props dict (mutated in place).
     """
-    props["class_name"] = cn(default, props.pop("class_name", ""))
+    user = props.pop("class_name", "")
+    props["class_name"] = (
+        default if isinstance(user, str) and not user else cn(default, user)
+    )

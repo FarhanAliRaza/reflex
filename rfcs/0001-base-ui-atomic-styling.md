@@ -16,12 +16,14 @@ The payoff, measured end-to-end through the real Vite build:
 
 | Page | CSS shipped (gz) |
 |---|---|
-| Base UI + atomic Tailwind (fully migrated) | **~2.7 KB** |
-| Radix Themes today (full runtime bundle) | **84 KB** |
-| Radix w/ per-component+accent splitter (this branch) | 28–38 KB |
+| Base UI + atomic Tailwind — simple page (dialog + switch + 4 buttons) | **~6.3 KB** |
+| Base UI + atomic Tailwind — real page (Notifications card, full site build) | **~13 KB** |
+| Radix Themes today (full runtime bundle) | **84–94 KB** |
+| Radix w/ per-component+accent splitter (prior work on this branch, reverted) | 28–38 KB |
 
-~30× smaller than full Radix, while keeping full control of the look and a
-clean user-override story.
+~7–13× smaller than full Radix — and still ~2–6× below the ~28 KB gz floor the
+tree-shaking approach bottomed out at — while keeping full control of the look
+and a clean user-override story.
 
 ## 2. Motivation
 
@@ -48,7 +50,9 @@ This is not a greenfield migration — most of the pieces are already in the rep
 - **Atomic styling**: those components are already styled with Tailwind utility
   classes, e.g. `switch.py`:
   ```python
-  ROOT = "relative flex h-5 w-8 rounded-full bg-secondary-4 … data-[checked]:bg-primary-9 …"
+  ROOT = (
+      "relative flex h-5 w-8 rounded-full bg-secondary-4 … data-[checked]:bg-primary-9 …"
+  )
   ```
 - **Theme tokens**: `reflex-site-shared/.../styles/globals.css` defines the
   semantic-token theme via Tailwind v4 `@theme` — `--primary-9: var(--violet-9)`,
@@ -167,13 +171,19 @@ swap of the rendering/styling backend behind the same component API.
 
 ## 9. Measurements (from the spike)
 
-Real `reflex export` + Vite production build (`buispike/`):
+Real `reflex export` + Vite production builds (`buispike/MEASUREMENTS.md`):
 
-- Base UI switch route chunk: **406 B gz** (atoms + root + thumb + states).
-- Fully-migrated app global styles (Tailwind reset): **2.3 KB gz**.
-- Total CSS for a Base-UI-only page: **~2.7 KB gz** vs **84 KB gz** Radix.
-- Compiled output verified correct: real `@base-ui/react/switch` import,
-  per-page CSS import (tree-shaken by Vite), atomic class bound to the element.
+- Simple page (dialog + switch + 4 buttons + dark mode): **5.07 KB gz** global
+  styles + **1.26 KB gz** token theme = **~6.3 KB gz**, vs **84 KB gz** Radix
+  (~13×).
+- Same-page comparison (identical Notifications card, full multi-component
+  build): **~13 KB gz** vs **~94 KB gz** Radix (~7×).
+- Compiled output verified correct: real `@base-ui/react` subpath imports,
+  per-page CSS tree-shaken by Vite, atomic classes bound to the elements.
+- An earlier CSS-module-per-component variant measured **~2.7 KB gz** total for
+  a single-widget page (406 B route chunk); its source was superseded by the
+  Tailwind approach and removed, so that figure is historical, not reproducible
+  from this branch.
 
 ## 10. Risks & open questions
 

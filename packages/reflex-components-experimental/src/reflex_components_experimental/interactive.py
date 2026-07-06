@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import reflex as rx
 from reflex_components_experimental import baseui as b
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 
 def _styled(part: type[b.BaseUI], default_cls: str):
@@ -33,7 +33,7 @@ def _styled(part: type[b.BaseUI], default_cls: str):
     """
 
     def create(*children, **props):
-        props["class_name"] = cn(default_cls, props.pop("class_name", ""))
+        merge_class_name(default_cls, props)
         return part.create(*children, **props)
 
     return create
@@ -82,7 +82,7 @@ def switch(size: str = "2", **props) -> b.SwitchRoot:
         f"w-[{thumb_size}] h-[{thumb_size}] rounded-[calc({radius}_-_1px)] "
         f"data-[checked]:[transform:translateX({translate_x})]"
     )
-    props["class_name"] = cn(root_cls, props.pop("class_name", ""))
+    merge_class_name(root_cls, props)
     return b.SwitchRoot.create(b.SwitchThumb.create(class_name=thumb_cls), **props)
 
 
@@ -132,7 +132,7 @@ def checkbox(size: str = "2", **props) -> b.CheckboxRoot:
         fill="currentColor",
         class_name="w-[72%] h-[72%]",
     )
-    props["class_name"] = cn(root_cls, props.pop("class_name", ""))
+    merge_class_name(root_cls, props)
     return b.CheckboxRoot.create(
         b.CheckboxIndicator.create(check, class_name=indicator_cls), **props
     )
@@ -157,7 +157,7 @@ def radio_group(*children, **props) -> b.RadioGroup:
     Returns:
         The radio group component.
     """
-    props["class_name"] = cn("flex flex-col gap-2", props.pop("class_name", ""))
+    merge_class_name("flex flex-col gap-2", props)
     return b.RadioGroup.create(*children, **props)
 
 
@@ -187,7 +187,7 @@ def radio(value: str, size: str = "2", **props) -> b.RadioRoot:
         "block [border-radius:100%] scale-[0.4] w-full h-full "
         "bg-[var(--accent-contrast)] data-[unchecked]:hidden"
     )
-    props["class_name"] = cn(root_cls, props.pop("class_name", ""))
+    merge_class_name(root_cls, props)
     return b.RadioRoot.create(
         b.RadioIndicator.create(class_name=indicator_cls), value=value, **props
     )
@@ -219,7 +219,7 @@ def _tabs_list(*children, size: str = "2", **props) -> rx.Component:
         f"text-[length:var(--font-size-{fs})] leading-[var(--line-height-{fs})] "
         f"tracking-[var(--letter-spacing-{fs})]"
     )
-    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    merge_class_name(cls, props)
     return b.TabsList.create(*children, **props)
 
 
@@ -257,7 +257,7 @@ def _tabs_tab(text: str, value: str, size: str = "2", **props) -> b.TabsTab:
         class_name=f"{base_inner} group-data-[selected]:font-medium "
         "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2",
     )
-    props["class_name"] = cn(f"group {trigger_cls}", props.pop("class_name", ""))
+    merge_class_name(f"group {trigger_cls}", props)
     return b.TabsTab.create(sizing, visible, value=value, **props)
 
 
@@ -297,7 +297,7 @@ def _seg_root(*children, size: str = "2", **props) -> b.ToggleGroup:
         "[background-image:linear-gradient(var(--gray-a3),var(--gray-a3))] "
         f"h-[var({h})] rounded-[max(var(--radius-{rad}),var(--radius-full))]"
     )
-    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    merge_class_name(cls, props)
     return b.ToggleGroup.create(*children, **props)
 
 
@@ -332,9 +332,9 @@ def _seg_item(text: str, value: str, size: str = "2", **props) -> b.Toggle:
         class_name=f"{fsz} font-normal group-data-[pressed]:font-medium "
         "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2",
     )
-    props["class_name"] = cn(
+    merge_class_name(
         "group flex items-stretch select-none cursor-pointer bg-transparent border-0 p-0",
-        props.pop("class_name", ""),
+        props,
     )
     return b.Toggle.create(
         rx.el.span(sizing, visible, class_name=label_cls), value=value, **props
@@ -385,10 +385,7 @@ def slider(size: str = "2", **props) -> b.SliderRoot:
         "after:bg-white after:rounded-[max(var(--radius-1),var(--radius-thumb))] "
         "after:shadow-[0_0_0_1px_var(--black-a4)]"
     )
-    props["class_name"] = cn(
-        "relative flex items-center select-none touch-none w-full",
-        props.pop("class_name", ""),
-    )
+    merge_class_name("relative flex items-center select-none touch-none w-full", props)
     return b.SliderRoot.create(
         b.SliderControl.create(
             b.SliderTrack.create(
@@ -432,7 +429,7 @@ def progress(size: str = "2", value: int = 50, **props) -> b.ProgressRoot:
         "after:rounded-[inherit] after:shadow-[inset_0_0_0_1px_var(--gray-a4)]"
     )
     indicator_cls = "block h-full bg-[var(--accent-track)]"
-    props["class_name"] = cn("block w-full", props.pop("class_name", ""))
+    merge_class_name("block w-full", props)
     return b.ProgressRoot.create(
         b.ProgressTrack.create(
             b.ProgressIndicator.create(class_name=indicator_cls),
@@ -464,7 +461,7 @@ def scroll_area(*children, size: str = "1", **props) -> rx.Component:
         "rounded-[max(var(--radius-1),var(--radius-full))]"
     )
     thumb_cls = "relative grow rounded-[inherit] bg-[var(--gray-a8)]"
-    props["class_name"] = cn("relative overflow-hidden", props.pop("class_name", ""))
+    merge_class_name("relative overflow-hidden", props)
     return b.ScrollAreaRoot.create(
         b.ScrollAreaViewport.create(
             *children, class_name="w-full h-full overscroll-contain"
@@ -674,7 +671,7 @@ def _select_trigger(*children, **props) -> rx.Component:
     Returns:
         The select trigger component.
     """
-    props["class_name"] = cn(_SELECT_TRIGGER_BASE, props.pop("class_name", ""))
+    merge_class_name(_SELECT_TRIGGER_BASE, props)
     icon = b.SelectIcon.create(
         rx.el.svg(
             rx.el.path(
@@ -718,7 +715,7 @@ def _accordion_trigger(*children, **props) -> rx.Component:
         "px-[var(--space-4)] py-[var(--space-3)] text-[length:1.1em] leading-[1] text-[var(--accent-contrast)] "
         "outline-none focus-visible:outline-2 focus-visible:outline-[var(--focus-8)]"
     )
-    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    merge_class_name(cls, props)
     return b.AccordionHeader.create(b.AccordionTrigger.create(*children, **props))
 
 

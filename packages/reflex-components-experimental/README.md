@@ -1,9 +1,12 @@
 # reflex-components-experimental
 
 Experimental Reflex component layer: **Base UI behaviour + atomic Tailwind**,
-authored against Radix's exact design tokens so the rendered look matches Radix
-Themes pixel-for-pixel while shipping a fraction of the CSS (~7x less on a real
-page). See `rfcs/0001-base-ui-atomic-styling.md`.
+authored against Radix's exact design tokens. Computed styles match Radix
+Themes exactly (5541/5541 properties across 45 component groups, verified under
+the default violet/slate/medium light theme) while shipping a fraction of the
+CSS (~7x less on a real page). See
+[`rfcs/0001-base-ui-atomic-styling.md`](../../rfcs/0001-base-ui-atomic-styling.md)
+at the repo root.
 
 Status: **experimental** — API may change. Enable via
 `rxe.ExperimentalThemePlugin()` in `rxconfig.py` (alongside `TailwindV4Plugin`).

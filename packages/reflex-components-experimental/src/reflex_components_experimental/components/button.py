@@ -1,7 +1,7 @@
 """Radix-parity button (mirrors ``.rt-BaseButton`` / ``.rt-Button``)."""
 
 import reflex as rx
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 _BTN_BASE = (
     "inline-flex items-center justify-center shrink-0 align-top box-border "
@@ -74,5 +74,5 @@ def button(
     Returns:
         The button element.
     """
-    props["class_name"] = cn(_classes(size, variant), props.pop("class_name", ""))
+    merge_class_name(_classes(size, variant), props)
     return rx.el.button(*children, **props)

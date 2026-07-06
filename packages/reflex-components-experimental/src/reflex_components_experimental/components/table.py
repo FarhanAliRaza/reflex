@@ -1,7 +1,7 @@
 """Radix-parity table cells (``.rt-TableCell`` / ``.rt-TableColumnHeaderCell``)."""
 
 import reflex as rx
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 _TABLE_SIZES = {
     "1": ("p-[var(--space-2)]", "36px", "2"),
@@ -31,9 +31,7 @@ def table_cell(*children, size: str = "2", **props) -> rx.Component:
     Returns:
         The rendered component.
     """
-    props["class_name"] = cn(
-        _table_cell_classes(size, False), props.pop("class_name", "")
-    )
+    merge_class_name(_table_cell_classes(size, False), props)
     return rx.el.td(*children, **props)
 
 
@@ -43,7 +41,5 @@ def table_header_cell(*children, size: str = "2", **props) -> rx.Component:
     Returns:
         The rendered component.
     """
-    props["class_name"] = cn(
-        _table_cell_classes(size, True), props.pop("class_name", "")
-    )
+    merge_class_name(_table_cell_classes(size, True), props)
     return rx.el.th(*children, **props)

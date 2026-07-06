@@ -1,7 +1,7 @@
 """Radix-parity Skeleton (pulsing placeholder)."""
 
 import reflex as rx
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 
 def skeleton(*children, **props) -> rx.Component:
@@ -15,5 +15,5 @@ def skeleton(*children, **props) -> rx.Component:
         "[box-shadow:none] text-transparent [outline:none] pointer-events-none select-none [background-clip:border-box] "
         "[animation:rt-skeleton-pulse_1000ms_infinite_alternate-reverse]"
     )
-    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    merge_class_name(cls, props)
     return rx.el.span(*children, **props)

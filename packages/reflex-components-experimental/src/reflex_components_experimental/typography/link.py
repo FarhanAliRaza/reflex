@@ -1,7 +1,7 @@
 """Radix-parity link (accent color, auto underline)."""
 
 import reflex as rx
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 _LINK_DECORATION = (
     "[text-decoration-line:none] [text-decoration-style:solid] "
@@ -23,6 +23,6 @@ def link(*children, size: str = "3", **props) -> rx.Component:
         f"tracking-[var(--letter-spacing-{size})] font-normal not-italic "
         f"font-[family-name:var(--default-font-family)] {_LINK_DECORATION}"
     )
-    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    merge_class_name(cls, props)
     props.setdefault("href", "#")
     return rx.el.a(*children, **props)

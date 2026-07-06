@@ -2,7 +2,7 @@
 
 import reflex as rx
 from reflex_components_experimental.layout.base import ALIGN, JUSTIFY
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 
 def grid(
@@ -27,10 +27,11 @@ def grid(
     else:
         classes.append("[grid-template-columns:minmax(0,1fr)]")
     if gap is not None:
-        classes.append(f"gap-[var(--space-{gap})]")
+        # Radix maps gap "0" to a literal 0; there is no --space-0 token.
+        classes.append("gap-0" if gap == "0" else f"gap-[var(--space-{gap})]")
     if align:
         classes.append(ALIGN[align])
     if justify:
         classes.append(JUSTIFY[justify])
-    props["class_name"] = cn(" ".join(classes), props.pop("class_name", ""))
+    merge_class_name(" ".join(classes), props)
     return rx.el.div(*children, **props)

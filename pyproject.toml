@@ -104,6 +104,7 @@ dev = [
   "pytest-split",
   "pytest",
   "python-dotenv",
+  "reflex-components-experimental",
   "reflex-docgen",
   "ruff",
   "selenium",
@@ -259,7 +260,7 @@ asyncio_default_fixture_loop_scope = "function"
 asyncio_mode = "auto"
 
 [tool.codespell]
-skip = "*.html, examples, *.pyi, */nba.csv, */olympic-winners.json, uv.lock, */bun.lock, node_modules"
+skip = "*.html, examples, buispike, buispike/*, *.pyi, */nba.csv, */olympic-winners.json, uv.lock, */bun.lock, node_modules"
 ignore-words-list = "te, TreeE, selectin"
 
 

@@ -3,7 +3,7 @@
 from collections.abc import Callable
 
 import reflex as rx
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 _LS = "var(--letter-spacing,var(--default-letter-spacing))"
 
@@ -23,7 +23,7 @@ def _inline(
     )
     if line_height:
         cls += f" box-border leading-[{line_height}]"
-    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    merge_class_name(cls, props)
     return tag_fn(*children, **props)
 
 

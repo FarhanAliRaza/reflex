@@ -1,7 +1,7 @@
 """Radix-parity badge (mirrors ``.rt-Badge``)."""
 
 import reflex as rx
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 _BADGE_BASE = (
     "inline-flex items-center shrink-0 whitespace-nowrap font-medium not-italic"
@@ -46,5 +46,5 @@ def badge(*children, size: str = "1", variant: str = "soft", **props) -> rx.Comp
         The badge element.
     """
     cls = f"{_BADGE_BASE} {_BADGE_SIZES[size]} {_BADGE_VARIANTS[variant]}"
-    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    merge_class_name(cls, props)
     return rx.el.span(*children, **props)

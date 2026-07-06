@@ -1,7 +1,7 @@
 """Radix-parity text span (mirrors ``.rt-Text``)."""
 
 import reflex as rx
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 _TEXT_WEIGHT = {"light": "300", "regular": "400", "medium": "500", "bold": "700"}
 
@@ -22,5 +22,5 @@ def text(*children, size: str = "3", weight: str = "regular", **props) -> rx.Com
         f"text-[length:var(--font-size-{size})] leading-[var(--line-height-{size})] "
         f"tracking-[var(--letter-spacing-{size})] font-[{_TEXT_WEIGHT[weight]}]"
     )
-    props["class_name"] = cn(cls, props.pop("class_name", ""))
+    merge_class_name(cls, props)
     return rx.el.span(*children, **props)

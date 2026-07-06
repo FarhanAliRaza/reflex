@@ -9,6 +9,11 @@ The spike contains **two** atomic approaches, both proven end-to-end:
 
 ## A. CSS Modules variant (minimal switch)
 
+> **Historical.** This variant's source files (`baseui_switch.py`,
+> `switch.module.css`, `_atoms.module.css`) were removed when the spike pivoted
+> to the Tailwind approach (variant B, the RFC's recommendation). The numbers
+> below are from that earlier build and are not reproducible from this branch.
+
 - `buispike/baseui_switch.py` — Base UI `Switch` wrapped as a
   `CSSModuleComponent`; styling from a co-located atomic module only.
 - `buispike/switch.module.css` + `buispike/_atoms.module.css` — the switch's

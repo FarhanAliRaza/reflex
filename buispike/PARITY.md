@@ -20,7 +20,11 @@ Base UI + atomic-Tailwind stack while matching Radix's look exactly.
 
 Run: dev server (`reflex run`) + `uv run --python 3.13 python diff.py`.
 
-## Coverage — 100% (2541/2541 computed-style props)
+## Coverage — 100% (final: 45 groups, 5541/5541 computed-style props)
+
+The table below is the **initial wave** (12 groups); the extended waves that
+brought coverage to 45 groups / 5541 props are documented in the
+"Parallel-subagent wave" section further down.
 
 | Component | Cases | Props | Parity |
 |---|---|---|---|
@@ -130,5 +134,10 @@ because each soft spot was fixed properly, not skipped:
   and freeze all animations to the same frame before measuring so the pulsing
   background compares at an identical instant.
 
-The only remaining checker normalization strips Tailwind's transparent,
-zero-size box-shadow filler layers (they render nothing) — not a real diff.
+Remaining checker normalizations (not real diffs): computed px values are
+rounded to 0.1px before comparison, Tailwind's transparent zero-size box-shadow
+filler layers are stripped (they render nothing), and border-left style/color
+are ignored when the border width is 0. States driven by CSS pseudo-classes
+(`:hover`, `:active`, `:focus-visible`, `:disabled`) are authored from Radix's
+CSS but not yet exercised by the harness, and all cases run under a single
+theme (violet/slate/medium radius, light mode).

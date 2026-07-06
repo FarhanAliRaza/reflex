@@ -2,7 +2,7 @@
 
 import reflex as rx
 from reflex_components_experimental.typography.text import text
-from reflex_components_experimental.utils import cn
+from reflex_components_experimental.utils import merge_class_name
 
 _CALLOUT_BASE = (
     "box-border grid items-start justify-start text-left text-[var(--accent-a11)]"
@@ -10,6 +10,7 @@ _CALLOUT_BASE = (
 _CALLOUT_SIZES = {
     "1": "gap-y-[var(--space-2)] gap-x-[var(--space-2)] p-[var(--space-3)] rounded-[var(--radius-3)]",
     "2": "gap-y-[var(--space-2)] gap-x-[var(--space-3)] p-[var(--space-4)] rounded-[var(--radius-4)]",
+    "3": "gap-y-[var(--space-3)] gap-x-[var(--space-4)] p-[var(--space-5)] rounded-[var(--radius-5)]",
 }
 _CALLOUT_VARIANTS = {
     "soft": "bg-[var(--accent-a3)]",
@@ -23,7 +24,7 @@ def callout(*children, size: str = "1", variant: str = "soft", **props) -> rx.Co
 
     Args:
         *children: Content.
-        size: "1"-"2".
+        size: "1"-"3".
         variant: soft/surface/outline.
         **props: Extra props.
 
@@ -31,6 +32,6 @@ def callout(*children, size: str = "1", variant: str = "soft", **props) -> rx.Co
         The callout element.
     """
     cls = f"{_CALLOUT_BASE} {_CALLOUT_SIZES[size]} {_CALLOUT_VARIANTS[variant]}"
-    props["class_name"] = cn(cls, props.pop("class_name", ""))
-    # Radix wraps callout content in size-2 text; match so the root sizes match.
-    return rx.el.div(text(*children, size="2"), **props)
+    merge_class_name(cls, props)
+    # Radix wraps callout content in a Text child (callout 1-2 -> text 2, 3 -> 3).
+    return rx.el.div(text(*children, size="3" if size == "3" else "2"), **props)
