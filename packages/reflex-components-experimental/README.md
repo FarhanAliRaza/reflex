@@ -11,6 +11,31 @@ at the repo root.
 Status: **experimental** — API may change. Enable via
 `rxe.ExperimentalThemePlugin()` in `rxconfig.py` (alongside `TailwindV4Plugin`).
 
+## Theming
+
+The plugin mirrors `rx.theme`'s options and generates the token stylesheet at
+compile time from vendored Radix scale data (`radix_colors/`) — only the chosen
+accent + gray scales ship (~4 KB gz including light, dark, and Display-P3
+variants):
+
+```python
+plugins = [
+    rx.plugins.TailwindV4Plugin(),
+    rxe.ExperimentalThemePlugin(
+        accent_color="iris",  # any Radix accent color
+        gray_color="sand",  # gray / mauve / slate / sage / olive / sand
+        radius="large",  # none / small / medium / large / full
+        scaling="105%",  # 90% / 95% / 100% / 105% / 110%
+    ),
+]
+```
+
+`--accent-*` / `--gray-*` (and the semantic `--primary-*` / `--secondary-*`)
+resolve to the chosen scales the same way Radix Themes maps
+`accentColor`/`grayColor`, so every component recolors from the one setting.
+Invalid options fail at config load with the valid choices listed. Re-vendor
+the scale data after a Radix bump with `scripts/vendor_radix_colors.py`.
+
 ## Two layers
 
 - **Static / presentational** (`components/`, `layout/`, `typography/`): plain

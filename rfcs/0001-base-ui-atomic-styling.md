@@ -118,10 +118,12 @@ component language are the same, so merges are well-defined.
 
 ## 6. Theming & dark mode
 
-- **Theme**: ship `globals.css`'s `@theme` block as a Tailwind plugin asset
-  (promoted out of `reflex-site-shared`). Expose an `rx`-level API to repoint
-  semantic tokens (e.g. `primary="iris"`) by overriding `--primary-*` in
-  `:root`.
+- **Theme**: implemented in `reflex-components-experimental` —
+  `ExperimentalThemePlugin(accent_color=..., gray_color=..., radius=...,
+  scaling=...)` mirrors `rx.theme`'s options and generates the token
+  stylesheet at compile time from vendored Radix scale data, aliasing
+  `--accent-*`/`--gray-*` (and `--primary-*`/`--secondary-*`) onto the chosen
+  scales. Only those scales ship (~4 KB gz, light + dark + P3).
 - **Dark mode**: `@custom-variant dark (&:where(.dark, .dark *))` + a `.dark`
   class toggled on the root (Reflex already has `rx.color_mode`). Tokens whose
   values differ in dark are overridden under `.dark`.

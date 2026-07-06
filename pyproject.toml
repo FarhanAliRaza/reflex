@@ -164,6 +164,7 @@ exclude = [
   "**/.*",
   "**/.templates",
   "**/node_modules",
+  "buispike",
   "docs",
   "packages/reflex-site-shared",
   "packages/integrations-docs",
@@ -174,7 +175,11 @@ reportIncompatibleMethodOverride = false
 [tool.ruff]
 target-version = "py310"
 output-format = "concise"
-extend-exclude = ["tests/units/reflex_base/utils/pyi_generator/golden"]
+extend-exclude = [
+  "buispike",  # spike/harness code backing rfcs/0001, not production-gated
+  "tests/units/reflex_base/utils/pyi_generator/golden",
+]
+force-exclude = true  # apply excludes to paths passed explicitly (pre-commit)
 lint.isort.split-on-trailing-comma = false
 lint.select = ["ALL"]
 lint.ignore = [
@@ -252,6 +257,7 @@ preview = true
 "*/.templates/apps/blank/code/*" = ["INP001"]
 "*/blank.py" = ["I001"]
 "docs/package/scripts/*.py" = ["INP001"]
+"packages/*/scripts/*.py" = ["INP001", "T201"]
 "scripts/check_min_deps.py" = ["T201"]
 
 [tool.pytest.ini_options]
