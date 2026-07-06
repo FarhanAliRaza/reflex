@@ -13,6 +13,9 @@ codifies the agreed behavior of the navigation primitives:
   ``on_load``, and updates the router reactively with no further interaction.
 * ``rx.redirect(target, replace=True)`` behaves the same but replaces the
   current history entry instead of pushing a new one.
+* Navigating away while a page's ``on_load`` chain is still running cancels
+  the stale chain instead of letting it keep running and block the new
+  page's events (https://github.com/reflex-dev/reflex/issues/6593).
 
 Covers dev and prod modes via ``app_harness_env`` parametrisation.
 """
@@ -30,7 +33,26 @@ from reflex.testing import AppHarness
 
 def RouterQueryApp():
     """App exercising replaceState, redirect, and redirect(replace=True)."""
+    import asyncio
+
     import reflex as rx
+
+    class SlowLoadState(rx.State):
+        # Records the lifecycle of the slow on_load handler; "finished;" must
+        # never be appended when the user navigates away mid-load.
+        slow_log: str = ""
+
+        @rx.event
+        async def slow_on_load(self):
+            """Record start, simulate a slow data load, then record completion.
+
+            Yields:
+                None, to emit the "started;" delta before sleeping.
+            """
+            self.slow_log += "started;"
+            yield
+            await asyncio.sleep(2)
+            self.slow_log += "finished;"
 
     class RouterQueryState(rx.State):
         # Incremented by the page on_load handler; proves whether a navigation
@@ -146,10 +168,18 @@ def RouterQueryApp():
                 read_only=True,
                 id="ping-count",
             ),
+            rx.input(value=SlowLoadState.slow_log, read_only=True, id="slow-log"),
+        )
+
+    def slow():
+        return rx.box(
+            rx.link("go home", href="/", id="to-index"),
+            rx.input(value=SlowLoadState.slow_log, read_only=True, id="slow-log"),
         )
 
     app = rx.App()
     app.add_page(index, route="/", on_load=RouterQueryState.on_load)
+    app.add_page(slow, route="/slow", on_load=SlowLoadState.slow_on_load)
 
 
 @pytest.fixture(scope="module")
@@ -275,3 +305,35 @@ def test_redirect_replace_replaces_history_entry(
     expect(page).to_have_url(f"{base}/")
     expect(page.locator("#name-param")).to_have_value("")
     expect(page.locator("#query-str")).to_have_value("")
+
+
+def test_slow_on_load_completes_without_navigation(
+    router_query_app: AppHarness, page: Page
+):
+    """Positive control: staying on the page lets the slow on_load finish."""
+    base = router_query_app.frontend_url
+    assert base is not None
+    page.goto(f"{base.rstrip('/')}/slow")
+    expect(page.locator("#slow-log")).to_have_value("started;")
+    expect(page.locator("#slow-log")).to_have_value("started;finished;", timeout=5000)
+
+
+def test_navigation_cancels_stale_on_load(router_query_app: AppHarness, page: Page):
+    """Navigating away mid-load cancels the stale on_load chain (#6593)."""
+    base = router_query_app.frontend_url
+    assert base is not None
+    page.goto(f"{base.rstrip('/')}/slow")
+    # The slow on_load has started and is now sleeping.
+    expect(page.locator("#slow-log")).to_have_value("started;")
+
+    # Navigate away while the slow handler is still running. The new page's
+    # on_load runs promptly instead of waiting ~2s behind the stale handler.
+    page.click("#to-index")
+    expect(page.locator("#load-count")).to_have_value("1", timeout=1000)
+
+    # Wait past the stale handler's sleep, then flush a round-trip; the
+    # cancelled handler must never have appended "finished;".
+    page.wait_for_timeout(3000)
+    page.click("#ping")
+    expect(page.locator("#ping-count")).to_have_value("1")
+    expect(page.locator("#slow-log")).to_have_value("started;")
