@@ -10,7 +10,44 @@ Examples:
 - Incorrect: WHITELISTED_PAGES = ["/getting-started/introduction/"]
 """
 
-WHITELISTED_PAGES = []
+WHITELISTED_PAGES = [
+    # TEMP (local Lighthouse measurement only, do not commit): build everything
+    # except /wrapping-react/local-packages, whose live demo pulls
+    # @masenf/hello-react from GitHub, which is blocked in this sandbox.
+    "/advanced_onboarding",
+    "/ai-builder",
+    "/ai_builder",
+    "/api-reference",
+    "/api-routes",
+    "/authentication",
+    "/client_storage",
+    "/components",
+    "/custom-components",
+    "/database",
+    "/enterprise",
+    "/events",
+    "/getting-started",
+    "/getting_started",
+    "/hosting",
+    "/library",
+    "/pages",
+    "/recipes",
+    "/state",
+    "/state_structure",
+    "/styling",
+    "/ui",
+    "/utility_methods",
+    "/vars",
+    "/wrapping-react/custom-code-and-hooks",
+    "/wrapping-react/example",
+    "/wrapping-react/imports-and-styles",
+    "/wrapping-react/library-and-tags",
+    "/wrapping-react/more-wrapping-examples",
+    "/wrapping-react/overview",
+    "/wrapping-react/props",
+    "/wrapping-react/serializers",
+    "/wrapping-react/step-by-step",
+]
 
 
 def _check_whitelisted_path(path: str):
