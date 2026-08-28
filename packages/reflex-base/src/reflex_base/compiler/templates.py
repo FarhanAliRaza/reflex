@@ -144,12 +144,19 @@ config = rx.Config(
 )"""
 
 
-def document_root_template(*, imports: list[_ImportDict], document: dict[str, Any]):
+def document_root_template(
+    *,
+    imports: list[_ImportDict],
+    document: dict[str, Any],
+    hooks: dict[str, VarData | None] | None = None,
+):
     """Template for the document root.
 
     Args:
         imports: List of import statements.
         document: Document root component.
+        hooks: Hooks to render in the Layout function (e.g. ref hooks from
+            static ``id`` props on head components).
 
     Returns:
         Rendered document root code as string.
@@ -158,6 +165,7 @@ def document_root_template(*, imports: list[_ImportDict], document: dict[str, An
     return f"""{imports_rendered}
 
 export function Layout({{children}}) {{
+  {_render_hooks(hooks) if hooks else ""}
   return (
     {_RenderUtils.render(document)}
   )

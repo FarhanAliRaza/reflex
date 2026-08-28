@@ -640,11 +640,107 @@ def create_document_root(
         lang=html_lang or "en",
         custom_attrs=html_custom_attrs or {},
     )
-    hooks = html_component._get_all_hooks()
-    if hooks:
-        msg = "You cannot use stateful components or hooks in the document root. Check your head components."
-        raise ValueError(msg)
+    _check_document_root_hooks(html_component)
     return html_component
+
+
+def _check_document_root_hooks(html_component: Component) -> None:
+    """Raise if the document root carries hooks other than static-id ref hooks.
+
+    Ref hooks from static ``id`` props are harmless in the document root —
+    they render as a plain ``useRef`` in the Layout function — so only other
+    hooks (state context, effects, custom hooks) are rejected.
+
+    Args:
+        html_component: The assembled document root component.
+
+    Raises:
+        ValueError: If a head component introduced a hook other than a
+            static-id ref hook, naming the component path and the hook.
+    """
+    hooks = html_component._get_all_hooks()
+    if not hooks:
+        return
+    ref_hooks, hook_sources = _collect_document_root_hooks(html_component)
+    stateful_hooks = [hook for hook in hooks if hook not in ref_hooks]
+    if not stateful_hooks:
+        return
+    offenders = "; ".join(
+        f"`{hook_sources.get(hook, '<unknown>')}` introduced hook "
+        f"`{hook.strip().splitlines()[0][:120]}`"
+        for hook in stateful_hooks
+    )
+    msg = (
+        "You cannot use stateful components or hooks in the document root. "
+        f"Check your head components: {offenders}"
+    )
+    raise ValueError(msg)
+
+
+def _component_own_hooks(component: Component) -> dict[str, VarData | None]:
+    """Get the hooks contributed by a single component, excluding children.
+
+    Args:
+        component: The component to inspect.
+
+    Returns:
+        The non-recursive portion of ``Component._get_all_hooks``.
+    """
+    own_hooks = dict(component._get_hooks_internal())
+    if (hook := component._get_hooks()) is not None:
+        own_hooks[hook] = None
+    own_hooks.update(component._get_added_hooks())
+    return own_hooks
+
+
+def _collect_document_root_hooks(
+    component: Component,
+) -> tuple[set[str], dict[str, str]]:
+    """Collect ref hooks and per-component hook attribution for the document root.
+
+    Walks the component tree the same way ``Component._get_all_hooks`` gathers
+    hooks (children, plus components embedded in prop Vars), recording each
+    component's static-id ref hook and attributing every hook to the path of
+    the component that introduced it.
+
+    Args:
+        component: The root component to walk.
+
+    Returns:
+        The set of ref hook code strings, and a mapping of each hook's code to
+        the path of the component that introduced it (e.g. ``html > head > title``).
+    """
+    from reflex_components_core.base.bare import Bare
+
+    ref_hooks: set[str] = set()
+    hook_sources: dict[str, str] = {}
+    seen: set[int] = set()
+
+    def walk(component: Component, path: str) -> None:
+        if id(component) in seen:
+            return
+        seen.add(id(component))
+        # Bare is the internal text-node wrapper; its parent is the useful name.
+        if not isinstance(component, Bare):
+            segment = component.alias or component.tag or type(component).__name__
+            path = f"{path} > {segment}" if path else segment
+        ref_hook = component._get_ref_hook()
+        if ref_hook is not None:
+            ref_hooks.add(str(ref_hook))
+        for hook in _component_own_hooks(component):
+            hook_sources.setdefault(hook, path)
+        for var in component._get_vars():
+            var_data = var._get_all_var_data()
+            if var_data is not None:
+                for sub_component in var_data.components:
+                    if isinstance(sub_component, Component):
+                        walk(sub_component, path)
+        for child in component.children:
+            if isinstance(child, Component):
+                walk(child, path)
+
+    walk(component, "")
+    return ref_hooks, hook_sources
 
 
 def create_theme(style: ComponentStyle) -> dict:

@@ -682,6 +682,38 @@ def test_create_document_root_with_meta_viewport():
     assert str(root.children[0].children[3].char_set) == '"utf-8"'  # pyright: ignore [reportAttributeAccessIssue]
 
 
+def test_create_document_root_with_script_id():
+    """A static id on a head component only needs a ref hook, which is allowed."""
+    comps = [rx.script(src="/probe.js", id="head-probe")]
+    root = utils.create_document_root(head_components=comps)
+    assert isinstance(root, Html)
+    hooks = root._get_all_hooks()
+    assert any("useRef" in hook for hook in hooks)
+
+
+def test_compile_document_root_with_script_id(mocker: MockerFixture):
+    """The document root renders the ref hook for a static id inside Layout."""
+    mocker.patch(
+        "reflex.compiler.compiler.get_web_dir",
+        return_value=Path("/tmp/does_not_matter"),
+    )
+
+    _, code = compiler.compile_document_root([
+        rx.script(src="/probe.js", id="head-probe")
+    ])
+
+    assert "const ref_head_probe = useRef(null)" in code
+    assert 'refs["ref_head_probe"]' in code
+    assert "ref:ref_head_probe" in code.replace(" ", "")
+
+
+def test_create_document_root_stateful_raises():
+    """Stateful head components raise an error naming the offending component."""
+    comps = [rx.el.div(on_mount=rx.console_log("mounted"))]
+    with pytest.raises(ValueError, match=r"document root.*html > head > div"):
+        utils.create_document_root(head_components=comps)
+
+
 class _RoutePlugin(rx.plugins.Plugin):
     """Plugin that records how often it contributes its route."""
 

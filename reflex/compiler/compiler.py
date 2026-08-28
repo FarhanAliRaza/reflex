@@ -113,6 +113,7 @@ def _compile_document_root(root: Component) -> str:
     return templates.document_root_template(
         imports=utils.compile_imports(document_root_imports),
         document=root.render(),
+        hooks=root._get_all_hooks(),
     )
 
 
