@@ -410,21 +410,7 @@ def _run_dev(
             running_mode.has_backend(),
         ))
 
-    # The compile daemon owns .web regeneration; backend reload workers only
-    # evaluate pages to register state.
-    from reflex_base.environment import environment
-
-    if running_mode.has_frontend() and environment.REFLEX_COMPILE_CACHE.get():
-        from reflex.utils import compile_daemon
-
-        commands.append((
-            compile_daemon.run_compile_daemon,
-            exec.should_prerender_routes(),
-            True,
-        ))
-        # Backend workers are recognised through the daemon's on-disk marker
-        # (see ``compile_daemon.owns_compilation``): environment set here is
-        # not inherited by workers a forkserver started earlier.
+    commands.extend(_compile_daemon_commands(running_mode))
 
     # Start the frontend and backend.
     with processes.run_concurrently_context(*commands):
@@ -443,6 +429,34 @@ def _run_dev(
                 exec.kill(exec.frontend_process.pid)
 
 
+def _compile_daemon_commands(
+    running_mode: constants.RunningMode,
+) -> list[tuple[Any, ...]]:
+    """Build the compile-daemon worker for ``run_concurrently_context``.
+
+    With ``REFLEX_COMPILE_CACHE`` on, the daemon owns ``.web`` regeneration and
+    backend reload workers only evaluate pages to register state. The parent
+    has already produced the initial frontend, so the daemon starts warm.
+    Backend workers are recognised through the daemon's on-disk marker (see
+    ``compile_daemon.owns_compilation``): environment set here is not
+    inherited by workers a forkserver started earlier.
+
+    Args:
+        running_mode: The running mode of this ``reflex run``.
+
+    Returns:
+        A single daemon command when the cache is on and a frontend is served,
+        else an empty list.
+    """
+    from reflex_base.environment import environment
+
+    if not running_mode.has_frontend() or not environment.REFLEX_COMPILE_CACHE.get():
+        return []
+    from reflex.utils import compile_daemon, exec
+
+    return [(compile_daemon.run_compile_daemon, exec.should_prerender_routes(), True)]
+
+
 def _run_preview(running_mode: constants.RunningMode, port: int, host: str):
     """Run the app in preview mode.
 
@@ -450,6 +464,9 @@ def _run_preview(running_mode: constants.RunningMode, port: int, host: str):
     built (un-minified) frontend bundle mounted into the backend on a single port.
     The backend still hot reloads, and each reload re-runs the frontend build
     against the newly compiled output, so a manual browser refresh shows changes.
+    With ``REFLEX_COMPILE_CACHE`` the compile daemon does that work instead:
+    it recompiles only the changed pages and rebuilds the bundle, while the
+    backend worker just waits for it before registering state.
     """
     import atexit
 
@@ -481,12 +498,16 @@ def _run_preview(running_mode: constants.RunningMode, port: int, host: str):
         backend_present=running_mode.has_backend(),
     )
 
-    if running_mode.has_backend():
-        exec.run_backend(
-            host, port, config.loglevel.subprocess_level(), running_mode.has_frontend()
-        )
-    else:
-        exec.run_frontend_prod(host, port)
+    with processes.run_concurrently_context(*_compile_daemon_commands(running_mode)):
+        if running_mode.has_backend():
+            exec.run_backend(
+                host,
+                port,
+                config.loglevel.subprocess_level(),
+                running_mode.has_frontend(),
+            )
+        else:
+            exec.run_frontend_prod(host, port)
 
 
 def _run_prod(running_mode: constants.RunningMode, port: int, host: str):

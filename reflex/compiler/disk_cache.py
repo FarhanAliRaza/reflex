@@ -20,6 +20,7 @@ import dataclasses
 import hashlib
 import json
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -41,7 +42,7 @@ if TYPE_CHECKING:
     from reflex.app import App
 
 #: Bump when the manifest layout changes (old manifests are then ignored).
-_SCHEMA = 11
+_SCHEMA = 13
 #: Manifest filename under the web directory.
 _MANIFEST_FILE = "reflex_compile_cache.json"
 
@@ -179,6 +180,8 @@ def _manifest_page_entry(
     from reflex.utils.telemetry_accounting import _count_components
 
     return {
+        # The on-disk file a hit reuses; checked to exist before reuse.
+        "output": page_ctx.output_path,
         "component_counts": _count_components([page_ctx.root_component]),
         "deps": page_cache.page_dependency_entries(
             page_ctx, component, state_index, hasher, files, root
@@ -353,7 +356,9 @@ def load_manifest() -> dict[str, Any] | None:
         return None
     if not isinstance(data, dict) or data.get("schema") != _SCHEMA:
         return None
-    page_cache.load_import_names_cache(data.get("import_names", {}))
+    page_cache.load_import_names_cache(
+        data.get("import_names", {}), data.get("written_at")
+    )
     return data
 
 
@@ -383,6 +388,9 @@ def _write(manifest: dict[str, Any]) -> None:
         manifest: The manifest to write.
     """
     manifest["import_names"] = page_cache.export_import_names_cache()
+    # Stat keys recorded near this instant cannot prove a file unchanged (see
+    # ``page_cache.RACY_WINDOW_NS``); readers compare entry mtimes against it.
+    manifest["written_at"] = time.time_ns()
     path = _manifest_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json_dumps(manifest), encoding="utf-8")
@@ -395,6 +403,7 @@ def write_manifest(
     root: Path | None = None,
     *,
     plugin_sources: dict[str, str] | None = None,
+    prerender_routes: bool = False,
 ) -> None:
     """Persist a manifest of the just-completed full compile.
 
@@ -411,6 +420,8 @@ def write_manifest(
             install from this complete set, not just the per-page union.
         root: Project root for fingerprinting. Defaults to cwd.
         plugin_sources: Unmodified source content for plugin file modifiers.
+        prerender_routes: Whether the compile prerendered routes (part of the
+            compile-mode fingerprint).
     """
     try:
         state_index, _ = page_cache.state_dependency_index(root)
@@ -471,6 +482,7 @@ def write_manifest(
             "schema": _SCHEMA,
             "plugin_sources": plugin_sources or {},
             "reflex_version": page_cache._reflex_version(),
+            "compile_mode": page_cache.compile_mode_inputs(prerender_routes),
             "files": files,
             # Per-input labels (not one combined digest) so a later mismatch
             # can name the exact global input that changed.
@@ -522,6 +534,7 @@ def globals_mismatch(
     routes: set[str],
     validator: page_cache.FileValidator,
     root: Path | None = None,
+    prerender_routes: bool = False,
 ) -> str | None:
     """Explain why the manifest's global inputs don't match, or None if they do.
 
@@ -542,6 +555,8 @@ def globals_mismatch(
         routes: The current set of page routes.
         validator: The file validator bound to the manifest's file table.
         root: Project root used to shorten paths in the reason. Defaults to cwd.
+        prerender_routes: Whether this compile prerenders routes (part of the
+            compile-mode fingerprint).
 
     Returns:
         A human-readable mismatch reason, or None when the global inputs match.
@@ -551,6 +566,19 @@ def globals_mismatch(
         return (
             f"reflex version changed ({old_version} -> {page_cache._reflex_version()})"
         )
+    stored_mode = manifest.get("compile_mode")
+    if not isinstance(stored_mode, dict):
+        stored_mode = {}
+    current_mode = page_cache.compile_mode_inputs(prerender_routes)
+    if stored_mode != current_mode:
+        # Compare through JSON: the stored side went through it already.
+        changed_inputs = sorted(
+            label
+            for label in stored_mode.keys() | current_mode.keys()
+            if json.dumps(stored_mode.get(label), sort_keys=True)
+            != json.dumps(current_mode.get(label), sort_keys=True, default=str)
+        )
+        return f"compile mode changed: {format_path_list(changed_inputs)}"
     old_routes = set(manifest.get("pages", {}))
     if old_routes != routes:
         parts = []
@@ -570,6 +598,31 @@ def globals_mismatch(
     )
     if stale:
         return f"global input(s) changed: {format_path_list(stale, root)}"
+    return None
+
+
+def missing_output(manifest: dict[str, Any], hit_routes: Iterable[str]) -> str | None:
+    """Find an on-disk file the rebuild would reuse but which no longer exists.
+
+    A manifest only proves what was *compiled*; ``.web`` may have been pruned
+    underneath it (a deleted routes directory, a partial ``reflex init``).
+
+    Args:
+        manifest: The loaded manifest.
+        hit_routes: The routes whose page output would be reused.
+
+    Returns:
+        The first missing path, or None when every reused file is present.
+    """
+    from reflex.compiler import utils as compiler_utils
+
+    pages = manifest["pages"]
+    candidates: list[str | None] = [compiler_utils.get_context_path()]
+    candidates.extend(pages[route].get("output") for route in hit_routes)
+    candidates.extend(manifest.get("memo_files", ()))
+    for path in candidates:
+        if not path or not Path(path).exists():
+            return path or "<unknown page output>"
     return None
 
 
@@ -994,12 +1047,16 @@ def try_incremental_rebuild(
 
     pages = list(app._unevaluated_pages.values())
     routes = {p.route for p in pages}
-    validator = page_cache.FileValidator(manifest["files"])
+    validator = page_cache.FileValidator(manifest["files"], manifest.get("written_at"))
     changed_hint = _changed_hint
 
     if (
         reason := globals_mismatch(
-            manifest, routes=routes, validator=validator, root=root
+            manifest,
+            routes=routes,
+            validator=validator,
+            root=root,
+            prerender_routes=prerender_routes,
         )
     ) is not None:
         _log_fallback(reason)
@@ -1007,6 +1064,15 @@ def try_incremental_rebuild(
 
     resolved_root = (root or Path.cwd()).resolve()
     miss_pages = partition_pages(pages, manifest, validator, changed_hint)
+    if (
+        missing := missing_output(
+            manifest, routes - {page.route for page in miss_pages}
+        )
+    ) is not None:
+        _log_fallback(
+            f"reused output is missing on disk: {format_path_list([missing], resolved_root)}"
+        )
+        return False
     # Memo files are decided salsa-style: derive the files the current memo
     # registry demands and rewrite the ones whose stored record differs. This
     # catches what changed-file diffing structurally cannot: a memo module the

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import functools
 import hashlib
 import importlib
 import importlib.util
@@ -21,7 +22,7 @@ from contextvars import ContextVar
 from functools import lru_cache
 from importlib import metadata
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from reflex_base.environment import environment
 
@@ -32,8 +33,16 @@ if TYPE_CHECKING:
 #: A manifest file-table entry: ``[content sha256, st_mtime_ns, st_size]``.
 FileEntry = list
 
-#: Directories never worth hashing (build artifacts, deps, caches).
-_SKIP_DIRS = {".web", ".venv", "venv", "node_modules", "__pycache__", ".git", "assets"}
+#: Directories never worth hashing (build artifacts, deps, caches). ``assets``
+#: is not one of them: it is copied wholesale, but a page that *reads* an asset
+#: while evaluating (a JSON table rendered inline, say) depends on it.
+_SKIP_DIRS = {".web", ".venv", "venv", "node_modules", "__pycache__", ".git"}
+
+#: A file whose mtime is this close to the manifest write is hashed rather than
+#: trusted from its stat key: an edit landing in the same mtime tick with the
+#: same size is invisible to ``(mtime_ns, size)`` on coarse-granularity
+#: filesystems (the "racy git" problem).
+RACY_WINDOW_NS = 2_000_000_000
 
 #: Genuinely-global files: a change here can affect every page's output, so it
 #: bumps ``global_epoch`` rather than any single page's dependency set.
@@ -66,6 +75,49 @@ def _reflex_version() -> str:
         return metadata.version("reflex")
     except Exception:
         return "unknown"
+
+
+def compile_mode_inputs(prerender_routes: bool) -> dict[str, Any]:
+    """Collect the process-level inputs that shape compiled output.
+
+    These live in no tracked file: the run mode (``dev`` bakes different
+    context/template output than ``prod`` or ``preview``), route prerendering,
+    and config values that env vars or a ``.env`` file may override without
+    ``rxconfig.py`` changing. A manifest written under different inputs is not
+    reused, and the mismatch names the input that changed.
+
+    Args:
+        prerender_routes: Whether this compile prerenders routes.
+
+    Returns:
+        A JSON-able mapping of input label to its current value.
+    """
+    from reflex.config import get_config
+
+    config = get_config()
+    return {
+        "env_mode": environment.REFLEX_ENV_MODE.get().value,
+        "prerender_routes": prerender_routes,
+        "react_owner_stacks": environment.REFLEX_REACT_OWNER_STACKS.get(),
+        "frontend_path": config.frontend_path,
+        "default_color_mode": config.default_color_mode,
+        "react_strict_mode": config.react_strict_mode,
+        # ``show_built_with_reflex`` is deliberately absent: it is resolved at
+        # run time per process, and the badge it adds is an app wrap, which
+        # the per-page app-wrap guard already covers.
+        "hydrate_fallback": config.hydrate_fallback,
+        "extra_overlay_function": config.extra_overlay_function,
+        "transport": config.transport,
+        "state_auto_setters": config.state_auto_setters,
+        "plugins": [
+            f"{type(plugin).__module__}.{type(plugin).__qualname__}"
+            for plugin in config.plugins
+        ],
+        "disable_plugins": [
+            f"{plugin.__module__}.{plugin.__qualname__}"
+            for plugin in config.disable_plugins
+        ],
+    }
 
 
 def first_party_roots(root: Path | None = None) -> tuple[Path, ...]:
@@ -756,12 +808,30 @@ def _stat_key(path: str) -> tuple[int, int] | None:
     return (st.st_mtime_ns, st.st_size)
 
 
-def load_import_names_cache(data: Mapping[str, Sequence[object]]) -> None:
+def is_racy_mtime(mtime_ns: int, written_at: int | None) -> bool:
+    """Whether a stat key recorded at ``written_at`` cannot be trusted for ``mtime_ns``.
+
+    Args:
+        mtime_ns: The recorded modification time.
+        written_at: When the recording manifest was written (ns), if known.
+
+    Returns:
+        True when the file was modified within :data:`RACY_WINDOW_NS` of the
+        manifest write, so an equal stat key may still hide an edit.
+    """
+    return written_at is not None and mtime_ns >= written_at - RACY_WINDOW_NS
+
+
+def load_import_names_cache(
+    data: Mapping[str, Sequence[object]], written_at: int | None = None
+) -> None:
     """Seed the import-name parse cache from its persisted form.
 
     Args:
         data: ``{path: [[mtime_ns, size], [names...]]}`` as written by
             :func:`export_import_names_cache`.
+        written_at: When the manifest holding ``data`` was written (ns); entries
+            modified too close to it are dropped so they are re-parsed.
     """
     _import_names_cache.clear()
     for path, entry in data.items():
@@ -774,6 +844,8 @@ def load_import_names_cache(data: Mapping[str, Sequence[object]]) -> None:
             and isinstance(entry[1], Sequence)
         ):
             key = (int(entry[0][0]), int(entry[0][1]))  # type: ignore[index]
+            if is_racy_mtime(key[0], written_at):
+                continue
             _import_names_cache[path] = (key, [str(n) for n in entry[1]])
 
 
@@ -923,15 +995,42 @@ def _component_source_files(component: object, root: Path) -> set[str]:
     """
     out: set[str] = set()
     roots = first_party_roots(root)
-    code = getattr(component, "__code__", None)
-    filename = getattr(code, "co_filename", None)
-    own = _module_file(component)
-    for path in (filename, own):
-        if path:
-            rf = Path(path).resolve()
-            if _under_any(rf, roots):
-                out.add(str(rf))
+    for layer in _callable_layers(component):
+        code = getattr(layer, "__code__", None)
+        for path in (getattr(code, "co_filename", None), _module_file(layer)):
+            if path:
+                rf = Path(path).resolve()
+                if _under_any(rf, roots):
+                    out.add(str(rf))
     return out
+
+
+def _callable_layers(component: object) -> list[object]:
+    """Unwrap a page callable into every layer that defines its behaviour.
+
+    A page may be a ``functools.partial``, or a function wrapped by a decorator
+    (``__wrapped__``). The outermost object's code then lives in the
+    decorator's module, while the page body lives further in; every layer's
+    file is a dependency.
+
+    Args:
+        component: The page component or callable.
+
+    Returns:
+        The callable and each object it wraps, outermost first.
+    """
+    layers: list[object] = []
+    seen: set[int] = set()
+    obj: object = component
+    while obj is not None and id(obj) not in seen and len(layers) < 32:
+        seen.add(id(obj))
+        layers.append(obj)
+        obj = (
+            obj.func
+            if isinstance(obj, functools.partial)
+            else getattr(obj, "__wrapped__", None)
+        )
+    return layers
 
 
 def page_py_dependencies(
@@ -1064,13 +1163,18 @@ class FileValidator:
     re-hashing it). Each path is examined at most once per compile.
     """
 
-    def __init__(self, files: Mapping[str, Sequence[object]]) -> None:
+    def __init__(
+        self, files: Mapping[str, Sequence[object]], written_at: int | None = None
+    ) -> None:
         """Bind the validator to a manifest file table.
 
         Args:
             files: ``{path: [sha256, mtime_ns, size]}``.
+            written_at: When the manifest was written (ns). Entries modified
+                within :data:`RACY_WINDOW_NS` of it are always hashed.
         """
         self._files = files
+        self._written_at = written_at
         self._changed: dict[str, bool] = {}
         self.refreshed: dict[str, FileEntry] = {}
 
@@ -1090,7 +1194,11 @@ class FileValidator:
         result = True
         if entry is not None and len(entry) == 3:
             key = _stat_key(path)
-            if key is not None and (key[0], key[1]) == (entry[1], entry[2]):
+            if (
+                key is not None
+                and (key[0], key[1]) == (entry[1], entry[2])
+                and not is_racy_mtime(key[0], self._written_at)
+            ):
                 result = False
             elif (fresh := file_entry(path)) is not None and fresh[0] == entry[0]:
                 self.refreshed[path] = fresh

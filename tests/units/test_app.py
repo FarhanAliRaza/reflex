@@ -39,6 +39,7 @@ from starlette.applications import Starlette
 from starlette.datastructures import FormData, Headers, UploadFile
 from starlette.requests import ClientDisconnect
 from starlette.responses import StreamingResponse
+from starlette.routing import Mount
 from starlette_admin.auth import AuthProvider
 
 import reflex as rx
@@ -4344,3 +4345,60 @@ def test_compile_releases_memo_naming_caches(
         app._compile()
 
     assert not _hash_str_encodings
+
+
+@pytest.mark.parametrize("daemon_owns_build", [True, False])
+def test_call_preview_hot_reload_rebuilds_bundle_unless_daemon_owns_it(
+    compilable_app: tuple[App, Path],
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    daemon_owns_build: bool,
+):
+    """A preview reload worker rebuilds the bundle only without a compile daemon."""
+    from reflex.utils import build, compile_daemon
+
+    monkeypatch.setenv(environment.REFLEX_DEV_BACKEND_RELOAD_ACTIVE.name, "True")
+    monkeypatch.setenv(environment.REFLEX_ENV_MODE.name, "preview")
+    monkeypatch.setenv(environment.REFLEX_MOUNT_FRONTEND_COMPILED_APP.name, "True")
+
+    app, web_dir = compilable_app
+    (web_dir / exec_utils.DEV_BACKEND_RELOAD_MARKER).touch()
+    mocker.patch.object(app, "_compile")
+    mocker.patch.object(
+        exec_utils, "get_frontend_mount", return_value=Mount("/", routes=[])
+    )
+    mocker.patch.object(
+        compile_daemon, "owns_compilation", return_value=not daemon_owns_build
+    )
+    built = mocker.patch.object(build, "build")
+
+    app()
+
+    assert built.called is not daemon_owns_build
+
+
+def test_should_compile_daemon_never_consumes_nocompile_marker(
+    compilable_app: tuple[App, Path],
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The nocompile marker addresses the backend worker, not the compile daemon."""
+    from reflex.utils import compile_daemon
+
+    app, web_dir = compilable_app
+    nocompile = web_dir / constants.NOCOMPILE_FILE
+    monkeypatch.delenv(environment.REFLEX_SKIP_COMPILE.name, raising=False)
+
+    # The daemon (and its compile children) compiles regardless of the marker.
+    nocompile.touch()
+    monkeypatch.setenv(environment.REFLEX_COMPILE_DAEMON.name, "1")
+    assert app._should_compile() is True
+    assert nocompile.exists()
+
+    # A backend worker consumes the marker even while a daemon owns .web...
+    monkeypatch.delenv(environment.REFLEX_COMPILE_DAEMON.name)
+    mocker.patch.object(compile_daemon, "owns_compilation", return_value=False)
+    assert app._should_compile() is False
+    assert not nocompile.exists()
+    # ...and then keeps deferring to the daemon.
+    assert app._should_compile() is False

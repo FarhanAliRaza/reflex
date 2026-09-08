@@ -233,11 +233,20 @@ def test_wait_for_compile_respects_lock(tmp_path, monkeypatch):
     start = time.monotonic()
     compile_daemon.wait_for_compile(timeout=1)
     assert time.monotonic() - start < 0.2
-    # A live holder -> waits until the lock clears (or the timeout).
-    with compile_daemon._compile_lock(tmp_path):
+    # A live holder (another process) -> waits until the lock clears (or the
+    # timeout).
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        compile_daemon._lock_path().write_text(str(holder.pid))
         start = time.monotonic()
         compile_daemon.wait_for_compile(timeout=0.3)
         assert time.monotonic() - start >= 0.3
+    finally:
+        holder.kill()
+        holder.wait()
+    # The lock context removes its own lock on exit.
+    with compile_daemon._compile_lock(tmp_path):
+        assert compile_daemon._lock_path().exists()
     assert not compile_daemon._lock_path().exists()
     # A dead holder -> not waited on.
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
@@ -687,3 +696,144 @@ def test_watcher_reconciles_edits_after_an_idle_batch(tmp_path, monkeypatch):
 
     monkeypatch.setattr(watchfiles, "watch", watch)
     assert compile_daemon._next_changes(state, lambda: True) == {first, second}
+
+
+@pytest.mark.parametrize("env_mode", ["dev", "preview"])
+def test_child_compile_rebuilds_the_preview_bundle(tmp_path, monkeypatch, env_mode):
+    """Preview serves a built bundle, so the compile that owns .web rebuilds it."""
+    from reflex.utils import build, prerequisites
+
+    events: list[str] = []
+    monkeypatch.setenv("REFLEX_ENV_MODE", env_mode)
+    monkeypatch.setattr(compile_daemon, "_reset_first_party", lambda roots: None)
+
+    class FakeApp:
+        def _compile(self, **kwargs):
+            events.append("compile")
+
+    monkeypatch.setattr(
+        prerequisites, "get_and_validate_app", lambda reload: (FakeApp(), None)
+    )
+    monkeypatch.setattr(build, "build", lambda: events.append("build"))
+
+    compile_daemon._child_compile([tmp_path], prerender_routes=False)
+
+    assert events == (["compile", "build"] if env_mode == "preview" else ["compile"])
+
+
+def test_first_party_module_names_keeps_protected_packages(tmp_path, monkeypatch):
+    """Packages the daemon itself runs on are never purged, even under a root."""
+    import sys
+    import types
+
+    for name in ("fp_daemon_dep", "fp_user_pkg"):
+        mod = types.ModuleType(name)
+        mod.__file__ = str(tmp_path / name / "__init__.py")
+        monkeypatch.setitem(sys.modules, name, mod)
+    monkeypatch.setattr(compile_daemon, "_protected_top_levels", {"fp_daemon_dep"})
+    compile_daemon._first_party_file_cache.clear()
+
+    names = compile_daemon._first_party_module_names([tmp_path.resolve()])
+
+    assert "fp_user_pkg" in names
+    assert "fp_daemon_dep" not in names
+
+
+def test_warn_protected_roots_names_the_covered_packages(tmp_path, monkeypatch):
+    """A reload root covering the daemon's own packages is reported once."""
+    import sys
+    import types
+
+    mod = types.ModuleType("fp_framework")
+    mod.__file__ = str(tmp_path / "fp_framework" / "__init__.py")
+    monkeypatch.setitem(sys.modules, "fp_framework", mod)
+    monkeypatch.setattr(compile_daemon, "_protected_top_levels", {"fp_framework"})
+    warnings: list[str] = []
+    monkeypatch.setattr(compile_daemon.console, "warn", warnings.append)
+
+    compile_daemon._warn_protected_roots([tmp_path.resolve()])
+    compile_daemon._warn_protected_roots([tmp_path.resolve() / "elsewhere"])
+
+    assert len(warnings) == 1
+    assert "fp_framework" in warnings[0]
+
+
+def test_serve_holds_lock_from_change_detection(tmp_path, monkeypatch):
+    """The lock is taken before the change is re-snapshotted, not just compiled."""
+    from reflex.utils import prerequisites
+
+    lock = tmp_path / "compile.lock"
+    changed = tmp_path / "page.py"
+    changed.write_text("x = 1\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("REFLEX_COMPILE_DAEMON_PRECOMPILED", "1")
+    monkeypatch.setattr(compile_daemon, "_lock_path", lambda: lock)
+    monkeypatch.setattr(compile_daemon, "_prepare_fork_parent", lambda roots: None)
+    monkeypatch.setattr(prerequisites, "get_app", lambda **kwargs: None)
+    monkeypatch.setattr(
+        compile_daemon._WatchState,
+        "build",
+        lambda *args: compile_daemon._WatchState([tmp_path], tmp_path),
+    )
+    changes = iter([{changed}, None])
+    monkeypatch.setattr(compile_daemon, "_next_changes", lambda *args: next(changes))
+    lock_seen: list[bool] = []
+    monkeypatch.setattr(
+        compile_daemon,
+        "_reload_roots",
+        lambda: (lock_seen.append(lock.exists()), [tmp_path])[1],
+    )
+    monkeypatch.setattr(
+        compile_daemon,
+        "_compile_once",
+        lambda *args: (lock_seen.append(lock.exists()), True)[1],
+    )
+
+    compile_daemon._serve()
+
+    # Startup resolves roots without the lock; the reload holds it throughout.
+    assert lock_seen == [False, True, True]
+    assert not lock.exists()
+
+
+def test_wait_for_compile_never_waits_on_its_own_lock(tmp_path, monkeypatch):
+    """A compile child must not wait on the lock its daemon parent holds for it."""
+    import time
+
+    monkeypatch.setattr("reflex.utils.prerequisites.get_backend_dir", lambda: tmp_path)
+    for holder in (os.getpid(), os.getppid()):
+        compile_daemon._lock_path().write_text(str(holder))
+        start = time.monotonic()
+        compile_daemon.wait_for_compile(timeout=2)
+        assert time.monotonic() - start < 0.5
+    compile_daemon._lock_path().unlink()
+
+
+def test_daemon_pins_numeric_thread_pools(tmp_path, monkeypatch):
+    """BLAS worker threads would make the daemon multi-threaded before it forks."""
+    monkeypatch.setattr(
+        compile_daemon, "_daemon_marker_path", lambda: tmp_path / "daemon.pid"
+    )
+    monkeypatch.delenv("OPENBLAS_NUM_THREADS", raising=False)
+    monkeypatch.setenv("OMP_NUM_THREADS", "8")
+    spawned: dict[str, str] = {}
+
+    class FakeProc:
+        pid = 4242
+
+        def wait(self):
+            return 0
+
+        def poll(self):
+            return 0
+
+    def popen(args, env):
+        spawned.update(env)
+        return FakeProc()
+
+    monkeypatch.setattr(compile_daemon.subprocess, "Popen", popen)
+    compile_daemon.run_compile_daemon()
+
+    assert spawned["OPENBLAS_NUM_THREADS"] == "1"
+    assert spawned["OMP_NUM_THREADS"] == "8"  # an explicit user choice wins
+    assert spawned[compile_daemon.environment.REFLEX_COMPILE_DAEMON.name] == "1"

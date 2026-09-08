@@ -651,9 +651,10 @@ class EnvironmentVariables:
     # If this env var is set to "yes", App.compile will be a no-op
     REFLEX_SKIP_COMPILE: EnvVar[bool] = env_var(False, internal=True)
 
-    # Experimental: incremental compile cache. A fresh compile process (e.g. a
-    # reflex-run hot-reload worker) reuses each page's compiled output from an
-    # on-disk manifest and recompiles only the pages whose source changed.
+    # Experimental: incremental compile cache. A fresh compile process reuses
+    # each page's compiled output from an on-disk manifest and recompiles only
+    # the pages whose source changed. `reflex run` in dev and preview mode then
+    # hot reloads through a warm compile daemon instead of a cold recompile.
     # See reflex/compiler/disk_cache.py and reflex/compiler/page_cache.py.
     REFLEX_COMPILE_CACHE: EnvVar[bool] = env_var(False)
 

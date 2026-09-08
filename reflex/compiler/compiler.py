@@ -1629,7 +1629,11 @@ def compile_app(
         from reflex.compiler import disk_cache
 
         disk_cache.write_manifest(
-            compile_ctx, all_pages, all_imports, plugin_sources=plugin_sources
+            compile_ctx,
+            all_pages,
+            all_imports,
+            plugin_sources=plugin_sources,
+            prerender_routes=prerender_routes,
         )
 
     return True

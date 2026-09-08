@@ -73,6 +73,7 @@ from reflex.admin import AdminDash
 from reflex.app_mixins import AppMixin, LifespanMixin, MiddlewareMixin
 from reflex.compiler import compiler
 from reflex.compiler.compiler import readable_name_from_component
+from reflex.compiler.utils import write_file
 from reflex.istate.data import RouterData
 from reflex.istate.manager import StateManager, StateModificationContext
 from reflex.istate.manager.token import BaseStateToken
@@ -763,17 +764,20 @@ class App(MiddlewareMixin, LifespanMixin):
 
         # In preview mode the frontend is served as a mounted static bundle rather
         # than by the Vite dev server, so each hot reload must re-run the frontend
-        # build against the freshly compiled output.
+        # build against the freshly compiled output. A running compile daemon
+        # owns that build too (it just finished it under the compile lock the
+        # ``_compile`` above waited on), so the worker only rebuilds itself.
         if (
             trigger == "hot_reload"
             and environment.REFLEX_ENV_MODE.get() == constants.Env.PREVIEW
             and environment.REFLEX_MOUNT_FRONTEND_COMPILED_APP.get()
         ):
-            from reflex.utils import build
+            from reflex.utils import build, compile_daemon
 
-            # The previous output is deleted before building, so a failed build
-            # must fail hard rather than pretend to serve a frontend.
-            build.build()
+            if compile_daemon.owns_compilation():
+                # The previous output is deleted before building, so a failed
+                # build must fail hard rather than pretend to serve a frontend.
+                build.build()
 
         config = get_config()
 
@@ -1585,12 +1589,12 @@ class App(MiddlewareMixin, LifespanMixin):
         if environment.REFLEX_SKIP_COMPILE.get():
             return False
 
-        # A running compile daemon owns .web; backend workers only evaluate
-        # pages to register state.
-        from reflex.utils import compile_daemon
-
-        if not compile_daemon.owns_compilation():
-            return False
+        # The compile daemon (and its compile children) exists to compile. The
+        # nocompile marker below is a message from `reflex run` to the first
+        # backend worker, not to the daemon: consuming it here would skip the
+        # daemon's compile and leave it waiting on its own compile lock.
+        if environment.REFLEX_COMPILE_DAEMON.get():
+            return True
 
         nocompile = prerequisites.get_web_dir() / constants.NOCOMPILE_FILE
 
@@ -1600,8 +1604,11 @@ class App(MiddlewareMixin, LifespanMixin):
             nocompile.unlink(missing_ok=True)
             return False
 
-        # By default, compile the app.
-        return True
+        # A running compile daemon owns .web; backend workers only evaluate
+        # pages to register state. Otherwise, compile the app.
+        from reflex.utils import compile_daemon
+
+        return compile_daemon.owns_compilation()
 
     def _setup_sticky_badge(self):
         """Add the sticky badge to the app."""
@@ -1717,13 +1724,9 @@ class App(MiddlewareMixin, LifespanMixin):
             stateful_pages_marker = (
                 prerequisites.get_backend_dir() / constants.Dirs.STATEFUL_PAGES
             )
-            stateful_pages_marker.parent.mkdir(parents=True, exist_ok=True)
-            content = json.dumps(list(self._stateful_pages))
-            if (
-                not stateful_pages_marker.exists()
-                or stateful_pages_marker.read_text() != content
-            ):
-                stateful_pages_marker.write_text(content)
+            # Atomic and skipped when unchanged: a backend reload worker reads
+            # this marker while the compile daemon may be rewriting it.
+            write_file(stateful_pages_marker, json.dumps(list(self._stateful_pages)))
 
     def add_all_routes_endpoint(self):
         """Add an endpoint to the app that returns all the routes."""

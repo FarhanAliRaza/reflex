@@ -736,3 +736,111 @@ def test_missing_read_remains_a_dependency(tmp_path, monkeypatch):
     assert deps == [missing]
     Path(missing).write_text("{}")
     assert not page_cache.FileValidator(files).unchanged(deps)
+
+
+def test_file_validator_hashes_racy_entries(tmp_path):
+    """An entry recorded within the racy window is hashed, never trusted by stat."""
+    f = tmp_path / "dep.py"
+    f.write_text("x = 1\n")
+    entry = page_cache.file_entry(str(f))
+    assert entry is not None
+    files = {str(f): entry}
+    mtime = entry[1]
+
+    # Same size, same mtime, different content: invisible to a stat key.
+    f.write_text("x = 2\n")
+    os.utime(f, ns=(mtime, mtime))
+    assert page_cache.FileValidator(files).changed(str(f)) is False
+    racy = page_cache.FileValidator(files, written_at=mtime + 1_000)
+    assert racy.changed(str(f)) is True
+    # Old enough entries are still stat-first.
+    settled = page_cache.FileValidator(
+        files, written_at=mtime + page_cache.RACY_WINDOW_NS + 1
+    )
+    assert settled.changed(str(f)) is False
+
+
+def test_import_names_cache_drops_racy_entries():
+    """Persisted parse results recorded too close to the write are re-parsed."""
+    written_at = 10 * page_cache.RACY_WINDOW_NS
+    page_cache.load_import_names_cache(
+        {
+            "/old.py": [[written_at - 2 * page_cache.RACY_WINDOW_NS, 3], ["a"]],
+            "/racy.py": [[written_at - 1, 3], ["b"]],
+        },
+        written_at,
+    )
+    assert set(page_cache.export_import_names_cache()) == {"/old.py"}
+
+
+def test_component_source_files_unwraps_partials_and_decorators(tmp_path):
+    """Every layer of a wrapped page callable is a dependency."""
+    import functools
+    import importlib.util
+    import sys
+
+    deco_file = tmp_path / "deco_mod.py"
+    deco_file.write_text(
+        "import functools\n"
+        "def deco(fn):\n"
+        "    @functools.wraps(fn)\n"
+        "    def wrapper(*a, **k):\n"
+        "        return fn(*a, **k)\n"
+        "    return wrapper\n"
+    )
+    page_file = tmp_path / "page_mod.py"
+    page_file.write_text(
+        "from deco_mod import deco\n"
+        "@deco\n"
+        "def index():\n"
+        "    return None\n"
+        "def base(kind):\n"
+        "    return kind\n"
+    )
+    loaded = []
+    for name, path in (("deco_mod", deco_file), ("page_mod", page_file)):
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        loaded.append(name)
+    try:
+        page_mod = sys.modules["page_mod"]
+        wrapped = page_cache._component_source_files(page_mod.index, tmp_path)
+        assert wrapped == {str(deco_file.resolve()), str(page_file.resolve())}
+        partial = functools.partial(page_mod.base, "x")
+        assert page_cache._component_source_files(partial, tmp_path) == {
+            str(page_file.resolve())
+        }
+    finally:
+        for name in loaded:
+            sys.modules.pop(name, None)
+
+
+def test_record_reads_tracks_asset_reads(tmp_path):
+    """A page that reads a file under assets/ depends on it."""
+    page_cache.enable_read_tracking(root=tmp_path)
+    asset = tmp_path / "assets" / "table.json"
+    asset.parent.mkdir()
+    asset.write_text("{}")
+
+    with page_cache.record_reads() as reads:
+        asset.read_text()
+
+    assert str(asset.resolve()) in reads
+
+
+def test_compile_mode_inputs_track_mode_and_config(monkeypatch):
+    """Run mode, prerendering and env-overridable config are all inputs."""
+    monkeypatch.setenv("REFLEX_ENV_MODE", "dev")
+    monkeypatch.delenv("REFLEX_REACT_OWNER_STACKS", raising=False)
+    base = page_cache.compile_mode_inputs(False)
+    assert page_cache.compile_mode_inputs(False) == base
+    assert page_cache.compile_mode_inputs(True)["prerender_routes"] is True
+    monkeypatch.setenv("REFLEX_ENV_MODE", "preview")
+    assert page_cache.compile_mode_inputs(False)["env_mode"] == "preview"
+    monkeypatch.setenv("REFLEX_ENV_MODE", "dev")
+    monkeypatch.setenv("REFLEX_REACT_OWNER_STACKS", "1")
+    assert page_cache.compile_mode_inputs(False)["react_owner_stacks"] is True

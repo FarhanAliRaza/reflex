@@ -141,6 +141,26 @@ REFLEX_EXTRA_PLUGINS="reflex.plugins.SitemapPlugin" uv run reflex run
 
 See the [plugins reference](/docs/api-reference/plugins/) for the available plugins and how to write your own.
 
+## Incremental Compilation (Experimental)
+
+Every hot reload normally recompiles the whole frontend. Setting `REFLEX_COMPILE_CACHE=1` turns on an experimental incremental compile cache: the compiler records, per page, which Python modules, data files and states the page depends on, and a later compile reuses the output already in `.web` for every page whose dependencies did not change.
+
+```bash
+REFLEX_COMPILE_CACHE=1 uv run reflex run
+REFLEX_COMPILE_CACHE=1 uv run reflex run --env preview
+```
+
+With the cache on, `reflex run` starts a compile daemon that keeps the app imported and watches the project (including markdown and data files a page reads, even outside the app package). Each edit recompiles only the affected pages; in preview mode the daemon also rebuilds the served bundle. The backend reload worker waits for that compile before it registers state.
+
+The cache falls back to a full compile whenever reuse would be unsafe: a different Reflex version, run mode or config, a changed route set, an edited `rxconfig.py`/lockfile, an edited app entrypoint or a module it configures the app from (theme, app wraps, stylesheets), a changed module-level state, or output missing from `.web`. Delete `.web/reflex_compile_cache.json` to force a full compile by hand.
+
+Known limitations, because dependencies are discovered by observing Python:
+
+- Reads that bypass Python's `open` (C extensions such as `pandas.read_csv`, `os.listdir`, `glob`) are not tracked, and neither are environment variables, the clock or randomness used while a page renders. Pages depending on those can stay stale until one of their tracked files changes.
+- A state defined at import time (an `rx.State` subclass at module level) is an app-wide input together with every module it imports: editing any of them recompiles every page. Keeping such states in their own modules, away from page and component code, keeps those edits small.
+- Packages the daemon itself runs on (Reflex and its dependencies) are not hot reloaded even when a hot-reload include path covers their source; restart `reflex run` after editing them.
+- Only one `reflex run` per project should use the cache at a time.
+
 ## Customizable App Data Directory
 
 The `REFLEX_DIR` environment variable can be set, which allows users to set the location where Reflex writes helper tools like Bun and NodeJS.

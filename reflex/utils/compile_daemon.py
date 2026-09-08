@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from reflex_base import constants
 from reflex_base.environment import environment
 
 from reflex.utils import console
@@ -41,6 +42,14 @@ _COMPILE_TIMEOUT = 300.0
 _WATCH_SUFFIXES = (".py", ".md", ".mdx")
 #: Directories never worth walking while building the watch snapshot.
 _SKIP_DIRS = {".web", ".venv", "venv", "node_modules", "__pycache__", ".git"}
+#: Thread-pool size knobs of the numeric runtimes commonly imported by apps.
+_SINGLE_THREAD_POOL_VARS = (
+    "OPENBLAS_NUM_THREADS",
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+)
 
 
 def run_compile_daemon(
@@ -62,6 +71,12 @@ def run_compile_daemon(
     env.pop(environment.REFLEX_SKIP_COMPILE.name, None)
     env[environment.REFLEX_COMPILE_CACHE.name] = "1"
     env[environment.REFLEX_COMPILE_DAEMON.name] = "1"
+    # BLAS/OpenMP runtimes (numpy, pandas, ...) start a worker-thread pool at
+    # import, which would make the daemon multi-threaded before it ever forks
+    # and downgrade every hot reload to a cold subprocess. Compiling needs no
+    # BLAS parallelism, so pin those pools to one thread in the daemon only.
+    for var in _SINGLE_THREAD_POOL_VARS:
+        env.setdefault(var, "1")
     if prerender_routes:
         env["REFLEX_PRERENDER_ROUTES"] = "1"
     if initial_compiled:
@@ -453,6 +468,47 @@ def _missed_changes(before: dict[Path, int], after: dict[Path, int]) -> set[Path
 #: roots the cache was built for.
 _first_party_file_cache: dict[str, object] = {}
 
+#: Top-level packages the daemon process itself runs on (the framework, its
+#: dependencies, the stdlib): everything imported before the app. Purging one
+#: of these from a forked child would tear the daemon's own code out from under
+#: it, so they are never treated as first-party even when a reload root covers
+#: their files (a framework checkout listed in the hot-reload include paths).
+#: None until :func:`_serve` snapshots them; a one-shot cold compile has no
+#: warm state to protect.
+_protected_top_levels: set[str] | None = None
+
+
+def _snapshot_protected_top_levels() -> None:
+    """Record the packages loaded before the app so a purge never touches them."""
+    global _protected_top_levels
+    _protected_top_levels = {name.partition(".")[0] for name in sys.modules}
+
+
+def _warn_protected_roots(roots: list[Path]) -> None:
+    """Warn once when a reload root covers modules the daemon cannot hot reload.
+
+    Args:
+        roots: The resolved reload roots.
+    """
+    if not _protected_top_levels:
+        return
+    covered: set[str] = set()
+    for name, mod in list(sys.modules.items()):
+        top = name.partition(".")[0]
+        if top not in _protected_top_levels or top in covered:
+            continue
+        file = getattr(mod, "__file__", None)
+        if file and _under_roots(Path(file).resolve(), roots):
+            covered.add(top)
+    if covered:
+        console.warn(
+            "Compile daemon: "
+            + ", ".join(sorted(covered))
+            + " under the reload paths are imported by the daemon itself and "
+            "keep their loaded version across hot reloads; restart `reflex run` "
+            "to pick up edits to them."
+        )
+
 
 def _first_party_module_names(roots: list[Path]) -> set[str]:
     """Names of all loaded modules belonging to the user's first-party packages.
@@ -491,6 +547,8 @@ def _first_party_module_names(roots: list[Path]) -> set[str]:
             _first_party_file_cache[file] = is_first_party
         if is_first_party:
             top_level.add(name.partition(".")[0])
+    if _protected_top_levels:
+        top_level -= _protected_top_levels
     if not top_level:
         return set()
     return {name for name in sys.modules if name.partition(".")[0] in top_level}
@@ -717,12 +775,24 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _lock_holder_alive(lock: Path) -> bool:
+def _lock_holder(lock: Path) -> int | None:
+    """Read the pid recorded in a lock/marker file.
+
+    Args:
+        lock: The lock or marker file.
+
+    Returns:
+        The recorded pid, or None when unreadable.
+    """
     try:
-        pid = int(lock.read_text().strip())
+        return int(lock.read_text().strip())
     except (OSError, ValueError):
-        return False
-    return _pid_alive(pid)
+        return None
+
+
+def _lock_holder_alive(lock: Path) -> bool:
+    pid = _lock_holder(lock)
+    return pid is not None and _pid_alive(pid)
 
 
 def wait_for_compile(timeout: float = _LOCK_WAIT_TIMEOUT) -> None:
@@ -739,8 +809,11 @@ def wait_for_compile(timeout: float = _LOCK_WAIT_TIMEOUT) -> None:
     lock = _lock_path()
     deadline = time.monotonic() + timeout
     waited = False
+    own = {os.getpid(), os.getppid()}
     while lock.exists() and time.monotonic() < deadline:
-        if not _lock_holder_alive(lock):
+        # Never wait on a lock this process (or the daemon that forked it)
+        # holds: that would wait for ourselves.
+        if _lock_holder(lock) in own or not _lock_holder_alive(lock):
             break
         if not waited:
             console.debug(
@@ -786,7 +859,7 @@ def _child_compile(
     from reflex.utils import prerequisites
 
     disk_cache.set_changed_hint(changed)
-    # Timed in three steps so every hot reload reports where it spent its time
+    # Timed per step so every hot reload reports where it spent its time
     # (resetting state vs re-importing first-party code vs compiling).
     t0 = time.perf_counter()
     _reset_first_party(roots)
@@ -795,10 +868,29 @@ def _child_compile(
     t2 = time.perf_counter()
     app._compile(prerender_routes=prerender_routes, use_rich=True, trigger="hot_reload")
     t3 = time.perf_counter()
-    console.info(
-        f"Hot reload {t3 - t0:.2f}s (reset {t1 - t0:.2f}s, "
-        f"reimport {t2 - t1:.2f}s, compile {t3 - t2:.2f}s)"
-    )
+    timings = f"reset {t1 - t0:.2f}s, reimport {t2 - t1:.2f}s, compile {t3 - t2:.2f}s"
+    if _rebuild_preview_bundle():
+        timings += f", build {time.perf_counter() - t3:.2f}s"
+    console.info(f"Hot reload {time.perf_counter() - t0:.2f}s ({timings})")
+
+
+def _rebuild_preview_bundle() -> bool:
+    """Rebuild the static frontend bundle that ``reflex run --env preview`` serves.
+
+    Preview mode has no Vite dev server picking up ``.web`` changes: the
+    backend mounts a built bundle, so the compile that owns ``.web`` must also
+    rebuild it. Runs under the compile lock, so a backend reload worker waits
+    for the fresh bundle before it serves.
+
+    Returns:
+        True if a preview bundle was built, False in other modes.
+    """
+    if environment.REFLEX_ENV_MODE.get() != constants.Env.PREVIEW:
+        return False
+    from reflex.utils import build
+
+    build.build()
+    return True
 
 
 def _await_child(pid: int) -> bool:
@@ -946,6 +1038,9 @@ def _serve() -> None:
     """Run the warm compile daemon: initial compile, then watch-and-recompile."""
     from reflex.utils import prerequisites
 
+    # Before anything of the user's app is imported (the config module may
+    # already pull some of it in, so this comes first).
+    _snapshot_protected_top_levels()
     root = Path.cwd()
     prerender_routes = bool(os.environ.get("REFLEX_PRERENDER_ROUTES"))
     roots = _reload_roots()
@@ -966,11 +1061,13 @@ def _serve() -> None:
                     use_rich=True,
                     trigger="initial",
                 )
+                _rebuild_preview_bundle()
     except BaseException:  # tolerate a broken initial state; keep watching
         import traceback
 
         traceback.print_exc()
         console.error("Initial compile failed; watching for a fix.")
+    _warn_protected_roots(roots)
     _prepare_fork_parent(roots)
 
     state = _WatchState.build(roots, root)
@@ -1002,13 +1099,17 @@ def _serve() -> None:
                 sys.executable, [sys.executable, "-m", "reflex.utils.compile_daemon"]
             )
 
-        before = (
-            state.checkpoint
-            if state.checkpoint is not None
-            else _dependency_snapshot(state)
-        )
-        state.roots = roots = _reload_roots()
+        # Hold the lock from here: the backend reload worker reacts to the
+        # same save, and everything up to the compile (re-snapshotting the
+        # tree, resolving roots) is time in which it could otherwise read the
+        # previous stateful-pages marker.
         with _compile_lock(root):
+            before = (
+                state.checkpoint
+                if state.checkpoint is not None
+                else _dependency_snapshot(state)
+            )
+            state.roots = roots = _reload_roots()
             ok = _compile_once(roots, prerender_routes, changed)
         if not ok:
             console.error("Compile failed; keeping the last good build.")

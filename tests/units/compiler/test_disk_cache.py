@@ -68,6 +68,9 @@ def _page_c() -> Component:
     return rx.el.div(rx.el.h1("Page C"), _footer())
 
 
+_CONTEXTS_STUB = "// contexts stub"
+
+
 def _compile(pages: Sequence[Any], app: Any = None) -> CompileContext:
     ctx = CompileContext(
         app=app,
@@ -77,6 +80,28 @@ def _compile(pages: Sequence[Any], app: Any = None) -> CompileContext:
     with ctx:
         ctx.compile()
     return ctx
+
+
+def _write_compiled(ctx: CompileContext) -> None:
+    """Put a full compile's page files (and a contexts file) on disk.
+
+    The rebuild reuses on-disk output, and refuses to reuse output that is not
+    there, so a manifest is only meaningful next to the files it describes.
+
+    Args:
+        ctx: The completed compile context.
+    """
+    from reflex.compiler import utils as compiler_utils
+
+    for page_ctx in ctx.compiled_pages.values():
+        assert page_ctx.output_path is not None
+        compiler_utils.write_file(page_ctx.output_path, page_ctx.output_code or "")
+    compiler_utils.write_file(compiler_utils.get_context_path(), _CONTEXTS_STUB)
+    # User-memo files the registry demands (a full compile writes them all).
+    manifest = disk_cache.load_manifest() or {}
+    for memo_path in manifest.get("memo_files", ()):
+        Path(memo_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(memo_path).touch()
 
 
 def _unregister_state(cls: type[rx.State]) -> None:
@@ -132,6 +157,7 @@ def test_imported_state_edit_invalidates_contexts(tmp_path, monkeypatch, edited_
         ctx = _compile(pages, app)
         assert not ctx.stateful_routes
         disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+        _write_compiled(ctx)
         if edited_module == "state":
             source.write_text(code.replace("= DEFAULT", "= 'new default'"))
         else:
@@ -198,6 +224,7 @@ def test_manifest_write_failure_is_visible(tmp_path, monkeypatch):
     monkeypatch.setattr(disk_cache, "_write", fail_write)
     monkeypatch.setattr(disk_cache.console, "warn", warnings.append)
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
     assert any("disk full" in warning for warning in warnings)
 
 
@@ -233,6 +260,7 @@ def _manifest(pages: dict[str, dict], **overrides) -> dict:
     base = {
         "schema": disk_cache._SCHEMA,
         "reflex_version": page_cache._reflex_version(),
+        "compile_mode": page_cache.compile_mode_inputs(False),
         "files": {},
         "globals": {"reflex": page_cache._reflex_version()},
         "globals_absent": [],
@@ -382,6 +410,7 @@ def test_write_and_load_manifest(tmp_path, monkeypatch):
     ]
     ctx = _compile(pages)
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
 
     manifest = disk_cache.load_manifest()
     assert manifest is not None
@@ -397,6 +426,7 @@ def test_write_and_load_manifest(tmp_path, monkeypatch):
             "is_stateful",
             "state_slice",
             "has_memos",
+            "output",
         }
         # these static pages register no new state and contribute no memos
         assert entry["is_stateful"] is False
@@ -454,9 +484,6 @@ def test_unchanged_pages_compile_identically(tmp_path, monkeypatch):
     assert (
         ctx2.compiled_pages["/b"].output_code != ctx1.compiled_pages["/b"].output_code
     )
-
-
-_CONTEXTS_STUB = "// contexts stub"
 
 
 _TEST_STATE_MODULES = (__name__, "fp_mod_x")
@@ -527,6 +554,7 @@ def test_incremental_rebuild_all_hits(tmp_path, monkeypatch):
     pages = list(app._unevaluated_pages.values())
     ctx = _compile(pages)
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
     _stub_externals(app, monkeypatch)
 
     # Nothing changed -> every page is a hit -> fast path runs.
@@ -555,6 +583,7 @@ def test_incremental_rebuild_one_miss_writes_only_that_page(tmp_path, monkeypatc
     pages = list(app._unevaluated_pages.values())
     ctx = _compile(pages)
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
     _stub_externals(app, monkeypatch)
 
     # Simulate an edit to the first page: rewrite its manifest dependency set to
@@ -565,6 +594,10 @@ def test_incremental_rebuild_one_miss_writes_only_that_page(tmp_path, monkeypatc
     manifest = json.loads(manifest_path.read_text())
     _stale_dep(manifest, edited_route, str(tmp_path / "view.py"))
     manifest_path.write_text(json.dumps(manifest))
+    hit_output_path = ctx.compiled_pages[pages[1].route].output_path
+    assert hit_output_path is not None
+    hit_file = compiler_utils.resolve_path_of_web_dir(hit_output_path)
+    hit_file.write_text("// reused as-is", encoding="utf-8")
 
     assert (
         disk_cache.try_incremental_rebuild(
@@ -587,10 +620,8 @@ def test_incremental_rebuild_one_miss_writes_only_that_page(tmp_path, monkeypatc
         == ctx.compiled_pages[edited_route].output_code
     )
     # The same-module hit page contributed no memos, so it is reused, not
-    # recompiled (its output was never written to this fresh web dir).
-    hit_output_path = ctx.compiled_pages[pages[1].route].output_path
-    assert hit_output_path is not None
-    assert not compiler_utils.resolve_path_of_web_dir(hit_output_path).exists()
+    # recompiled: whatever is on disk for it stays untouched.
+    assert hit_file.read_text(encoding="utf-8") == "// reused as-is"
 
 
 def test_stateful_hit_is_marked_but_not_reevaluated(tmp_path, monkeypatch):
@@ -608,6 +639,7 @@ def test_stateful_hit_is_marked_but_not_reevaluated(tmp_path, monkeypatch):
     route = pages[0].route
     ctx = _compile(pages)
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
     # Mark the page as a stateful HIT page in the manifest.
     manifest_path = web / disk_cache._MANIFEST_FILE
     manifest = json.loads(manifest_path.read_text())
@@ -651,6 +683,7 @@ def test_incremental_rebuild_preserves_contexts_without_stateful_miss(
     pages = list(app._unevaluated_pages.values())
     ctx = _compile(pages)
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
     _stub_externals(app, monkeypatch)
 
     full_contexts = "// complete contexts from the full compile"
@@ -708,6 +741,7 @@ def test_stateful_miss_rewrites_contexts_from_manifest_slices(tmp_path, monkeypa
     ctx = _compile(pages)
     assert stateful_route in ctx.stateful_routes
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
     _stub_externals(app, monkeypatch)
 
     # Make the stateful page a miss, and mark the hit page stateful so the
@@ -834,6 +868,7 @@ def test_stateful_miss_with_unchanged_states_reuses_contexts(tmp_path, monkeypat
     # Stub before write_manifest: it fingerprints via the contexts snapshot.
     _stub_externals(app, monkeypatch)
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
 
     manifest_path = web / disk_cache._MANIFEST_FILE
     manifest = json.loads(manifest_path.read_text())
@@ -887,6 +922,7 @@ def test_incremental_rebuild_copies_assets(tmp_path, monkeypatch):
     pages = list(app._unevaluated_pages.values())
     ctx = _compile(pages)
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
     _stub_externals(app, monkeypatch)
 
     assert (
@@ -928,6 +964,7 @@ def test_incremental_rebuild_rewrites_changed_user_memo(
     memo_route = pages[0].route
     ctx = _compile(pages)
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
     _stub_externals(app, monkeypatch)
 
     # Simulate an edit to this module (which defines the user memo): record an
@@ -987,6 +1024,7 @@ def test_new_memo_module_is_emitted_on_first_use(
     memo_route = pages[0].route
     ctx = _compile(pages)
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
     _stub_externals(app, monkeypatch)
 
     # Rewrite the manifest as if the previous compile never saw the memo's
@@ -1032,6 +1070,7 @@ def test_route_owned_memo_entry_carried_while_owner_hits(
     owner_route = pages[0].route
     ctx = _compile(pages)
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
     _stub_externals(app, monkeypatch)
 
     lazy_file = web / "app_components" / "lazy_module.jsx"
@@ -1092,6 +1131,7 @@ def test_new_lazy_memo_module_is_emitted_on_first_use(
     try:
         ctx = _compile(pages)
         disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+        _write_compiled(ctx)
         _stub_externals(app, monkeypatch)
 
         manifest_path = web / disk_cache._MANIFEST_FILE
@@ -1176,6 +1216,8 @@ def test_incremental_miss_keeps_sibling_memo_exports(
         compiler_utils.write_file(compiler_utils.resolve_path_of_web_dir(mpath), mcode)
 
     disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+
+    _write_compiled(ctx)
     _stub_externals(app, monkeypatch)
 
     # Make only page E miss (a dependency of E changed, e.g. a data file).
@@ -1219,6 +1261,7 @@ def test_update_manifest_for_misses_keeps_complete_imports(tmp_path, monkeypatch
         app_wrap_components={},
         frontend_imports={},
         memo_contributions={},
+        output_path=str(web / "app" / "routes" / "a.jsx"),
     )
     miss_ctx = SimpleNamespace(compiled_pages={"/a": page_ctx}, stateful_routes={})
     complete_imports = {"memo-lib": [ImportVar("MemoThing")]}
@@ -1274,3 +1317,39 @@ def test_generated_names_do_not_depend_on_other_pages():
     assert la.output_code is not None
     assert lb.output_code is not None
     assert la.output_code != lb.output_code
+
+
+def test_globals_mismatch_names_a_changed_compile_mode(tmp_path):
+    """A manifest from another run mode or config is not reused."""
+    mode = {**page_cache.compile_mode_inputs(False), "env_mode": "prod"}
+    m = _manifest({"/a": {}}, compile_mode=mode)
+    reason = disk_cache.globals_mismatch(
+        m, routes={"/a"}, validator=_validator(m), root=tmp_path
+    )
+    assert reason == "compile mode changed: env_mode"
+
+
+def test_missing_reused_output_forces_full_compile(tmp_path, monkeypatch):
+    """A manifest is only trusted next to the files it describes."""
+    from reflex.compiler import utils as compiler_utils
+
+    _use_tmp_web_dir(tmp_path, monkeypatch)
+    app = rx.App()
+    app.add_page(_page_a, route="/a")
+    app.add_page(_page_c, route="/c")
+    pages = list(app._unevaluated_pages.values())
+    ctx = _compile(pages)
+    disk_cache.write_manifest(ctx, pages, ctx.all_imports, root=tmp_path)
+    _write_compiled(ctx)
+    _stub_externals(app, monkeypatch)
+
+    output_path = ctx.compiled_pages[pages[1].route].output_path
+    assert output_path is not None
+    compiler_utils.resolve_path_of_web_dir(output_path).unlink()
+
+    assert (
+        disk_cache.try_incremental_rebuild(
+            app, compiler_plugins=[], prerender_routes=False, root=tmp_path
+        )
+        is False
+    )

@@ -411,3 +411,58 @@ def test_init_records_version_check_after_frontend_setup(
     reflex._init("demo")
 
     assert events == ["frontend", "version"]
+
+
+@pytest.fixture
+def restored_environ():
+    """Undo every environment change a test makes, even ones made by the code under test.
+
+    Yields:
+        None.
+    """
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
+
+
+@pytest.mark.parametrize("cache_on", [True, False])
+def test_preview_daemon_owns_compile_and_bundle(
+    monkeypatch, mocker, cache_on, restored_environ
+):
+    """Preview runs the compile daemon like dev, only with the cache enabled."""
+    import contextlib
+
+    from reflex.utils import build, compile_daemon, exec, processes, telemetry
+
+    if cache_on:
+        monkeypatch.setenv("REFLEX_COMPILE_CACHE", "1")
+    else:
+        monkeypatch.delenv("REFLEX_COMPILE_CACHE", raising=False)
+    compiled = mocker.patch.object(reflex, "_compile_app")
+    built = mocker.patch.object(build, "setup_frontend_prod")
+    mocker.patch.object(telemetry, "send")
+    mocker.patch("atexit.register")
+    mocker.patch.object(exec, "notify_app_running")
+    mocker.patch.object(exec, "notify_frontend")
+    backend = mocker.patch.object(exec, "run_backend")
+    concurrent = mocker.patch.object(
+        processes, "run_concurrently_context", return_value=contextlib.nullcontext()
+    )
+    reflex._run_preview(reflex.constants.RunningMode.FULLSTACK, 3000, "localhost")
+    # The parent produces the initial compile and bundle either way...
+    compiled.assert_called_once()
+    built.assert_called_once()
+    backend.assert_called_once()
+    # ...and hands hot reloads to a warm daemon only when the cache is on.
+    commands = concurrent.call_args.args
+    daemon_commands = [
+        command
+        for command in commands
+        if command[0] is compile_daemon.run_compile_daemon
+    ]
+    if cache_on:
+        assert len(daemon_commands) == 1
+        assert daemon_commands[0][2] is True  # parent already compiled
+    else:
+        assert not daemon_commands
