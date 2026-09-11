@@ -1,8 +1,11 @@
 import re
+from typing import Any
 
 import pytest
+from reflex_base.compiler.templates import _RenderUtils
 from reflex_base.components.component import Component
 from reflex_base.constants.state import FIELD_MARKER
+from reflex_base.utils import format
 from reflex_base.utils.exceptions import MatchTypeError
 from reflex_base.vars.base import Var
 from reflex_components_core.core.match import Match
@@ -318,3 +321,57 @@ def test_match_multiple_default_cases(match_case):
 def test_match_no_cond():
     with pytest.raises(ValueError):
         _ = Match.create(None)
+
+
+def test_string_match_uses_type_information_and_preserves_dependencies():
+    """String comparisons remain direct when cases are dynamic state Vars."""
+    condition = MatchState.string
+    assert isinstance(condition, Var)
+    result = rx.match(
+        condition,
+        (condition + "-suffix", "suffix"),
+        ("ready", "ready"),
+        "unknown",
+    )
+    assert isinstance(result, Var)
+    assert "JSON.stringify" not in str(result)
+    assert f"switch ({condition!s})" in str(result)
+    assert result._get_all_var_data() == condition._get_all_var_data()
+
+
+@pytest.mark.parametrize(
+    ("condition_type", "conditions", "strict"),
+    [
+        (str, ["ready", 'quoted"', "\\escape", "😊"], True),
+        (bool, [True, False], True),
+        (str, ["true", True], True),
+        (str, [1], False),
+        (int, [1, 2], False),
+        (float, [float("nan"), float("inf")], False),
+        (dict, [{"value": "ready"}], False),
+        (str | None, ["ready"], False),
+        (Any, ["ready"], False),
+    ],
+)
+def test_component_match_uses_safe_comparison_types(condition_type, conditions, strict):
+    """Component matches specialize only domains with equivalent equality."""
+    result = Match.create(
+        Var(_js_expr="value", _var_type=condition_type),
+        *((condition, rx.el.div("matched")) for condition in conditions),
+        rx.el.div("default"),
+    )
+    assert isinstance(result, Component)
+    rendered = result.children[0].render()
+    assert rendered.get("strict_comparison", False) is strict
+    code = _RenderUtils.render_match_tag(rendered)
+    assert ("JSON.stringify" not in code) is strict
+
+
+def test_component_match_keeps_legacy_base_compatibility(monkeypatch):
+    """An older base formatter can still consume the generated MatchTag."""
+    monkeypatch.delattr(format, "_match_uses_strict_equality")
+    result = Match.create(Var("value", str), ("ready", rx.el.div("ready")))
+    assert isinstance(result, Component)
+    rendered = result.children[0].render()
+    assert "strict_comparison" not in rendered
+    assert "JSON.stringify" in _RenderUtils.render_match_tag(rendered)

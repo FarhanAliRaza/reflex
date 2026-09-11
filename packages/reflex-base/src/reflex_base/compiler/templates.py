@@ -91,16 +91,30 @@ class _RenderUtils:
 
     @staticmethod
     def render_match_tag(component: Any) -> str:
+        """Render a match with its compile-time comparison strategy.
+
+        Args:
+            component: The rendered cases and optional strict-comparison flag.
+
+        Returns:
+            The JavaScript expression selecting a component branch.
+        """
+        strict_comparison = component.get("strict_comparison", False)
+        condition = component["cond"]
+        if not strict_comparison:
+            condition = f"JSON.stringify({condition})"
         cases_code = ""
         for conditions, return_value in component["match_cases"]:
-            for condition in conditions:
-                cases_code += f"    case JSON.stringify({condition}):\n"
+            for case_condition in conditions:
+                if not strict_comparison:
+                    case_condition = f"JSON.stringify({case_condition})"
+                cases_code += f"    case {case_condition}:\n"
             cases_code += f"""      return {_RenderUtils.render(return_value)};
       break;
 """
 
         return f"""(() => {{
-  switch (JSON.stringify({component["cond"]})) {{
+  switch ({condition}) {{
 {cases_code}    default:
       return {_RenderUtils.render(component["default"])};
       break;

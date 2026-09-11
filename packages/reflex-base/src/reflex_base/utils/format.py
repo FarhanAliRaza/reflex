@@ -6,7 +6,7 @@ import inspect
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
@@ -333,6 +333,31 @@ def format_route(route: str) -> str:
     return route
 
 
+def _match_uses_strict_equality(
+    cond: str | Var, match_cases: Iterable[tuple[Iterable[Var], Any]]
+) -> bool:
+    """Check whether match operands have equivalent strict and JSON equality.
+
+    Args:
+        cond: The match condition, including its type when available.
+        match_cases: The conditions and return value for each case.
+
+    Returns:
+        Whether all operands are known strings or booleans.
+    """
+    from reflex_base.vars import Var
+
+    return (
+        isinstance(cond, Var)
+        and cond._var_type in (str, bool)
+        and all(
+            condition._var_type in (str, bool)
+            for conditions, _ in match_cases
+            for condition in conditions
+        )
+    )
+
+
 def format_match(
     cond: str | Var,
     match_cases: list[tuple[list[Var], Var]],
@@ -349,14 +374,19 @@ def format_match(
         The formatted match expression
 
     """
-    switch_code = f"(() => {{ switch (JSON.stringify({cond})) {{"
+    strict_comparison = _match_uses_strict_equality(cond, match_cases)
+    switch_value = f"{cond}" if strict_comparison else f"JSON.stringify({cond})"
+    switch_code = f"(() => {{ switch ({switch_value}) {{"
 
     for case in match_cases:
         conditions, return_value = case
 
-        case_conditions = " ".join([
-            f"case JSON.stringify({condition!s}):" for condition in conditions
-        ])
+        case_conditions = " ".join(
+            f"case {condition!s}:"
+            if strict_comparison
+            else f"case JSON.stringify({condition!s}):"
+            for condition in conditions
+        )
         case_code = f"{case_conditions}  return ({return_value!s});  break;"
         switch_code += case_code
 

@@ -253,7 +253,10 @@ class Match(Component):
 
         return Var(
             _js_expr=format.format_match(
-                cond=str(match_cond_var),
+                # Carry the type through formatting; merge dependencies once below.
+                cond=Var(
+                    _js_expr=str(match_cond_var), _var_type=match_cond_var._var_type
+                ),
                 match_cases=match_cases,
                 default=default,
             ),
@@ -308,7 +311,12 @@ class Match(Component):
         Returns:
             The dictionary for template of component.
         """
-        return dict(self._render())
+        rendered = dict(self._render())
+        # Older reflex-base releases retain their JSON comparison template.
+        compare = getattr(format, "_match_uses_strict_equality", None)
+        if compare is not None and compare(self.cond, self.match_cases):
+            rendered["strict_comparison"] = True
+        return rendered
 
     def add_imports(self) -> ImportDict:
         """Add imports for the Match component.

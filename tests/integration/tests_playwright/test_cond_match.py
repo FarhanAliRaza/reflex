@@ -53,6 +53,12 @@ def CondMatchApp():
                 ),
                 id="match-container",
             ),
+            rx.match(
+                CondMatchState.val_a == "A",
+                (True, rx.text("yes", id="boolean-match-true")),
+                (False, rx.text("no", id="boolean-match-false")),
+                rx.text("unknown", id="boolean-match-default"),
+            ),
         )
 
     app = rx.App()
@@ -61,17 +67,19 @@ def CondMatchApp():
 
 @pytest.fixture(scope="module")
 def cond_match_app(
+    app_harness_env: type[AppHarness],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Generator[AppHarness, None, None]:
     """Create a harness for the cond/match regression app.
 
     Args:
+        app_harness_env: The development or production app harness.
         tmp_path_factory: Pytest fixture for creating temporary directories.
 
     Yields:
         Running AppHarness for the test app.
     """
-    with AppHarness.create(
+    with app_harness_env.create(
         root=tmp_path_factory.mktemp("cond_match_app"),
         app_source=CondMatchApp,
     ) as harness:
@@ -96,6 +104,9 @@ def test_cond_and_match_render_only_selected_branch(
     expect(page.locator("#match-a")).to_have_text("A is selected")
     expect(page.locator("#match-b")).to_have_count(0)
     expect(page.locator("#match-default")).to_have_count(0)
+    expect(page.locator("#boolean-match-true")).to_have_text("yes")
+    expect(page.locator("#boolean-match-false")).to_have_count(0)
+    expect(page.locator("#boolean-match-default")).to_have_count(0)
 
     page.click("#select-b")
     expect(page.locator("#current-value")).to_have_text("B")
@@ -104,6 +115,9 @@ def test_cond_and_match_render_only_selected_branch(
     expect(page.locator("#match-a")).to_have_count(0)
     expect(page.locator("#match-b")).to_have_text("B is selected")
     expect(page.locator("#match-default")).to_have_count(0)
+    expect(page.locator("#boolean-match-true")).to_have_count(0)
+    expect(page.locator("#boolean-match-false")).to_have_text("no")
+    expect(page.locator("#boolean-match-default")).to_have_count(0)
 
     page.click("#select-c")
     expect(page.locator("#current-value")).to_have_text("C")

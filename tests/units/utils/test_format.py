@@ -884,3 +884,51 @@ def test_sanitize_client_log_value_bounds_work_before_scanning():
 
     format.sanitize_client_log_value(CountingStr("A" * 100_000), max_length=500)
     assert scanned == 500
+
+
+def test_format_match_compares_strings_without_runtime_serialization():
+    """String type information permits direct JavaScript comparisons."""
+    condition = Var(_js_expr="status", _var_type=str)
+    cases: list[tuple[list[Var], Var]] = [
+        ([LiteralVar.create("ready")], LiteralVar.create(1))
+    ]
+    result = format.format_match(condition, cases, LiteralVar.create(0))
+    result = str(Var(_js_expr=result))
+    assert "JSON.stringify" not in result
+    assert "switch (status)" in result
+    assert 'case "ready":' in result
+
+
+@pytest.mark.parametrize("condition_type", [Any, dict, str | None])
+def test_format_match_retains_serialization_for_non_string_types(condition_type):
+    """Unknown and composite values keep their existing equality semantics."""
+    result = format.format_match(
+        Var(_js_expr="value", _var_type=condition_type),
+        [([LiteralVar.create("ready")], LiteralVar.create(1))],
+        LiteralVar.create(0),
+    )
+    assert "switch (JSON.stringify(value))" in str(Var(_js_expr=result))
+    assert 'case JSON.stringify("ready"):' in result
+
+
+def test_format_match_retains_serialization_for_mixed_case_types():
+    """A comparison domain containing composite values retains JSON equality."""
+    result = format.format_match(
+        Var(_js_expr="value", _var_type=str),
+        [([LiteralVar.create({"value": "ready"})], LiteralVar.create(1))],
+        LiteralVar.create(0),
+    )
+    assert "switch (JSON.stringify(value))" in str(Var(_js_expr=result))
+
+
+def test_format_match_compares_booleans_without_runtime_serialization():
+    """Boolean comparisons are also equivalent to serialized equality."""
+    result = format.format_match(
+        Var(_js_expr="flag", _var_type=bool),
+        [([LiteralVar.create(True)], LiteralVar.create("yes"))],
+        LiteralVar.create("no"),
+    )
+    code = str(Var(_js_expr=result))
+    assert "switch (flag)" in code
+    assert "case true:" in code
+    assert "JSON.stringify" not in code

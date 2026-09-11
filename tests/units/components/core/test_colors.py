@@ -98,8 +98,8 @@ def test_color(color, expected, expected_type: type[str] | type[Color]):
                 rx.color(ColorState.color, 2),
             ),
             (
-                '(() => { switch (JSON.stringify("condition")) {case JSON.stringify("first"):  return ("var(--mint-7)");'
-                '  break;case JSON.stringify("second"):  return ("var(--tomato-5)");  break;default:  '
+                '(() => { switch ("condition") {case "first":  return ("var(--mint-7)");'
+                '  break;case "second":  return ("var(--tomato-5)");  break;default:  '
                 f'return (("var(--"+{color_state_name!s}.color{FIELD_MARKER}+"-2)"));  break;}};}})()'
             ),
         ),
@@ -111,8 +111,8 @@ def test_color(color, expected, expected_type: type[str] | type[Color]):
                 rx.color(ColorState.color, 2),
             ),
             (
-                '(() => { switch (JSON.stringify("condition")) {case JSON.stringify("first"):  '
-                f'return (("var(--"+{color_state_name!s}.color{FIELD_MARKER}+"-7)"));  break;case JSON.stringify("second"):  '
+                '(() => { switch ("condition") {case "first":  '
+                f'return (("var(--"+{color_state_name!s}.color{FIELD_MARKER}+"-7)"));  break;case "second":  '
                 f'return (("var(--"+{color_state_name!s}.color{FIELD_MARKER}+"-5)"));  break;default:  '
                 f'return (("var(--"+{color_state_name!s}.color{FIELD_MARKER}+"-2)"));  break;}};}})()'
             ),
