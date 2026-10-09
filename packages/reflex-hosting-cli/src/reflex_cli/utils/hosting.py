@@ -45,14 +45,19 @@ from reflex_build_sdk import (
 )
 from reflex_build_sdk._decode import json_key
 from reflex_build_sdk._deploy import status_message_outcome
-from reflex_build_sdk.transports import HttpxTransport
+from reflex_build_sdk.transports._defaults import default_transport
 from reflex_build_sdk.types import DeploymentReport, LoginRequest, Me
 
 import reflex_cli.constants as constants
 from reflex_cli.core.config import Config, RegionOption
 from reflex_cli.utils import console, log
 from reflex_cli.utils.dependency import is_valid_url
-from reflex_cli.utils.deploy import _DeploymentRetryTransport, _is_scaling_conflict
+from reflex_cli.utils.deploy import (
+    _DeploymentRetryTransport,
+    _deployments_url,
+    _instance_bounds_url,
+    _is_scaling_conflict,
+)
 from reflex_cli.utils.exceptions import (
     ResponseError,
     ScaleAppError,
@@ -806,7 +811,7 @@ def upload_client(client: AuthenticatedClient) -> Iterator[ReflexBuild]:
     with (
         contextlib.closing(
             _DeploymentRetryTransport(
-                HttpxTransport(), url=f"{base_url}/api/v1/deployments"
+                default_transport(), url=_deployments_url(base_url)
             )
         ) as transport,
         ReflexBuild(
@@ -1265,7 +1270,8 @@ def set_instance_bounds(
                 if max_instances is None
                 else max_instances,
             )
-        except MissingTokenError:
+        except (MissingTokenError, APIResponseValidationError):
+            # The SDK validates only a 2xx body, so the write was applied.
             raise
         except BaseException as ex:
             if isinstance(ex, APIStatusError) and ex.status_code < 500:
@@ -1285,9 +1291,7 @@ def set_instance_bounds(
         if isinstance(ex, APIStatusError) and (
             ex.status_code >= 500
             or _is_scaling_conflict(
-                ex,
-                f"apps/{app_id}/instance_bounds",
-                url=f"{client.api.base_url}/api/v1/apps/{app_id}/instance_bounds",
+                ex, url=_instance_bounds_url(client.api.base_url, app_id)
             )
         ):
             raise

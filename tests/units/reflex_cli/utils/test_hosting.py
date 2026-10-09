@@ -77,12 +77,7 @@ def test_upload_client_retries_submission_without_uploading_again(
     deployments_path = f"{base_path.rstrip('/')}/api/v1/deployments"
     mock_api = MockAPI()
     transport = MockTransport(mock_api)
-    mocker.patch(
-        "reflex_cli.utils.hosting.HttpxTransport", return_value=transport, create=True
-    )
-    mocker.patch(
-        "reflex_build_sdk._sync._client.default_transport", return_value=transport
-    )
+    mocker.patch("reflex_cli.utils.hosting.default_transport", return_value=transport)
     sleep = mocker.patch("time.sleep")
     client = _client()
     client.api.token = "test-token"
@@ -968,11 +963,9 @@ def test_set_instance_bounds_preserves_server_errors(
     )
 
 
-@pytest.mark.parametrize(
-    "error_type", [APIConnectionError, APITimeoutError, APIResponseValidationError]
-)
+@pytest.mark.parametrize("error_type", [APIConnectionError, APITimeoutError])
 def test_set_instance_bounds_preserves_uncertain_outcomes(
-    error_type: type[APIConnectionError] | type[APIResponseValidationError],
+    error_type: type[APIConnectionError],
 ):
     """A write without a usable answer must reach the deploy's uncertainty guard.
 
@@ -980,12 +973,7 @@ def test_set_instance_bounds_preserves_uncertain_outcomes(
         error_type: The SDK failure that leaves the write's result unknown.
     """
     client = _client()
-    response = api_error(200, "invalid response").response
-    error = (
-        error_type("invalid response", response=response)
-        if issubclass(error_type, APIResponseValidationError)
-        else error_type("lost response", request=response.request)
-    )
+    error = error_type("lost response", request=api_error(200, "").request)
     client.api.apps.set_instance_bounds.side_effect = error
 
     with pytest.raises(error_type) as raised:
@@ -993,6 +981,30 @@ def test_set_instance_bounds_preserves_uncertain_outcomes(
 
     assert raised.value is error
     client.api.apps.set_instance_bounds.assert_called_once()
+
+
+def test_set_instance_bounds_does_not_hedge_an_accepted_write(
+    caplog: pytest.LogCaptureFixture,
+):
+    """The SDK validates only a 2xx body, so an undecodable answer was applied.
+
+    Args:
+        caplog: The captured log messages.
+    """
+    client = _client()
+    error = APIResponseValidationError(
+        "invalid response", response=api_error(200, "invalid response").response
+    )
+    client.api.apps.set_instance_bounds.side_effect = error
+
+    with pytest.raises(APIResponseValidationError) as raised:
+        set_instance_bounds("app-1", client, min_instances=2)
+
+    assert raised.value is error
+    assert not any(
+        "may or may not have been applied" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_validate_token_names_the_product_it_logs_in_through(

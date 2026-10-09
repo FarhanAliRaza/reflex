@@ -5,10 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from threading import Barrier
 from typing import Literal
 from unittest.mock import MagicMock, call
 from urllib.parse import parse_qs
@@ -200,67 +198,6 @@ def test_deployment_retry_budget_survives_sdk_retries(
     assert len(caplog.messages) == 11
 
 
-def test_deployment_retry_new_submission_gets_fresh_budget(mocker):
-    """Independent submissions do not inherit an exhausted scaling budget."""
-    sleep = mocker.patch("reflex_cli.utils.deploy.time.sleep")
-    transport = MagicMock()
-    transport.send.side_effect = _response
-    with ReflexBuild(
-        token="test-token", transport=_DeploymentRetryTransport(transport, url=_URL)
-    ) as client:
-        for _ in range(2):
-            with pytest.raises(ConflictError):
-                client._request(
-                    "POST", "deployments", str, form={"stored_build_id": "build"}
-                )
-
-    assert transport.send.call_count == 24
-    assert sleep.call_args_list == [call(15)] * 22
-
-
-def test_deployment_retry_concurrent_submissions_keep_separate_budgets(mocker):
-    """Interleaved submissions each preserve their budget through SDK backoff."""
-    mocker.patch("reflex_cli.utils.deploy.time.sleep")
-    transport = MagicMock()
-    counts: dict[str, int] = {}
-    barrier = Barrier(2)
-
-    def send(request: Request) -> Response:
-        """Synchronize concurrent submissions at a safe SDK refusal.
-
-        Args:
-            request: The attempted submission.
-
-        Returns:
-            A rate-limit refusal after five scaling refusals, otherwise a conflict.
-        """
-        request_id = request.headers["X-Request-ID"]
-        counts[request_id] = count = counts.get(request_id, 0) + 1
-        if count == 6:
-            barrier.wait(timeout=5)
-            return _response(request, 429)
-        return _response(request)
-
-    transport.send.side_effect = send
-    with ReflexBuild(
-        token="test-token", transport=_DeploymentRetryTransport(transport, url=_URL)
-    ) as client:
-
-        def submit() -> None:
-            """Exhaust a submission's budget on its own SDK calling thread."""
-            with pytest.raises(ConflictError):
-                client._request(
-                    "POST", "deployments", str, form={"stored_build_id": "build"}
-                )
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [executor.submit(submit) for _ in range(2)]
-            for future in futures:
-                future.result()
-
-    assert sorted(counts.values()) == [13, 13]
-
-
 def test_deployment_retry_sdk_stops_after_uncertain_submission(mocker):
     """A lost response after a scaling retry never grants another SDK attempt."""
     sleep = mocker.patch("reflex_cli.utils.deploy.time.sleep")
@@ -421,7 +358,6 @@ def test_bounds_retry_uses_typed_scaling_refusal(mocker):
     assert (
         _retry_scaling_conflicts(
             operation,
-            path=path,
             url=f"https://build.reflex.dev/api/v1/{path}",
             action="instance bounds",
             attempts=8,

@@ -1469,7 +1469,7 @@ def test_deploy_does_not_retry_unknown_bounds_outcomes(
     assert recorder.bounds.call_count == 1 + previous_conflict
     assert recorder.sleep.call_count == int(previous_conflict)
     recorder.submit.assert_not_called()
-    assert any(
+    assert (failure != "response") == any(
         "may or may not have been applied" in message
         for message in _log_messages(caplog, logging.WARNING)
     )
